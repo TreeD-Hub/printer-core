@@ -49,6 +49,22 @@ assert_klipperscreen_healthy() {
   exit 1
 }
 
+checkout_klipperscreen_ref() {
+  local repo_url="$1"
+  local dst_dir="$2"
+  local ref="$3"
+
+  sudo -u "${PI_USER}" -H git init "${dst_dir}" >/dev/null
+  sudo -u "${PI_USER}" -H git -C "${dst_dir}" remote add origin "${repo_url}"
+
+  if ! sudo -u "${PI_USER}" -H git -C "${dst_dir}" fetch --depth 1 origin "${ref}" >/dev/null 2>&1; then
+    log_error "klipperscreen-install: failed to fetch ref '${ref}' from ${repo_url}"
+    exit 1
+  fi
+
+  sudo -u "${PI_USER}" -H git -C "${dst_dir}" checkout --detach FETCH_HEAD >/dev/null
+}
+
 PI_USER="${PI_USER:-${SUDO_USER:-pi}}"
 PI_HOME="${PI_HOME:-$(getent passwd "${PI_USER}" | cut -d: -f6 || true)}"
 
@@ -71,10 +87,20 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 KS_REPO_URL="${TREED_KLIPPERSCREEN_REPO:-https://github.com/jordanruthe/KlipperScreen.git}"
+KS_PINNED_REF_DEFAULT="35c26ba4d452043695d73fa8ec2acd25bbc8911d"
+KS_REPO_REF="${TREED_KLIPPERSCREEN_REF:-${KS_PINNED_REF_DEFAULT}}"
 KS_STAGING_DIR="${PI_HOME}/treed/.staging/KlipperScreen"
 
 rm -rf "${KS_STAGING_DIR}"
-sudo -u "${PI_USER}" -H git clone --depth 1 "${KS_REPO_URL}" "${KS_STAGING_DIR}"
+checkout_klipperscreen_ref "${KS_REPO_URL}" "${KS_STAGING_DIR}" "${KS_REPO_REF}"
+
+if [ ! -f "${KS_STAGING_DIR}/scripts/KlipperScreen-install.sh" ]; then
+  log_error "klipperscreen-install: installer script not found for ref ${KS_REPO_REF}"
+  exit 1
+fi
+
+KS_COMMIT="$(sudo -u "${PI_USER}" -H git -C "${KS_STAGING_DIR}" rev-parse --short=12 HEAD)"
+log_info "klipperscreen-install: using ref ${KS_REPO_REF} (commit ${KS_COMMIT})"
 
 sudo -u "${PI_USER}" -H bash -lc "'${KS_STAGING_DIR}/scripts/KlipperScreen-install.sh'"
 

@@ -89,6 +89,7 @@ if ! grp="$(pi_primary_group "${PI_USER}")"; then
   exit 1
 fi
 
-chown -R "${PI_USER}:${grp}" "${PI_HOME}/printer_data/config"
+# Keep ownership adjustments inside staging scope only.
+chown -R "${PI_USER}:${grp}" "${KLIPPER_DIR}"
 
 log_info "klipper-profiles: OK"
