@@ -67,6 +67,7 @@ trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BAS
 STEPS=(
   "check-env"
   "detect-rpi"
+  "timezone-sync"     # timezone + NTP baseline for UI and services
   "maintenance-stop"   # controlled stop of runtime services before provisioning
   "packages-core"
   "boot-hdmi-config"

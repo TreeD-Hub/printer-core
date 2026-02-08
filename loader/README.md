@@ -19,24 +19,27 @@ sudo bash loader/loader.sh
 
 1. `check-env`
 2. `detect-rpi`
-3. `packages-core`
-4. `boot-hdmi-config`
-5. `plymouth-theme-install`
-6. `plymouth-initramfs`
-7. `plymouth-initramfs-config`
-8. `plymouth-cmdline`
-9. `plymouth-systemd`
-10. `klipper-sync`
-11. `klipper-profiles`
-12. `klipper-core`
-13. `klipper-anti-shutdown`
-14. `moonraker-config`
-15. `crowsnest-webcam`
-16. `treed-cam`
-17. `klipper-mainsail-theme`
-18. `klipperscreen-install`
-19. `klipperscreen-integr`
-20. `verify`
+3. `timezone-sync`
+4. `maintenance-stop`
+5. `packages-core`
+6. `boot-hdmi-config`
+7. `plymouth-theme-install`
+8. `plymouth-initramfs`
+9. `plymouth-initramfs-config`
+10. `plymouth-cmdline`
+11. `plymouth-systemd`
+12. `klipper-sync`
+13. `klipper-profiles`
+14. `klipper-core`
+15. `klipper-anti-shutdown`
+16. `moonraker-config`
+17. `crowsnest-webcam`
+18. `treed-cam`
+19. `klipper-mainsail-theme`
+20. `klipperscreen-install`
+21. `klipperscreen-integr`
+22. `maintenance-start`
+23. `verify`
 
 ## Контракт окружения
 

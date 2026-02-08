@@ -21,6 +21,13 @@ failf() {
   fail=$((fail+1))
 }
 
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 http_snapshot_check() {
   local check_name="$1"
   local url="$2"
@@ -207,6 +214,36 @@ if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
   fi
 else
   failf "KlipperScreen.service present"
+fi
+
+if command -v timedatectl >/dev/null 2>&1; then
+  TREED_SET_TIMEZONE="${TREED_SET_TIMEZONE:-1}"
+  TREED_TIMEZONE="${TREED_TIMEZONE:-Europe/Moscow}"
+  TREED_ENABLE_NTP="${TREED_ENABLE_NTP:-1}"
+
+  if is_true "${TREED_SET_TIMEZONE}"; then
+    current_tz="$(timedatectl show -p Timezone --value 2>/dev/null | tr -d '\r\n')"
+    if [ "${current_tz}" = "${TREED_TIMEZONE}" ]; then
+      pass "system timezone ${TREED_TIMEZONE}"
+    else
+      failf "system timezone ${TREED_TIMEZONE} (current=${current_tz:-unknown})"
+    fi
+  else
+    log_info "VERIFY timezone check skipped (TREED_SET_TIMEZONE=${TREED_SET_TIMEZONE})"
+  fi
+
+  if is_true "${TREED_ENABLE_NTP}"; then
+    ntp_state="$(timedatectl show -p NTP --value 2>/dev/null | tr -d '\r\n')"
+    if [ "${ntp_state}" = "yes" ]; then
+      pass "timedatectl NTP enabled"
+    else
+      failf "timedatectl NTP enabled (state=${ntp_state:-unknown})"
+    fi
+  else
+    log_info "VERIFY NTP check skipped (TREED_ENABLE_NTP=${TREED_ENABLE_NTP})"
+  fi
+else
+  failf "timedatectl present"
 fi
 
 gm="$(grep -E "^gpu_mem=" "${CONFIG_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2)"

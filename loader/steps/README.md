@@ -8,6 +8,12 @@
 
 - `check-env.sh`
 - `detect-rpi.sh`
+- `timezone-sync.sh`
+
+Сервисный контур (остановка/возврат сервисов):
+
+- `maintenance-stop.sh`
+- `maintenance-start.sh`
 
 Базовая система и boot/UI:
 
@@ -67,19 +73,27 @@ KlipperScreen:
 
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL=1` - принудительная переустановка KlipperScreen.
 - `TREED_KLIPPERSCREEN_REPO` - URL репозитория KlipperScreen для установки.
+- `TREED_KLIPPERSCREEN_REF` - pinned ref/commit для воспроизводимой установки.
+- `TREED_KLIPPERSCREEN_START_TIMEOUT` - timeout ожидания старта сервиса.
+
+Time/NTP:
+
+- `TREED_SET_TIMEZONE=1` - применять timezone в `timezone-sync`.
+- `TREED_TIMEZONE` - целевая timezone (по умолчанию `Europe/Moscow`).
+- `TREED_ENABLE_NTP=1` - включать NTP через `timedatectl`.
 
 Plymouth/systemd/verify:
 
 - `PLYMOUTH_THEME_NAME` - имя темы Plymouth.
 - `TREED_MASK_TTY1` - политика `getty@tty1` (используется в `plymouth-systemd` и `verify`).
-- `TREED_VERIFY_CAMERA=0` - отключить camera-проверки в `verify`.
+- `TREED_VERIFY_CAMERA` - режим camera-проверок в `verify` (`auto`, `0`, `1`).
 - `TREED_CAM_HTTP_RETRIES`, `TREED_CAM_HTTP_TIMEOUT` - retry/timeout для snapshot-проверок.
 - `TREED_MOONRAKER_HTTP_RETRIES` - retry для проверки `server/webcams/list`.
 
 ## Важные замечания по поведению
 
 - `crowsnest-webcam.sh` fail-fast при неоднозначной/неразрешимой камере, если не задан `CAM_DEVICE` и не включен fallback.
-- `klipperscreen-integr.sh` намеренно fail-open для `systemctl daemon-reload/restart` (ставит override даже если systemd временно не готов).
+- `klipperscreen-install.sh` и `klipperscreen-integr.sh` fail-fast, если сервис KlipperScreen не поднимается в заданный timeout.
 - `verify.sh` рассчитан на запуск из loader. Для ручного запуска требуется передать `REPO_DIR`.
 
 Пример ручного запуска `verify`:
