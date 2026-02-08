@@ -1,17 +1,19 @@
 > Root project map: `README.md`
-> Current canonical config ownership model: `docs/config-ownership.md`.
+> Canonical config ownership model: `docs/config-ownership.md`
 
-```bash # klipper-only install path
+## Быстрый install path (актуальный)
+
+```bash
 set -euo pipefail
 REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
-# Channel policy:
-# - dev-cam: active canonical branch for provisioning
-# - main: legacy snapshot branch (do not use for fresh installs)
-INSTALL_REF="dev-cam"
+# Каналы:
+# - dev: рабочая ветка для установки и обновления
+# - main: legacy snapshot
+INSTALL_REF="${INSTALL_REF:-dev}"
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
 
-sudo systemctl stop klipper moonraker KlipperScreen 2>/dev/null || true
+sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
 
 mkdir -p "${BASE}"
 sudo rm -rf "${REPO_DIR}"
@@ -25,3 +27,9 @@ find loader/steps -type f -name '*.sh' -exec chmod +x {} +
 sudo bash loader/loader.sh
 sudo reboot
 ```
+
+## Примечания
+
+- По умолчанию камера не является блокером установки.
+- Для fail-fast режима камеры используйте: `TREED_CAMERA_REQUIRED=1`.
+- Полный порядок шагов и ownership: `docs/config-ownership.md`.
