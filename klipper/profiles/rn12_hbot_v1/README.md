@@ -27,7 +27,7 @@ Current Klipper entry point:
 
 ## Local overrides
 
-- Template in repo: `local_overrides.example.cfg`.
+- Template in repo: `klipper/local_overrides.example.cfg`.
 - Runtime local file: `local_overrides.cfg`.
 - `local_overrides.cfg` is not committed and is preserved by `klipper-core`.
 
