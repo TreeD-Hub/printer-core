@@ -190,6 +190,23 @@ else
   failf "KlipperScreen retains splash"
 fi
 
+if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  if systemctl is-active --quiet KlipperScreen.service; then
+    pass "KlipperScreen.service active"
+  else
+    failf "KlipperScreen.service active"
+  fi
+
+  ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
+  if [ "${ks_substate}" = "running" ]; then
+    pass "KlipperScreen.service substate running"
+  else
+    failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
+  fi
+else
+  failf "KlipperScreen.service present"
+fi
+
 gm="$(grep -E "^gpu_mem=" "${CONFIG_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2)"
 case "${gm}" in ''|*[!0-9]*) gm=0;; esac
 

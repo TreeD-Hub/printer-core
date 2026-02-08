@@ -7,6 +7,23 @@ log_info "Step klipperscreen-integr: configuring KlipperScreen systemd override"
 
 OVERRIDE_DIR="/etc/systemd/system/KlipperScreen.service.d"
 OVERRIDE_FILE="${OVERRIDE_DIR}/override.conf"
+KS_UNIT="KlipperScreen.service"
+KS_TIMEOUT="${TREED_KLIPPERSCREEN_START_TIMEOUT:-45}"
+
+wait_service_active() {
+  local unit="$1"
+  local timeout="$2"
+  local i
+
+  for i in $(seq 1 "${timeout}"); do
+    if systemctl is-active --quiet "${unit}"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
 
 ensure_root
 ensure_dir "${OVERRIDE_DIR}"
@@ -21,21 +38,19 @@ Wants=plymouth-quit.service
 ExecStartPre=/bin/sh -lc 'plymouth quit --retain-splash || true'
 EOF
 
-# Non-fatal: during some install/first-boot scenarios systemd may not be fully ready.
-# We still deploy the override; it will apply once systemd is reloaded/restarted.
-if err="$(systemctl daemon-reload 2>&1)"; then
-  :
-else
-  rc=$?
-  log_warn "klipperscreen-integr: systemctl daemon-reload failed rc=${rc}: ${err}"
+systemctl daemon-reload
+
+if ! systemctl cat "${KS_UNIT}" >/dev/null 2>&1; then
+  log_error "klipperscreen-integr: ${KS_UNIT} not found after install"
+  exit 1
 fi
 
-# Non-fatal: KlipperScreen.service may be absent/disabled; override is still installed for later.
-if err="$(systemctl restart KlipperScreen.service 2>&1)"; then
-  :
-else
-  rc=$?
-  log_warn "klipperscreen-integr: systemctl restart KlipperScreen.service failed rc=${rc}: ${err}"
+systemctl restart "${KS_UNIT}"
+
+if ! wait_service_active "${KS_UNIT}" "${KS_TIMEOUT}"; then
+  log_error "klipperscreen-integr: ${KS_UNIT} failed to become active within ${KS_TIMEOUT}s"
+  systemctl --no-pager -l status "${KS_UNIT}" || true
+  exit 1
 fi
 
 log_info "klipperscreen-integr: OK"
