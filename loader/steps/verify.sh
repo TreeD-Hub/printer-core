@@ -216,15 +216,49 @@ else
   failf "gpu_mem >= 96"
 fi
 
-TREED_VERIFY_CAMERA="${TREED_VERIFY_CAMERA:-1}"
-if [ "${TREED_VERIFY_CAMERA}" = "1" ]; then
-  PI_USER="${PI_USER:-pi}"
-  PI_HOME="${PI_HOME:-/home/${PI_USER}}"
-  CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
-  CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
-  MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"
-  MOONRAKER_WEBCAM_FRAGMENT="${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf"
-  WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
+PI_USER="${PI_USER:-pi}"
+PI_HOME="${PI_HOME:-/home/${PI_USER}}"
+CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
+CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
+MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"
+MOONRAKER_WEBCAM_FRAGMENT="${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf"
+WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
+
+TREED_VERIFY_CAMERA="${TREED_VERIFY_CAMERA:-auto}"
+camera_checks_enabled=0
+camera_checks_reason=""
+
+case "${TREED_VERIFY_CAMERA}" in
+  1|true|TRUE|yes|YES)
+    camera_checks_enabled=1
+    camera_checks_reason="forced"
+    ;;
+  0|false|FALSE|no|NO)
+    camera_checks_enabled=0
+    camera_checks_reason="disabled by TREED_VERIFY_CAMERA"
+    ;;
+  auto|AUTO|'')
+    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
+      camera_checks_enabled=1
+      camera_checks_reason="auto: webcam fragment present"
+    else
+      camera_checks_enabled=0
+      camera_checks_reason="auto: webcam fragment missing"
+    fi
+    ;;
+  *)
+    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
+      camera_checks_enabled=1
+      camera_checks_reason="auto fallback: webcam fragment present"
+    else
+      camera_checks_enabled=0
+      camera_checks_reason="auto fallback: webcam fragment missing"
+    fi
+    log_warn "VERIFY invalid TREED_VERIFY_CAMERA='${TREED_VERIFY_CAMERA}', using ${camera_checks_reason}"
+    ;;
+esac
+
+if [ "${camera_checks_enabled}" = "1" ]; then
   byid_index0_available=0
   if find /dev/v4l/by-id -maxdepth 1 -type l -name '*-video-index0' -print -quit 2>/dev/null | grep -q .; then
     byid_index0_available=1
@@ -306,7 +340,7 @@ if [ "${TREED_VERIFY_CAMERA}" = "1" ]; then
     failf "curl installed for camera checks"
   fi
 else
-  log_info "VERIFY camera checks skipped (TREED_VERIFY_CAMERA=0)"
+  log_info "VERIFY camera checks skipped (${camera_checks_reason})"
 fi
 
 if [ "${fail}" -eq 0 ]; then

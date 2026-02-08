@@ -24,6 +24,7 @@ MOONRAKER_ASVC="${DATA_DIR}/moonraker.asvc"
 
 CAM_DEVICE_DEFAULT="/dev/video0"
 CAM_DEVICE="${CAM_DEVICE:-}"
+CAM_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
 # Keep this conservative on purpose:
 # - Higher camera modes previously triggered unstable USB behavior on this setup
 #   (UVC -32/-71 bursts), which can cascade into CH341 MCU link drops.
@@ -49,7 +50,7 @@ resolve_cam_device() {
       return 0
     fi
     log_error "CAM_DEVICE override '${CAM_DEVICE}' not found"
-    exit 1
+    return 2
   fi
 
   if [ -d "${byid_dir}" ]; then
@@ -60,11 +61,11 @@ resolve_cam_device() {
       return 0
     fi
     if [ "${#candidates[@]}" -gt 1 ]; then
-      log_error "Multiple /dev/v4l/by-id/*-video-index0 cameras detected; set CAM_DEVICE explicitly"
+      log_warn "Multiple /dev/v4l/by-id/*-video-index0 cameras detected; set CAM_DEVICE explicitly"
       for candidate in "${candidates[@]}"; do
-        log_error "camera candidate: ${candidate}"
+        log_warn "camera candidate: ${candidate}"
       done
-      exit 1
+      return 1
     fi
 
     mapfile -t candidates < <(find "${byid_dir}" -maxdepth 1 -type l 2>/dev/null | sort)
@@ -74,11 +75,11 @@ resolve_cam_device() {
       return 0
     fi
     if [ "${#candidates[@]}" -gt 1 ]; then
-      log_error "Multiple cameras detected in /dev/v4l/by-id; set CAM_DEVICE explicitly"
+      log_warn "Multiple cameras detected in /dev/v4l/by-id; set CAM_DEVICE explicitly"
       for candidate in "${candidates[@]}"; do
-        log_error "camera candidate: ${candidate}"
+        log_warn "camera candidate: ${candidate}"
       done
-      exit 1
+      return 1
     fi
   fi
 
@@ -88,12 +89,36 @@ resolve_cam_device() {
       log_warn "No unique /dev/v4l/by-id camera found; using fallback ${CAM_DEVICE}"
       return 0
     fi
-    log_error "CAM_ALLOW_VIDEO0_FALLBACK=1 but fallback device is missing: ${CAM_DEVICE}"
-    exit 1
+    log_warn "CAM_ALLOW_VIDEO0_FALLBACK=1 but fallback device is missing: ${CAM_DEVICE}"
+    return 1
   fi
 
-  log_error "Cannot resolve unique camera in /dev/v4l/by-id; set CAM_DEVICE or CAM_ALLOW_VIDEO0_FALLBACK=1"
-  exit 1
+  log_warn "Cannot resolve unique camera in /dev/v4l/by-id; set CAM_DEVICE or CAM_ALLOW_VIDEO0_FALLBACK=1"
+  return 1
+}
+
+skip_webcam_deploy() {
+  local removed_fragment=0
+
+  log_warn "crowsnest-webcam: camera is not resolved, skipping webcam deployment (set TREED_CAMERA_REQUIRED=1 for fail-fast)"
+
+  if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
+    rm -f "${MOONRAKER_WEBCAM_FRAGMENT}"
+    removed_fragment=1
+    log_info "Removed stale Moonraker webcam fragment: ${MOONRAKER_WEBCAM_FRAGMENT}"
+  fi
+
+  if systemctl cat crowsnest.service >/dev/null 2>&1; then
+    systemctl stop crowsnest.service >/dev/null 2>&1 || true
+    log_info "Stopped crowsnest.service (no camera deployed)"
+  fi
+
+  if [ "${removed_fragment}" -eq 1 ] && systemctl cat moonraker.service >/dev/null 2>&1; then
+    systemctl restart moonraker.service || true
+    log_info "Restarted moonraker.service after removing webcam fragment"
+  fi
+
+  log_info "crowsnest-webcam: SKIPPED"
 }
 
 ensure_moonraker_generated_include() {
@@ -190,7 +215,21 @@ apply_services() {
 }
 
 ensure_moonraker_generated_include
-resolve_cam_device
+if resolve_cam_device; then
+  :
+else
+  rc=$?
+  if [ "${rc}" -eq 2 ]; then
+    log_error "crowsnest-webcam: invalid CAM_DEVICE override, aborting"
+    exit 1
+  fi
+  if [ "${CAM_REQUIRED}" = "1" ]; then
+    log_error "crowsnest-webcam: camera is required (TREED_CAMERA_REQUIRED=1), aborting"
+    exit 1
+  fi
+  skip_webcam_deploy
+  exit 0
+fi
 write_moonraker_webcam_fragment
 write_crowsnest_conf
 ensure_crowsnest_allowed_service
