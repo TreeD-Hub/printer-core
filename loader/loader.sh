@@ -56,6 +56,9 @@ export BOOT_DIR
 export CMDLINE_FILE
 export CONFIG_FILE
 
+TREED_MAINTENANCE_MODE="${TREED_MAINTENANCE_MODE:-1}"
+export TREED_MAINTENANCE_MODE
+
 
 . "${REPO_DIR}/loader/lib/plymouth.sh"
 
@@ -64,6 +67,8 @@ trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BAS
 STEPS=(
   "check-env"
   "detect-rpi"
+  "timezone-sync"     # timezone + NTP baseline for UI and services
+  "maintenance-stop"   # controlled stop of runtime services before provisioning
   "packages-core"
   "boot-hdmi-config"
   "plymouth-theme-install"
@@ -81,11 +86,13 @@ STEPS=(
   "klipper-mainsail-theme"
   "klipperscreen-install"
   "klipperscreen-integr"
+  "maintenance-start"  # bring core services back before final verification
   "verify"
 )
 
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, CMDLINE_FILE=${CMDLINE_FILE}"
+log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
 
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"

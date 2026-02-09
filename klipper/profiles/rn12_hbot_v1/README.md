@@ -1,41 +1,65 @@
-# Profile `rn12_hbot_v1` (MKS Robin Nano 1.2)
+# Профиль `rn12_hbot_v1` (MKS Robin Nano 1.2)
 
-This profile follows the active loader pipeline in `loader/loader.sh`.
-Canonical ownership and deploy model: `docs/config-ownership.md`.
+Этот профиль описывает рабочую конфигурацию Klipper для TreeD и разворачивается активным loader-пайплайном.
 
-## Entry point
+## Зачем конфиг разбит на несколько файлов
 
-Current Klipper entry point:
-- `klipper/printer.cfg`
+Раньше все обычно лежит в одном большом `printer.cfg`, из-за чего сложно:
+- быстро найти нужный параметр;
+- безопасно менять один узел без риска зацепить другой;
+- понимать границы ответственности.
 
-`printer.cfg` includes profile modules directly (no `root.cfg` chain):
-- `mcu_rn12.cfg`
-- `printer_base.cfg`
-- `steppers.cfg`
-- `extruder.cfg`
-- `endstops_mech.cfg`
-- `bed_heater_ac_ssr.cfg`
-- `fans.cfg`
-- `macros.cfg`
-- `ui.cfg`
-- `local_overrides.cfg`
+В этом профиле выбран модульный подход:
+- один файл = одна зона ответственности;
+- базовая точка входа остается единой (`klipper/printer.cfg`);
+- локальные правки устройства отделены от репозитория.
 
-## Loader deploy flow
+Отдельно важно:
+- параметры осей X/Y/Z (моторы, концевики, границы) собраны в одном файле `steppers.cfg`;
+- разнесение одной оси по нескольким файлам не используется.
 
-1. `loader/steps/klipper-sync.sh` copies `klipper/` to staging at `/home/pi/treed/klipper`.
-2. `loader/steps/klipper-profiles.sh` updates `serial:` in `mcu_rn12.cfg` for fixed profile `rn12_hbot_v1`.
-3. `loader/steps/klipper-core.sh` copies full staging tree to runtime `/home/pi/printer_data/config`.
+## Точка входа и порядок include
 
-## Local overrides
+Точка входа: `klipper/printer.cfg`.
 
-- Template in repo: `local_overrides.example.cfg`.
-- Runtime local file: `local_overrides.cfg`.
-- `local_overrides.cfg` is not committed and is preserved by `klipper-core`.
+Текущая include-цепочка для профиля:
+1. `mcu_rn12.cfg`
+2. `printer_base.cfg`
+3. `steppers.cfg`
+4. `extruder.cfg`
+5. `bed_heater_dc.cfg`
+6. `fans.cfg`
+7. `macros.cfg`
+8. `ui.cfg`
+9. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
-## Legacy note
+## Карта файлов профиля
 
-Legacy `printer_root.cfg`/`root.cfg` model is not active in the current repository state.
-When docs differ, trust:
+- `mcu_rn12.cfg` — подключение к MCU (serial + restart method).
+- `printer_base.cfg` — кинематика и базовые лимиты принтера.
+- `steppers.cfg` — полные параметры осей X/Y/Z.
+- `extruder.cfg` — экструдер, хотэнд, PID и ограничения подачи.
+- `bed_heater_dc.cfg` — нагрев стола (DC), лимиты и verify_heater.
+- `fans.cfg` — вентиляторы.
+- `macros.cfg` — пользовательские макросы печати и камеры.
+- `ui.cfg` — интерфейсные блоки для Mainsail/Fluidd.
+- `filament_sensor.cfg` — опциональный шаблон датчика филамента (по умолчанию не подключен).
+
+## Как это разворачивается loader-ом
+
+1. `loader/steps/klipper-sync.sh` копирует `klipper/` в staging: `/home/pi/treed/klipper`.
+2. `loader/steps/klipper-profiles.sh` подставляет актуальный `serial:` в `mcu_rn12.cfg`.
+3. `loader/steps/klipper-core.sh` раскладывает дерево в runtime: `/home/pi/printer_data/config`.
+
+## Локальные оверрайды
+
+- Шаблон в репозитории: `klipper/local_overrides.example.cfg`.
+- Рабочий локальный файл на Pi: `local_overrides.cfg`.
+- `local_overrides.cfg` не коммитится и сохраняется при deploy шагом `klipper-core`.
+
+## Источник истины
+
+Если описание где-то расходится, верить в таком порядке:
 1. `loader/loader.sh`
 2. `docs/config-ownership.md`
 3. `klipper/printer.cfg`

@@ -1,283 +1,123 @@
-# Прошивка MKS Robin Nano V1.2 (RN12) прошивкой Klipper  
-(через USB-B, USART3, файл `ROBIN_NANO.bin`)
+# Прошивка MKS Robin Nano V1.2 (RN12) под Klipper
 
-Инструкция описывает полный цикл прошивки платы **MKS Robin Nano V1.2** (далее — RN12) прошивкой Klipper с Raspberry Pi:
+Инструкция описывает актуальный цикл прошивки RN12 и привязки к текущему TreeD-пайплайну.
 
-- интерфейс связи: **Serial (USART3, PB11/PB10)** — это USB-B разъём через чип CH340;
-- формат файла для microSD: **`ROBIN_NANO.bin`** (без `35`/`43` в имени);
-- после прошивки плата видится на Pi как `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` (типичный случай, имя может немного отличаться).
+## 1. Предусловия
 
-Документ не привязан жёстко к конкретному образу, но далее предполагается, что:
+- Raspberry Pi с Klipper/MainsailOS.
+- Плата MKS Robin Nano V1.2.
+- USB-A <-> USB-B кабель (Pi <-> RN12).
+- microSD (FAT32) для загрузчика платы.
 
-- на Raspberry Pi уже стоит MainsailOS или аналогичный образ с Klipper;
-- репозиторий **TreeD MainshellOS** (`treed-mainshellOS`) развернут и `loader.sh` уже отработал (как минимум один раз).
+Репозиторные артефакты:
+- эталонный бинарник: `firmware/rn12/ROBIN_NANO.bin`
+- активный профиль Klipper: `klipper/profiles/rn12_hbot_v1/*`
 
----
-
-## 0. Что потребуется
-
-- Плата **MKS Robin Nano V1.2** с подключённым основным БП (24 В).
-- Raspberry Pi с установленным Klipper (MainsailOS).
-- Кабель **USB-A ↔ USB-B** (Pi ↔ RN12).
-- Карта **microSD** для RN12 (FAT32, 1–16 ГБ достаточно).
-- Физический доступ к плате (вставить SD, включать/выключать питание).
-
----
-
-## 1. Подготовка репозитория Klipper на Raspberry Pi
-
-На Pi:
+## 2. Сборка прошивки Klipper
 
 ```bash
 cd /home/pi/klipper
 git pull
-git status
-```
-
-Важно понимать, что:
-
-- `/home/pi/klipper` — это исходники Klipper;
-- прошивка MCU собирается именно отсюда.
-
----
-
-## 2. Настройка `make menuconfig` для RN12
-
-Запускаем конфигуратор Klipper:
-
-```bash
-cd /home/pi/klipper
 make clean
 make menuconfig
 ```
 
-В меню **обязательно** выставляем:
+Для RN12 выставить:
+- MCU: `STM32F103`
+- Bootloader offset: `28KiB bootloader`
+- Clock: `8 MHz crystal`
+- Communication interface: `Serial (on USART3 PB11/PB10)`
+- Baud rate: `250000`
 
-- **Micro-controller Architecture:**  
-  `STMicroelectronics STM32`
-- **Processor model:**  
-  `STM32F103`
-- **Bootloader offset:**  
-  `28KiB bootloader`
-- **Clock reference:**  
-  `8 MHz crystal`
-- **Communication interface:**  
-  `Serial (on USART3 PB11/PB10)`  
-  (это USB-B на плате, на схеме обычно подписано как `Use Uart3 PB10-TX PB11-RX`).
-- **Baud rate:**  
-  `250000` (по умолчанию).
-
-Сохраняем конфигурацию и выходим.
-
----
-
-## 3. Сборка прошивки Klipper
+Сборка:
 
 ```bash
 cd /home/pi/klipper
 make -j4
-ls -l out/
+ls -l out/klipper.bin
 ```
 
-В каталоге `out/` должен появиться файл:
-
-```text
-out/klipper.bin
-```
-
----
-
-## 4. Подготовка файла `ROBIN_NANO.bin` для SD-карты
-
-Для плат семейства Robin Nano требуется прогнать `klipper.bin` через скрипт `update_mks_robin.py`, чтобы получить корректный образ для бутлоадера.
-Репозиторный эталонный артефакт хранится в `firmware/rn12/ROBIN_NANO.bin`.
+## 3. Подготовка `ROBIN_NANO.bin`
 
 ```bash
 cd /home/pi/klipper
 ./scripts/update_mks_robin.py out/klipper.bin out/ROBIN_NANO.bin
 ```
 
-Далее можно сохранить прошивку в staging-каталог:
+Опционально сохранить в staging:
 
 ```bash
 mkdir -p /home/pi/treed/.staging/firmware_rn12
 cp out/ROBIN_NANO.bin /home/pi/treed/.staging/firmware_rn12/
 ```
 
-На карту microSD (FAT32) копируем **только один** файл:
+На карту microSD копировать только один `*.bin`:
+- `ROBIN_NANO.bin`
 
-```bash
-# пример: карта смонтирована как /media/pi/RN12
-cp /home/pi/treed/.staging/firmware_rn12/ROBIN_NANO.bin /media/pi/RN12/
-sync
-```
+## 4. Прошивка платы через microSD
 
-Важно:
+1. Выключить питание RN12.
+2. Вставить карту с `ROBIN_NANO.bin`.
+3. Включить питание.
+4. Подождать 10-20 секунд.
+5. Выключить питание и извлечь карту.
 
-- на карте **не должно быть других** `*.bin`-файлов — только `ROBIN_NANO.bin`;
-- желательно перед копированием удалить старый `ROBIN_NANO.CUR` (если он там остался от предыдущей прошивки).
+Признак успешной прошивки:
+- на карте файл переименован в `ROBIN_NANO.CUR`.
 
-Извлекаем карту безопасно.
-
----
-
-## 5. Прошивка платы RN12 через microSD
-
-1. Выключаем питание принтера (24 В).  
-   USB-кабель Pi ↔ RN12 можно временно отключить.
-2. Вставляем microSD с `ROBIN_NANO.bin` в слот TF на RN12.
-3. Включаем питание 24 В.
-
-Дальше бутлоадер платы:
-
-- считывает `ROBIN_NANO.bin`,
-- прошивает флеш STM32,
-- переименовывает файл в `ROBIN_NANO.CUR`.
-
-Через 10–20 секунд:
-
-1. Выключаем питание.
-2. Вынимаем microSD.
-3. Проверяем содержимое карты на ПК/Pi:
-
-   - файл должен называться `ROBIN_NANO.CUR`.
-
-Это признак, что прошивка принята бутлоадером.  
-Карта после прошивки в обычной работе не нужна.
-
----
-
-## 6. Подключение RN12 к Raspberry Pi по USB-B
-
-1. Соединяем RN12 и Raspberry Pi кабелем USB-A ↔ USB-B.
-2. Включаем питание платы (24 В); если джампер питания с USB разрешает, можно питать и от USB, но для принтера всё равно нужен 24 В.
-
-На Pi проверяем, что устройство определилось:
+## 5. Проверка USB-подключения к Pi
 
 ```bash
 ls -l /dev/serial/by-id/
 ```
 
-Ожидаем увидеть примерно:
+Ожидается путь вида:
+- `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`
 
-```text
-usb-1a86_USB_Serial-if00-port0 -> ../../ttyUSB0
-```
+## 6. Как попадает serial в профиль TreeD
 
-Здесь:
+Актуальная модель:
+- файл профиля: `klipper/profiles/rn12_hbot_v1/mcu_rn12.cfg`
+- в файле должен быть только блок `[mcu]` (без `[printer]`)
 
-- `1a86` — VID чипа CH340;
-- `USB_Serial` или `USB2.0-Ser_` — строка производителя/модели;
-- `-port0` — первый (и единственный) интерфейс.
+Serial обычно ставится автоматически шагом `klipper-profiles` при запуске loader.
 
-Полный путь `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` — именно его мы будем использовать в конфиге Klipper.
-
----
-
-## 7. Настройка блока `[mcu]` в конфиге Klipper (модель TreeD MainshellOS)
-
-В релизе **TreeD MainshellOS v1.2.0**:
-
-- конфиги Klipper лежат как «исходники» в:
-
-  ```text
-  /home/pi/treed/klipper
-  ```
-
-- `printer.cfg` в рантайме (`/home/pi/printer_data/config/printer.cfg`) содержит:
-
-  ```ini
-  [include profiles/rn12_hbot_v1/mcu_rn12.cfg]
-  ```
-
-- `klipper/printer.cfg` в свою очередь подключает текущий профиль:
-
-  ```ini
-  # include-chain см. klipper/printer.cfg (profiles/rn12_hbot_v1/*.cfg)
-  ```
-
-Минимальный профиль под RN12 — `rn12_hbot_v1`.  
-Его файл:
-
-```text
-/home/pi/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg
-```
-
-Открываем его (через SSH и `nano` или `less`):
+Полный прогон:
 
 ```bash
-nano /home/pi/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg
+cd /home/pi/treed/treed-mainshellOS
+sudo bash loader/loader.sh
 ```
 
-Содержимое (минимальный вариант) должно выглядеть так:
+Если устройств несколько и нужна явная привязка:
 
-```ini
-[mcu]
-serial: /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0
-restart_method: command
-
-[printer]
-kinematics: none
-max_velocity: 200
-max_accel: 2000
-square_corner_velocity: 5.0
+```bash
+cd /home/pi/treed/treed-mainshellOS
+sudo MCU_SERIAL_BY_ID="/dev/serial/by-id/usb-..." bash loader/loader.sh
 ```
 
-Если у тебя в выводе `ls -l /dev/serial/by-id/` строка отличается (редкий случай — другое имя или несколько устройств):
-
-1. Подставляем **свой** путь в строку `serial: ...`.
-2. Сохраняем файл (`Ctrl+O`, Enter, `Ctrl+X` в nano).
-
-> Рекомендуемый путь: править `serial` напрямую в
-> `/home/pi/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg`
-> и затем перезапускать `klipper`.
-
----
-
-## 8. Перезапуск Klipper и проверка
-
-Перезапускаем сервис Klipper:
+## 7. Проверка Klipper после привязки MCU
 
 ```bash
 sudo systemctl restart klipper
 sleep 5
-tail -n 80 /home/pi/printer_data/logs/klippy.log
+tail -n 120 /home/pi/printer_data/logs/klippy.log
 ```
 
-В логе ожидаем увидеть:
+Ищем в логе:
+- `mcu 'mcu': Starting serial connect`
+- `Loaded MCU 'mcu' ...`
+- `Configured MCU 'mcu' ...`
 
-```text
-mcu 'mcu': Starting serial connect
-Loaded MCU 'mcu' ... (v0.13.0-...)
-MCU 'mcu' config: ...
-Configured MCU 'mcu' (1024 moves)
-Stats ... bytes_write=... bytes_read=...
-```
+## 8. Актуальные пути в runtime
 
-Ключевые моменты:
+- `printer.cfg`: `/home/pi/printer_data/config/printer.cfg`
+- профиль: `/home/pi/printer_data/config/profiles/rn12_hbot_v1/`
+- mcu-файл: `/home/pi/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg`
 
-- **нет** ошибок вида:
-  - `Serial connection closed`;
-  - `Timeout on connect`;
-  - `Option 'endstop_pin' in section 'stepper_x' must be specified` (мы пока используем `kinematics: none`, поэтому осей ещё нет).
-- есть строка `Configured MCU 'mcu'`.
+---
 
-В веб-интерфейсе (Mainsail) принтер должен перейти из `Config error` в статус `Ready` **с минимальным конфигом**:
-
-- MCU прошит Klipper и отвечает;
-- кинематика пока `none` — оси, драйверы, нагреватели и стол ещё не описаны.
-
-На этом этапе базовая связка:
-
-- **Raspberry Pi ↔ RN12 по USB**,
-- **Klipper на Pi ↔ прошитый MCU**
-
-считается настроенной. Дальше уже можно наращивать конфиг:
-
-- добавлять оси и кинематику H-bot/конвейера,
-- описывать TMC2209, хотэнд, стол, вентиляторы,
-- подключать макросы и профили под задачи фермы.
-
-
-> Карта слоев и ownership: `README.md`
-> Актуальная модель конфигов и ownership: `docs/config-ownership.md`.
+См. также:
+- `README.md`
+- `docs/config-ownership.md`
+- `klipper/profiles/rn12_hbot_v1/README.md`

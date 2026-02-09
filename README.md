@@ -2,34 +2,63 @@
 
 Единая точка входа по структуре репозитория, слоям разворачивания и ownership.
 
+## Быстрый запуск (копируй в SSH)
+
+```bash
+set -euo pipefail
+REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
+INSTALL_REF="${INSTALL_REF:-dev}"   # при необходимости: export INSTALL_REF=имя_ветки
+BASE="/home/pi/treed"
+REPO_DIR="${BASE}/treed-mainshellOS"
+
+sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
+
+mkdir -p "${BASE}"
+sudo rm -rf "${REPO_DIR}"
+git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
+
+cd "${REPO_DIR}"
+find loader -type f -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'
+chmod +x loader/loader.sh
+find loader/steps -type f -name '*.sh' -exec chmod +x {} +
+
+sudo bash loader/loader.sh
+sudo reboot
+```
+
 ## Карта слоев
 
-1. Репозиторий (source of truth):
-   - `loader/` - pipeline провижининга.
-   - `klipper/` - канонические конфиги Klipper.
-   - `moonraker/` - базовый Moonraker config + компоненты.
-   - `runtime-scripts/` - runtime-скрипты, которые раскладывает лоадер.
-   - `firmware/` - репозиторные firmware-артефакты.
-2. Лоадер:
-   - entrypoint: `loader/loader.sh`
-   - шаги: `loader/steps/*.sh`
-3. Staging на устройстве:
-   - `/home/pi/treed/klipper`
-4. Runtime на устройстве:
-   - `/home/pi/printer_data/config`
-   - `/home/pi/treed/cam/bin`
-5. Сервисы и UI:
-   - `klipper`, `moonraker`, `crowsnest`, `KlipperScreen`, `mainsail`
+1. Репозиторий (source of truth)
+- `loader/` — pipeline провижининга и проверки.
+- `klipper/` — канонические конфиги Klipper.
+- `moonraker/` — базовый конфиг Moonraker и компоненты.
+- `runtime-scripts/` — runtime-скрипты (например, для камеры).
+- `mainsail/` — тема и UI-ресурсы Mainsail.
+- `firmware/` — репозиторные firmware-артефакты.
+
+2. Loader
+- entrypoint: `loader/loader.sh`
+- шаги: `loader/steps/*.sh`
+
+3. Staging на устройстве
+- `/home/pi/treed/klipper`
+
+4. Runtime на устройстве
+- `/home/pi/printer_data/config`
+- `/home/pi/treed/cam/bin`
+
+5. Сервисы и UI
+- `klipper`, `moonraker`, `crowsnest`, `KlipperScreen`, `mainsail`
 
 ## Ownership (кратко)
 
-- `klipper/*` -> владелец: repo + `loader/steps/klipper-core.sh`
-- `moonraker/base/*` -> владелец: repo + `loader/steps/moonraker-config.sh`
-- `moonraker/generated/50-webcam-treed.conf` -> владелец: `loader/steps/crowsnest-webcam.sh`
-- `runtime-scripts/treed-cam/*` -> владелец: repo + `loader/steps/treed-cam.sh`
-- Local overrides (`local_overrides.cfg`, `mainsail.cfg`, etc.) сохраняются `klipper-core`
+- `klipper/*` -> `loader/steps/klipper-core.sh`
+- `moonraker/base/*` -> `loader/steps/moonraker-config.sh`
+- `moonraker/generated/50-webcam-treed.conf` -> `loader/steps/crowsnest-webcam.sh`
+- `runtime-scripts/treed-cam/*` -> `loader/steps/treed-cam.sh`
+- Локальные overrides (`local_overrides.cfg`, `mainsail.cfg` и др.) сохраняются при deploy шагом `klipper-core`.
 
-Подробная ownership-карта: `docs/config-ownership.md`.
+Подробная карта владения: `docs/config-ownership.md`.
 
 ## Документация
 
@@ -40,14 +69,13 @@
 
 ## Политика веток
 
-- `dev-cam` - активная каноническая ветка для установки и обновления.
-- `main` - legacy-снимок, не используется для свежего провижининга.
-- `refactor/*` - рабочие ветки под изменения, не дефолтный install channel.
+- `dev` — рабочая ветка для актуальных установок и развития.
+- `main` — консервативная/историческая ветка, не основной install-канал.
+- `refactor/*` — временные ветки для изолированных изменений.
 
-## Naming-конвенции путей
+## Naming-конвенции
 
-- README-файлы: `README.md` (верхний регистр).
-- Каталоги: lowercase + `kebab-case` при составных именах.
+- README-файлы: `README.md`.
+- Каталоги: lowercase + `kebab-case` для составных имен.
 - Runtime-скрипты: только в `runtime-scripts/`.
-- Операторские утилиты: только в `tools/ops/`.
 - Firmware-артефакты: `firmware/<board>/<ARTIFACT>.bin`.
