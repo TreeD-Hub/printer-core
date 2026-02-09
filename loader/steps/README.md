@@ -109,3 +109,12 @@ Plymouth/systemd/verify:
 cd /home/pi/treed/treed-mainshellOS
 sudo REPO_DIR="$(pwd)" bash loader/steps/verify.sh
 ```
+
+## UART-контур (дополнительно)
+
+В режиме `TREED_MCU_TRANSPORT=uart` шаг `rpi-uart-config.sh` дополнительно делает две вещи для стабильного старта Klipper:
+
+- маскирует `serial-getty@ttyAMA0.service` и `serial-getty@ttyS0.service`, чтобы исключить захват UART-консолью;
+- разворачивает udev-правило `/etc/udev/rules.d/99-treed-uart-perms.rules` с правами `0660` и группой `dialout` для `/dev/ttyAMA0` и `/dev/ttyS0`, а также применяет эти права сразу в рантайме.
+
+Это убирает сценарий, когда Klipper получает `Permission denied` на `/dev/serial0` после чистого деплоя.

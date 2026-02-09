@@ -138,7 +138,7 @@ fi
 
 PI_USER="${PI_USER:-pi}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
-TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-usb}"
+TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
@@ -148,7 +148,7 @@ case "${TREED_MCU_TRANSPORT_RAW}" in
   uart|UART) TREED_MCU_TRANSPORT="uart" ;;
   *)
     failf "TREED_MCU_TRANSPORT is valid (value=${TREED_MCU_TRANSPORT_RAW})"
-    TREED_MCU_TRANSPORT="usb"
+    TREED_MCU_TRANSPORT="uart"
     ;;
 esac
 
@@ -193,6 +193,48 @@ if [ "${TREED_MCU_TRANSPORT}" = "uart" ]; then
     pass "mcu uart device path exists (${TREED_MCU_UART_DEV})"
   else
     failf "mcu uart device path exists (${TREED_MCU_UART_DEV})"
+  fi
+
+  for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do
+    if out="$(systemctl is-enabled "${unit}" 2>&1)"; then
+      st=0
+    else
+      st=$?
+    fi
+    state="$(printf '%s' "${out}" | head -n 1 | tr -d '\r\n')"
+    case "${state}" in
+      enabled|disabled|static|indirect|generated|masked|masked-runtime|linked|linked-runtime|alias) ;;
+      *)
+        log_error "verify: systemctl is-enabled ${unit} failed rc=${st}: ${out}"
+        exit 1
+        ;;
+    esac
+
+    if [ "${state}" = "masked" ] || [ "${state}" = "masked-runtime" ]; then
+      pass "${unit} masked for uart transport (state=${state})"
+    else
+      failf "${unit} masked for uart transport (state=${state})"
+    fi
+  done
+
+  if [ "$(id -u)" -eq 0 ]; then
+    if sudo -u "${PI_USER}" test -r "${TREED_MCU_UART_DEV}" \
+      && sudo -u "${PI_USER}" test -w "${TREED_MCU_UART_DEV}"; then
+      pass "mcu uart device readable/writable by ${PI_USER} (${TREED_MCU_UART_DEV})"
+    else
+      failf "mcu uart device readable/writable by ${PI_USER} (${TREED_MCU_UART_DEV})"
+    fi
+  else
+    log_info "VERIFY uart rw-check skipped (script not running as root)"
+  fi
+
+  UART_RULE_FILE="/etc/udev/rules.d/99-treed-uart-perms.rules"
+  if [ -f "${UART_RULE_FILE}" ] \
+    && grep -qE '^[[:space:]]*KERNEL=="ttyAMA0",[[:space:]]*MODE="0660",[[:space:]]*GROUP="dialout"[[:space:]]*$' "${UART_RULE_FILE}" \
+    && grep -qE '^[[:space:]]*KERNEL=="ttyS0",[[:space:]]*MODE="0660",[[:space:]]*GROUP="dialout"[[:space:]]*$' "${UART_RULE_FILE}"; then
+    pass "uart udev permissions rule present (${UART_RULE_FILE})"
+  else
+    failf "uart udev permissions rule present (${UART_RULE_FILE})"
   fi
 
   enable_uart_val="$(

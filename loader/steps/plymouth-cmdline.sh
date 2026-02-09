@@ -5,7 +5,7 @@ set -euo pipefail
 
 log_info "Step plymouth-cmdline: updating kernel cmdline for plymouth"
 
-MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-usb}"
+MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 case "${MCU_TRANSPORT_RAW}" in
   usb|USB) MCU_TRANSPORT="usb" ;;
   uart|UART) MCU_TRANSPORT="uart" ;;

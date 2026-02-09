@@ -10,6 +10,9 @@ REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
 INSTALL_REF="${INSTALL_REF:-dev}"   # при необходимости: export INSTALL_REF=имя_ветки
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
+TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT:-uart}"  # uart|usb
+TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
+TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-1}" # для UART обычно 1
 
 sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
 
@@ -22,7 +25,10 @@ find loader -type f -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'
 chmod +x loader/loader.sh
 find loader/steps -type f -name '*.sh' -exec chmod +x {} +
 
-sudo bash loader/loader.sh
+sudo TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT}" \
+     TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV}" \
+     TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT}" \
+     bash loader/loader.sh
 sudo reboot
 ```
 

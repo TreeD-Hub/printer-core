@@ -6,9 +6,10 @@ set -euo pipefail
 
 ensure_root
 
-MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-usb}"
+MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-1}"
+UART_PERMS_RULE_FILE="/etc/udev/rules.d/99-treed-uart-perms.rules"
 
 is_true() {
   case "${1:-}" in
@@ -113,7 +114,52 @@ for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do
   else
     log_info "rpi-uart-config: ${unit} not present or already disabled"
   fi
+  if systemctl mask "${unit}" >/dev/null 2>&1; then
+    log_info "rpi-uart-config: masked ${unit}"
+  else
+    log_warn "rpi-uart-config: unable to mask ${unit}"
+  fi
 done
+
+tmp="$(mktemp)"
+cat > "${tmp}" <<'EOF'
+# treed-managed: uart permissions for klipper transport
+KERNEL=="ttyAMA0", MODE="0660", GROUP="dialout"
+KERNEL=="ttyS0", MODE="0660", GROUP="dialout"
+EOF
+
+if [ ! -f "${UART_PERMS_RULE_FILE}" ] || ! cmp -s "${tmp}" "${UART_PERMS_RULE_FILE}"; then
+  cat "${tmp}" > "${UART_PERMS_RULE_FILE}"
+  chmod 0644 "${UART_PERMS_RULE_FILE}"
+  log_info "rpi-uart-config: wrote UART permissions rule ${UART_PERMS_RULE_FILE}"
+else
+  log_info "rpi-uart-config: UART permissions rule already up to date"
+fi
+rm -f "${tmp}"
+
+if command -v udevadm >/dev/null 2>&1; then
+  udevadm control --reload-rules >/dev/null 2>&1 || true
+  for dev in /dev/ttyAMA0 /dev/ttyS0; do
+    if [ -e "${dev}" ]; then
+      udevadm trigger --name-match="${dev}" >/dev/null 2>&1 || true
+    fi
+  done
+else
+  log_warn "rpi-uart-config: udevadm not found, skipping rule reload"
+fi
+
+# Применяем права сразу (до следующего события udev), чтобы убрать race на первом старте.
+if getent group dialout >/dev/null 2>&1; then
+  for dev in /dev/ttyAMA0 /dev/ttyS0; do
+    if [ -e "${dev}" ]; then
+      chgrp dialout "${dev}" || true
+      chmod 0660 "${dev}" || true
+      log_info "rpi-uart-config: applied runtime permissions to ${dev}"
+    fi
+  done
+else
+  log_warn "rpi-uart-config: group dialout not found, skipping runtime permissions apply"
+fi
 
 if [ -e "${MCU_UART_DEV}" ] || [ -L "${MCU_UART_DEV}" ]; then
   log_info "rpi-uart-config: UART device path is present: ${MCU_UART_DEV}"
