@@ -63,7 +63,8 @@ Klipper:
 
 - `TREED_MCU_TRANSPORT` - режим связи с MCU (`usb` или `uart`).
 - `TREED_MCU_UART_DEV` - UART-устройство для MCU (по умолчанию `/dev/serial0`).
-- `TREED_UART_DISABLE_BT=1` - добавить `dtoverlay=disable-bt` в `config.txt` для UART-контура.
+- `TREED_UART_DISABLE_BT` - добавить `dtoverlay=disable-bt` в `config.txt` для UART-контура (default для `uart`: `1`, установите `0`, если BT нужно сохранить).
+  В `verify` без явного значения используется auto-режим проверки (не падает, если BT оставлен включенным).
 - `MCU_SERIAL_BY_ID` - явная привязка MCU serial (`/dev/serial/by-id/*`).
 - `KLIPPER_SERVICE` - имя systemd-сервиса для шага `klipper-anti-shutdown` (по умолчанию `klipper`).
 

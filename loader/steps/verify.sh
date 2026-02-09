@@ -140,6 +140,7 @@ PI_USER="${PI_USER:-pi}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-usb}"
 TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
+TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
 
 case "${TREED_MCU_TRANSPORT_RAW}" in
@@ -202,6 +203,22 @@ if [ "${TREED_MCU_TRANSPORT}" = "uart" ]; then
     pass "config.txt enable_uart=1"
   else
     failf "config.txt enable_uart=1"
+  fi
+
+  if is_true "${TREED_UART_DISABLE_BT}"; then
+    if grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*disable-bt([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
+      pass "config.txt dtoverlay=disable-bt for uart transport"
+    else
+      failf "config.txt dtoverlay=disable-bt for uart transport"
+    fi
+  elif [ "${TREED_UART_DISABLE_BT}" = "0" ] || [ "${TREED_UART_DISABLE_BT}" = "false" ] || [ "${TREED_UART_DISABLE_BT}" = "FALSE" ] || [ "${TREED_UART_DISABLE_BT}" = "no" ] || [ "${TREED_UART_DISABLE_BT}" = "NO" ]; then
+    log_info "VERIFY bluetooth UART check skipped (TREED_UART_DISABLE_BT=${TREED_UART_DISABLE_BT})"
+  else
+    if grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*disable-bt([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
+      pass "config.txt dtoverlay=disable-bt for uart transport (auto)"
+    else
+      log_info "VERIFY bluetooth UART check auto: dtoverlay=disable-bt not found"
+    fi
   fi
 
   if [ -n "${CMDLINE_CONTENT}" ] \

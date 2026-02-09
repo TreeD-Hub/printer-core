@@ -51,7 +51,8 @@ sudo bash loader/loader.sh
 - `BOOT_DIR`, `CMDLINE_FILE`, `CONFIG_FILE` - обнаруженные boot-пути.
 - `TREED_MCU_TRANSPORT` - режим связи с MCU (`usb` или `uart`).
 - `TREED_MCU_UART_DEV` - путь UART-устройства (по умолчанию `/dev/serial0`).
-- `TREED_UART_DISABLE_BT` - отключение BT UART (`1` -> `dtoverlay=disable-bt`).
+- `TREED_UART_DISABLE_BT` - отключение BT UART (`1` -> `dtoverlay=disable-bt`, default для `uart`; `0` - оставить BT включенным).
+  Для standalone `verify` без явного значения используется auto-режим проверки BT overlay.
 
 Дополнительно:
 
@@ -70,3 +71,4 @@ sudo bash loader/loader.sh
 - `loader/lib/README.md` - общие библиотеки.
 - `loader/steps/README.md` - описание шагов и управляющих переменных.
 - `docs/config-ownership.md` - карта слоев и ownership runtime-артефактов.
+- `docs/rn_v12_to_klipper.md` - двухфазный переход RN12 `usb -> uart` (подготовка + reboot, затем переключение transport).

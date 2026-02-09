@@ -8,7 +8,7 @@ ensure_root
 
 MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-usb}"
 MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
-TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-0}"
+TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-1}"
 
 is_true() {
   case "${1:-}" in
@@ -104,7 +104,7 @@ if is_true "${TREED_UART_DISABLE_BT}"; then
   fi
   rm -f "${tmp}"
 else
-  log_info "rpi-uart-config: bluetooth UART keep enabled (set TREED_UART_DISABLE_BT=1 to disable)"
+  log_info "rpi-uart-config: bluetooth UART keep enabled (set TREED_UART_DISABLE_BT=1 to disable, default in uart mode)"
 fi
 
 for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do

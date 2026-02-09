@@ -67,6 +67,10 @@ sudo reboot
 - Прошивка RN12 под Klipper: `docs/rn_v12_to_klipper.md`
 - Модель владения конфигами: `docs/config-ownership.md`
 
+Для перехода RN12 с USB на UART используйте только двухфазный сценарий из
+`docs/rn_v12_to_klipper.md` (фаза 1: подготовка + reboot, фаза 2: переключение transport).
+Минимальный post-install smoke-test для UART/MCU также находится в `docs/rn_v12_to_klipper.md`.
+
 ## Политика веток
 
 - `dev` — рабочая ветка для актуальных установок и развития.
