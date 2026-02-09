@@ -72,6 +72,8 @@ Klipper:
 
 - `CAM_DEVICE` - принудительно указать устройство камеры.
 - `CAM_ALLOW_VIDEO0_FALLBACK=1` - разрешить fallback на `/dev/video0`.
+- `TREED_CAM_RESOLUTION` - постоянное разрешение стрима crowsnest (по умолчанию `800x600`).
+- `TREED_CAM_FPS` - постоянный FPS стрима crowsnest (по умолчанию `10`).
 - `MOONRAKER_READY_RETRIES` - количество попыток ожидания API Moonraker после рестарта.
 
 KlipperScreen:
