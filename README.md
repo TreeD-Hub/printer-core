@@ -2,6 +2,30 @@
 
 Единая точка входа по структуре репозитория, слоям разворачивания и ownership.
 
+## Быстрый запуск (копируй в SSH)
+
+```bash
+set -euo pipefail
+REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
+INSTALL_REF="${INSTALL_REF:-dev}"   # при необходимости: export INSTALL_REF=имя_ветки
+BASE="/home/pi/treed"
+REPO_DIR="${BASE}/treed-mainshellOS"
+
+sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
+
+mkdir -p "${BASE}"
+sudo rm -rf "${REPO_DIR}"
+git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
+
+cd "${REPO_DIR}"
+find loader -type f -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'
+chmod +x loader/loader.sh
+find loader/steps -type f -name '*.sh' -exec chmod +x {} +
+
+sudo bash loader/loader.sh
+sudo reboot
+```
+
 ## Карта слоев
 
 1. Репозиторий (source of truth)
