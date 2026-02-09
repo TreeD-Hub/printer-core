@@ -71,6 +71,7 @@ STEPS=(
   "maintenance-stop"   # controlled stop of runtime services before provisioning
   "packages-core"
   "boot-hdmi-config"
+  "rpi-uart-config"     # optional UART transport prep (enable_uart/serial-getty)
   "plymouth-theme-install"
   "plymouth-initramfs"
   "plymouth-initramfs-config"

@@ -35,7 +35,7 @@
 
 ## Карта файлов профиля
 
-- `mcu_rn12.cfg` — подключение к MCU (serial + restart method).
+- `mcu_rn12.cfg` — подключение к MCU (serial + restart method, transport `usb|uart`).
 - `printer_base.cfg` — кинематика и базовые лимиты принтера.
 - `steppers.cfg` — полные параметры осей X/Y/Z.
 - `extruder.cfg` — экструдер, хотэнд, PID и ограничения подачи.
@@ -48,7 +48,7 @@
 ## Как это разворачивается loader-ом
 
 1. `loader/steps/klipper-sync.sh` копирует `klipper/` в staging: `/home/pi/treed/klipper`.
-2. `loader/steps/klipper-profiles.sh` подставляет актуальный `serial:` в `mcu_rn12.cfg`.
+2. `loader/steps/klipper-profiles.sh` подставляет актуальный `serial:` в `mcu_rn12.cfg` по `TREED_MCU_TRANSPORT`.
 3. `loader/steps/klipper-core.sh` раскладывает дерево в runtime: `/home/pi/printer_data/config`.
 
 ## Локальные оверрайды

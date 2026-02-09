@@ -23,23 +23,24 @@ sudo bash loader/loader.sh
 4. `maintenance-stop`
 5. `packages-core`
 6. `boot-hdmi-config`
-7. `plymouth-theme-install`
-8. `plymouth-initramfs`
-9. `plymouth-initramfs-config`
-10. `plymouth-cmdline`
-11. `plymouth-systemd`
-12. `klipper-sync`
-13. `klipper-profiles`
-14. `klipper-core`
-15. `klipper-anti-shutdown`
-16. `moonraker-config`
-17. `crowsnest-webcam`
-18. `treed-cam`
-19. `klipper-mainsail-theme`
-20. `klipperscreen-install`
-21. `klipperscreen-integr`
-22. `maintenance-start`
-23. `verify`
+7. `rpi-uart-config`
+8. `plymouth-theme-install`
+9. `plymouth-initramfs`
+10. `plymouth-initramfs-config`
+11. `plymouth-cmdline`
+12. `plymouth-systemd`
+13. `klipper-sync`
+14. `klipper-profiles`
+15. `klipper-core`
+16. `klipper-anti-shutdown`
+17. `moonraker-config`
+18. `crowsnest-webcam`
+19. `treed-cam`
+20. `klipper-mainsail-theme`
+21. `klipperscreen-install`
+22. `klipperscreen-integr`
+23. `maintenance-start`
+24. `verify`
 
 ## Контракт окружения
 
@@ -48,6 +49,9 @@ sudo bash loader/loader.sh
 - `REPO_DIR` - путь к репозиторию.
 - `PI_USER`, `PI_HOME` - целевой пользователь и его home.
 - `BOOT_DIR`, `CMDLINE_FILE`, `CONFIG_FILE` - обнаруженные boot-пути.
+- `TREED_MCU_TRANSPORT` - режим связи с MCU (`usb` или `uart`).
+- `TREED_MCU_UART_DEV` - путь UART-устройства (по умолчанию `/dev/serial0`).
+- `TREED_UART_DISABLE_BT` - отключение BT UART (`1` -> `dtoverlay=disable-bt`).
 
 Дополнительно:
 

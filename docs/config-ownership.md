@@ -11,26 +11,28 @@ Entrypoint:
 Полный порядок шагов:
 1. `check-env`
 2. `detect-rpi`
-3. `maintenance-stop`
-4. `packages-core`
-5. `boot-hdmi-config`
-6. `plymouth-theme-install`
-7. `plymouth-initramfs`
-8. `plymouth-initramfs-config`
-9. `plymouth-cmdline`
-10. `plymouth-systemd`
-11. `klipper-sync`
-12. `klipper-profiles`
-13. `klipper-core`
-14. `klipper-anti-shutdown`
-15. `moonraker-config`
-16. `crowsnest-webcam`
-17. `treed-cam`
-18. `klipper-mainsail-theme`
-19. `klipperscreen-install`
-20. `klipperscreen-integr`
-21. `maintenance-start`
-22. `verify`
+3. `timezone-sync`
+4. `maintenance-stop`
+5. `packages-core`
+6. `boot-hdmi-config`
+7. `rpi-uart-config`
+8. `plymouth-theme-install`
+9. `plymouth-initramfs`
+10. `plymouth-initramfs-config`
+11. `plymouth-cmdline`
+12. `plymouth-systemd`
+13. `klipper-sync`
+14. `klipper-profiles`
+15. `klipper-core`
+16. `klipper-anti-shutdown`
+17. `moonraker-config`
+18. `crowsnest-webcam`
+19. `treed-cam`
+20. `klipper-mainsail-theme`
+21. `klipperscreen-install`
+22. `klipperscreen-integr`
+23. `maintenance-start`
+24. `verify`
 
 ## 2. Слои и source of truth
 

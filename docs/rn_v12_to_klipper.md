@@ -6,7 +6,8 @@
 
 - Raspberry Pi с Klipper/MainsailOS.
 - Плата MKS Robin Nano V1.2.
-- USB-A <-> USB-B кабель (Pi <-> RN12).
+- USB-A <-> USB-B кабель (Pi <-> RN12) для режима `usb`
+  или UART-подключение (TX/RX/GND, 3.3V TTL) для режима `uart`.
 - microSD (FAT32) для загрузчика платы.
 
 Репозиторные артефакты:
@@ -65,7 +66,9 @@ cp out/ROBIN_NANO.bin /home/pi/treed/.staging/firmware_rn12/
 Признак успешной прошивки:
 - на карте файл переименован в `ROBIN_NANO.CUR`.
 
-## 5. Проверка USB-подключения к Pi
+## 5. Проверка канала связи с Pi
+
+Режим `usb`:
 
 ```bash
 ls -l /dev/serial/by-id/
@@ -74,6 +77,14 @@ ls -l /dev/serial/by-id/
 Ожидается путь вида:
 - `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`
 
+Режим `uart`:
+
+```bash
+ls -l /dev/serial0
+```
+
+Ожидается симлинк вида `/dev/serial0 -> ttyAMA0` или `/dev/serial0 -> ttyS0`.
+
 ## 6. Как попадает serial в профиль TreeD
 
 Актуальная модель:
@@ -81,6 +92,10 @@ ls -l /dev/serial/by-id/
 - в файле должен быть только блок `[mcu]` (без `[printer]`)
 
 Serial обычно ставится автоматически шагом `klipper-profiles` при запуске loader.
+
+Режим задается переменными:
+- `TREED_MCU_TRANSPORT=usb|uart`
+- `TREED_MCU_UART_DEV=/dev/serial0` (для `uart`)
 
 Полный прогон:
 
@@ -94,6 +109,13 @@ sudo bash loader/loader.sh
 ```bash
 cd /home/pi/treed/treed-mainshellOS
 sudo MCU_SERIAL_BY_ID="/dev/serial/by-id/usb-..." bash loader/loader.sh
+```
+
+Для режима `uart`:
+
+```bash
+cd /home/pi/treed/treed-mainshellOS
+sudo TREED_MCU_TRANSPORT=uart TREED_MCU_UART_DEV=/dev/serial0 bash loader/loader.sh
 ```
 
 ## 7. Проверка Klipper после привязки MCU

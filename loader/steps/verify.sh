@@ -136,6 +136,82 @@ else
   failf "cmdline file missing (${CMDLINE_PATH})"
 fi
 
+PI_USER="${PI_USER:-pi}"
+PI_HOME="${PI_HOME:-/home/${PI_USER}}"
+TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-usb}"
+TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
+MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
+
+case "${TREED_MCU_TRANSPORT_RAW}" in
+  usb|USB) TREED_MCU_TRANSPORT="usb" ;;
+  uart|UART) TREED_MCU_TRANSPORT="uart" ;;
+  *)
+    failf "TREED_MCU_TRANSPORT is valid (value=${TREED_MCU_TRANSPORT_RAW})"
+    TREED_MCU_TRANSPORT="usb"
+    ;;
+esac
+
+if [ -f "${MCU_CFG_RUNTIME}" ]; then
+  pass "mcu config present (${MCU_CFG_RUNTIME})"
+  runtime_mcu_serial="$(
+    sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\1|p' "${MCU_CFG_RUNTIME}" \
+      | head -n 1 || true
+  )"
+  if [ -n "${runtime_mcu_serial}" ]; then
+    pass "mcu serial line present (${runtime_mcu_serial})"
+  else
+    failf "mcu serial line present (${MCU_CFG_RUNTIME})"
+  fi
+else
+  failf "mcu config present (${MCU_CFG_RUNTIME})"
+  runtime_mcu_serial=""
+fi
+
+if [ "${TREED_MCU_TRANSPORT}" = "usb" ]; then
+  if printf '%s' "${runtime_mcu_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
+    pass "mcu transport usb serial path format"
+  else
+    failf "mcu transport usb serial path format"
+  fi
+
+  if [ -n "${runtime_mcu_serial}" ] && [ -e "${runtime_mcu_serial}" ] && [ -r "${runtime_mcu_serial}" ]; then
+    pass "mcu usb serial path exists (${runtime_mcu_serial})"
+  else
+    failf "mcu usb serial path exists (${runtime_mcu_serial:-missing})"
+  fi
+fi
+
+if [ "${TREED_MCU_TRANSPORT}" = "uart" ]; then
+  if [ "${runtime_mcu_serial}" = "${TREED_MCU_UART_DEV}" ]; then
+    pass "mcu transport uart serial target (${TREED_MCU_UART_DEV})"
+  else
+    failf "mcu transport uart serial target (${TREED_MCU_UART_DEV}, current=${runtime_mcu_serial:-missing})"
+  fi
+
+  if [ -e "${TREED_MCU_UART_DEV}" ] || [ -L "${TREED_MCU_UART_DEV}" ]; then
+    pass "mcu uart device path exists (${TREED_MCU_UART_DEV})"
+  else
+    failf "mcu uart device path exists (${TREED_MCU_UART_DEV})"
+  fi
+
+  enable_uart_val="$(
+    sed -nE 's|^[[:space:]]*enable_uart[[:space:]]*=[[:space:]]*([0-9]+).*|\1|p' "${CONFIG_FILE}" \
+      | tail -n 1 || true
+  )"
+  if [ "${enable_uart_val}" = "1" ]; then
+    pass "config.txt enable_uart=1"
+  else
+    failf "config.txt enable_uart=1"
+  fi
+
+  if [ -n "${CMDLINE_CONTENT}" ] \
+    && printf '%s\n' "${CMDLINE_CONTENT}" | grep -qE '(^| )console=(serial0|ttyAMA0|ttyS0),[^ ]+'; then
+    failf "cmdline has no serial console tokens for uart transport"
+  else
+    pass "cmdline has no serial console tokens for uart transport"
+  fi
+fi
+
 TREED_MASK_TTY1="${TREED_MASK_TTY1:-1}"
 if out="$(systemctl is-enabled getty@tty1.service 2>&1)"; then
   rc=0
@@ -255,8 +331,6 @@ else
   failf "gpu_mem >= 96"
 fi
 
-PI_USER="${PI_USER:-pi}"
-PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
 CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
 MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"

@@ -19,6 +19,7 @@
 
 - `packages-core.sh`
 - `boot-hdmi-config.sh`
+- `rpi-uart-config.sh`
 - `plymouth-theme-install.sh`
 - `plymouth-initramfs.sh`
 - `plymouth-initramfs-config.sh`
@@ -60,6 +61,9 @@ UI:
 
 Klipper:
 
+- `TREED_MCU_TRANSPORT` - режим связи с MCU (`usb` или `uart`).
+- `TREED_MCU_UART_DEV` - UART-устройство для MCU (по умолчанию `/dev/serial0`).
+- `TREED_UART_DISABLE_BT=1` - добавить `dtoverlay=disable-bt` в `config.txt` для UART-контура.
 - `MCU_SERIAL_BY_ID` - явная привязка MCU serial (`/dev/serial/by-id/*`).
 - `KLIPPER_SERVICE` - имя systemd-сервиса для шага `klipper-anti-shutdown` (по умолчанию `klipper`).
 
@@ -92,9 +96,9 @@ Plymouth/systemd/verify:
 
 ## Важные замечания по поведению
 
-- `crowsnest-webcam.sh` fail-fast при неоднозначной/неразрешимой камере, если не задан `CAM_DEVICE` и не включен fallback.
+- `crowsnest-webcam.sh` по умолчанию best-effort, fail-fast включается через `TREED_CAMERA_REQUIRED=1`.
 - `klipperscreen-install.sh` и `klipperscreen-integr.sh` fail-fast, если сервис KlipperScreen не поднимается в заданный timeout.
-- `verify.sh` рассчитан на запуск из loader. Для ручного запуска требуется передать `REPO_DIR`.
+- `verify.sh` можно запускать standalone: `REPO_DIR` вычисляется автоматически, если не передан.
 
 Пример ручного запуска `verify`:
 
