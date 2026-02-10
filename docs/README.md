@@ -12,6 +12,9 @@ REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
 INSTALL_REF="${INSTALL_REF:-dev}"
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
+TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT:-uart}"  # uart|usb
+TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
+TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-1}" # для UART обычно 1
 
 sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
 
@@ -24,7 +27,10 @@ find loader -type f -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'
 chmod +x loader/loader.sh
 find loader/steps -type f -name '*.sh' -exec chmod +x {} +
 
-sudo bash loader/loader.sh
+sudo TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT}" \
+     TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV}" \
+     TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT}" \
+     bash loader/loader.sh
 sudo reboot
 ```
 
@@ -32,4 +38,6 @@ sudo reboot
 
 - По умолчанию камера не является блокером установки.
 - Для fail-fast режима камеры используйте: `TREED_CAMERA_REQUIRED=1`.
+- UART (рекомендуется): `sudo TREED_MCU_TRANSPORT=uart TREED_MCU_UART_DEV=/dev/serial0 TREED_UART_DISABLE_BT=1 bash loader/loader.sh`.
+- Legacy USB: `sudo TREED_MCU_TRANSPORT=usb TREED_UART_DISABLE_BT=0 bash loader/loader.sh`.
 - Полный порядок шагов и ownership: `docs/config-ownership.md`.
