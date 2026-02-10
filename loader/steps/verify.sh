@@ -31,6 +31,7 @@ is_true() {
 check_required_service_active() {
   local unit="$1"
   local state=""
+  local substate=""
 
   if systemctl cat "${unit}" >/dev/null 2>&1; then
     pass "${unit} present"
@@ -44,7 +45,81 @@ check_required_service_active() {
   else
     state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
     failf "${unit} active (state=${state:-unknown})"
+    return 0
   fi
+
+  substate="$(systemctl show -p SubState --value "${unit}" 2>/dev/null | tr -d '\r\n')"
+  if [ "${substate}" = "running" ]; then
+    pass "${unit} substate running"
+  else
+    failf "${unit} substate running (state=${substate:-unknown})"
+  fi
+}
+
+moonraker_ready_check() {
+  local check_name="$1"
+  local url="$2"
+  local tmp code retries attempt
+
+  if ! command -v curl >/dev/null 2>&1; then
+    failf "${check_name} (curl missing)"
+    return 0
+  fi
+
+  tmp="$(mktemp "/tmp/treed_verify_server_info_XXXXXX.json")"
+  retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
+  code=""
+
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
+    if [ "${code}" = "200" ] \
+      && grep -qE '"klippy_connected"[[:space:]]*:[[:space:]]*true' "${tmp}" \
+      && grep -qE '"klippy_state"[[:space:]]*:[[:space:]]*"ready"' "${tmp}"; then
+      pass "${check_name}"
+      rm -f "${tmp}"
+      return 0
+    fi
+    sleep 1
+  done
+
+  failf "${check_name} (http=${code:-n/a})"
+  rm -f "${tmp}"
+}
+
+klipper_mcu_journal_clean_check() {
+  local check_name="$1"
+  local unit="klipper.service"
+  local since=""
+  local tmp=""
+  local patterns=""
+
+  if ! command -v journalctl >/dev/null 2>&1; then
+    failf "${check_name} (journalctl missing)"
+    return 0
+  fi
+
+  since="$(systemctl show -p ActiveEnterTimestamp --value "${unit}" 2>/dev/null | tr -d '\r\n')"
+  case "${since}" in
+    ""|"n/a") since="-20 min" ;;
+  esac
+
+  tmp="$(mktemp "/tmp/treed_verify_klipper_journal_XXXXXX.log")"
+  if journalctl -u "${unit}" --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
+    :
+  else
+    failf "${check_name} (cannot read journal since=${since})"
+    rm -f "${tmp}"
+    return 0
+  fi
+
+  patterns="Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|mcu[.]error|Error configuring printer|Unable to open serial port|mcu 'mcu': Unable to connect"
+  if grep -Eiq "${patterns}" "${tmp}"; then
+    failf "${check_name} (mcu errors found since=${since})"
+  else
+    pass "${check_name}"
+  fi
+
+  rm -f "${tmp}"
 }
 
 http_snapshot_check() {
@@ -161,6 +236,7 @@ TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
+MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 
 case "${TREED_MCU_TRANSPORT_RAW}" in
   usb|USB) TREED_MCU_TRANSPORT="usb" ;;
@@ -173,6 +249,8 @@ esac
 
 check_required_service_active "klipper.service"
 check_required_service_active "moonraker.service"
+moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
+klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
 
 if [ -f "${MCU_CFG_RUNTIME}" ]; then
   pass "mcu config present (${MCU_CFG_RUNTIME})"
