@@ -28,6 +28,25 @@ is_true() {
   esac
 }
 
+check_required_service_active() {
+  local unit="$1"
+  local state=""
+
+  if systemctl cat "${unit}" >/dev/null 2>&1; then
+    pass "${unit} present"
+  else
+    failf "${unit} present"
+    return 0
+  fi
+
+  if systemctl is-active --quiet "${unit}"; then
+    pass "${unit} active"
+  else
+    state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
+    failf "${unit} active (state=${state:-unknown})"
+  fi
+}
+
 http_snapshot_check() {
   local check_name="$1"
   local url="$2"
@@ -151,6 +170,9 @@ case "${TREED_MCU_TRANSPORT_RAW}" in
     TREED_MCU_TRANSPORT="uart"
     ;;
 esac
+
+check_required_service_active "klipper.service"
+check_required_service_active "moonraker.service"
 
 if [ -f "${MCU_CFG_RUNTIME}" ]; then
   pass "mcu config present (${MCU_CFG_RUNTIME})"

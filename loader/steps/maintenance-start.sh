@@ -41,13 +41,21 @@ wait_service_active() {
 start_required_service() {
   local unit="$1"
   local rc=0
+  local err=""
 
   if ! systemctl cat "${unit}" >/dev/null 2>&1; then
-    log_warn "maintenance-start: ${unit} not found, skipping"
-    return 0
+    log_error "maintenance-start: required ${unit} not found"
+    return 1
   fi
 
-  systemctl start "${unit}"
+  if err="$(systemctl start "${unit}" 2>&1)"; then
+    :
+  else
+    rc=$?
+    log_error "maintenance-start: failed to start required ${unit} rc=${rc}: ${err}"
+    systemctl --no-pager -l status "${unit}" || true
+    return 1
+  fi
 
   if wait_service_active "${unit}" "${REQUIRED_START_TIMEOUT}"; then
     log_info "maintenance-start: ${unit} active"
