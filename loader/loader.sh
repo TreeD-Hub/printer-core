@@ -91,6 +91,23 @@ STEPS=(
   "verify"
 )
 
+OPTIONAL_STEPS=(
+  "crowsnest-webcam"
+  "klipperscreen-install"
+  "klipperscreen-integr"
+)
+
+is_optional_step() {
+  local step_name="$1"
+  local opt=""
+  for opt in "${OPTIONAL_STEPS[@]}"; do
+    if [ "${opt}" = "${step_name}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, CMDLINE_FILE=${CMDLINE_FILE}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
@@ -105,7 +122,12 @@ for step in "${STEPS[@]}"; do
     log_info "Running step: ${step}"
     bash "$script"
   else
-    log_warn "Step script not found: ${script} (skipping)"
+    if is_optional_step "${step}"; then
+      log_warn "Optional step script not found: ${script} (skipping)"
+    else
+      log_error "Required step script not found: ${script}"
+      exit 1
+    fi
   fi
 done
 
