@@ -82,6 +82,7 @@ KlipperScreen:
 - `TREED_KLIPPERSCREEN_REPO` - URL репозитория KlipperScreen для установки.
 - `TREED_KLIPPERSCREEN_REF` - pinned ref/commit для воспроизводимой установки.
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` - timeout ожидания старта сервиса.
+- `TREED_KLIPPERSCREEN_REQUIRED=1` - делать проверки KlipperScreen в `verify` обязательными (по умолчанию `0`, best-effort).
 
 Time/NTP:
 
@@ -101,6 +102,7 @@ Plymouth/systemd/verify:
 
 - `crowsnest-webcam.sh` по умолчанию best-effort, fail-fast включается через `TREED_CAMERA_REQUIRED=1`.
 - `klipperscreen-install.sh` и `klipperscreen-integr.sh` fail-fast, если сервис KlipperScreen не поднимается в заданный timeout.
+- `verify.sh` по умолчанию проверяет KlipperScreen в best-effort режиме; strict-режим включается через `TREED_KLIPPERSCREEN_REQUIRED=1`.
 - `verify.sh` можно запускать standalone: `REPO_DIR` вычисляется автоматически, если не передан.
 
 Пример ручного запуска `verify`:

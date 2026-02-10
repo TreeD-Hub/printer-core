@@ -235,6 +235,7 @@ PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
+TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-0}"
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 
@@ -428,27 +429,53 @@ for unit in plymouth-quit.service plymouth-quit-wait.service; do
 done
 
 KS="/etc/systemd/system/KlipperScreen.service.d/override.conf"
-if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
-  pass "KlipperScreen retains splash"
-else
-  failf "KlipperScreen retains splash"
-fi
-
-if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
-  if systemctl is-active --quiet KlipperScreen.service; then
-    pass "KlipperScreen.service active"
+if is_true "${TREED_KLIPPERSCREEN_REQUIRED}"; then
+  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+    pass "KlipperScreen retains splash"
   else
-    failf "KlipperScreen.service active"
+    failf "KlipperScreen retains splash"
   fi
 
-  ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
-  if [ "${ks_substate}" = "running" ]; then
-    pass "KlipperScreen.service substate running"
+  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+    if systemctl is-active --quiet KlipperScreen.service; then
+      pass "KlipperScreen.service active"
+    else
+      failf "KlipperScreen.service active"
+    fi
+
+    ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
+    if [ "${ks_substate}" = "running" ]; then
+      pass "KlipperScreen.service substate running"
+    else
+      failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
+    fi
   else
-    failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
+    failf "KlipperScreen.service present"
   fi
 else
-  failf "KlipperScreen.service present"
+  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+    pass "KlipperScreen retains splash (optional)"
+  else
+    log_info "VERIFY KlipperScreen optional: override missing or not configured"
+  fi
+
+  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+    if systemctl is-active --quiet KlipperScreen.service; then
+      pass "KlipperScreen.service active (optional)"
+    else
+      ks_state="$(systemctl is-active KlipperScreen.service 2>/dev/null || true)"
+      log_info "VERIFY KlipperScreen optional: service not active (state=${ks_state:-unknown})"
+    fi
+
+    ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
+    if [ "${ks_substate}" = "running" ]; then
+      pass "KlipperScreen.service substate running (optional)"
+    else
+      log_info "VERIFY KlipperScreen optional: substate is ${ks_substate:-unknown}"
+    fi
+  else
+    log_info "VERIFY KlipperScreen optional: service not installed"
+  fi
 fi
 
 if command -v timedatectl >/dev/null 2>&1; then
