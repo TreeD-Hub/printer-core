@@ -38,9 +38,10 @@ sudo bash loader/loader.sh
 19. `treed-cam`
 20. `klipper-mainsail-theme`
 21. `klipperscreen-install`
-22. `klipperscreen-integr`
-23. `maintenance-start`
-24. `verify`
+22. `klipperscreen-theme`
+23. `klipperscreen-integr`
+24. `maintenance-start`
+25. `verify`
 
 ## Контракт окружения
 
@@ -53,6 +54,8 @@ sudo bash loader/loader.sh
 - `TREED_MCU_UART_DEV` - путь UART-устройства (по умолчанию `/dev/serial0`).
 - `TREED_UART_DISABLE_BT` - отключение BT UART (`1` -> `dtoverlay=disable-bt`, default для `uart`; `0` - оставить BT включенным).
   Для standalone `verify` без явного значения используется auto-режим проверки BT overlay.
+- `TREED_KS_THEME` - тема KlipperScreen для записи в `KlipperScreen.conf` (по умолчанию `treed-oled`, для стока можно `material-dark`, `keep` - не менять текущую тему).
+- `TREED_KLIPPERSCREEN_HOME` - путь до каталога установки KlipperScreen (по умолчанию `${PI_HOME}/KlipperScreen`).
 
 Дополнительно:
 

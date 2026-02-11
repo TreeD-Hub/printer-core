@@ -28,6 +28,23 @@ is_true() {
   esac
 }
 
+read_klipperscreen_main_theme() {
+  local cfg="$1"
+  awk '
+    BEGIN { in_main = 0 }
+    /^[[:space:]]*\[main\][[:space:]]*$/ { in_main = 1; next }
+    in_main && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_main = 0 }
+    in_main && /^[[:space:]]*theme[[:space:]]*[:=]/ {
+      line = $0
+      sub(/^[[:space:]]*theme[[:space:]]*[:=][[:space:]]*/, "", line)
+      sub(/[[:space:]]*(#|;).*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      print line
+      exit
+    }
+  ' "${cfg}"
+}
+
 check_required_service_active() {
   local unit="$1"
   local state=""
@@ -236,8 +253,14 @@ TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
 TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-0}"
+TREED_KS_THEME_EXPECTED="${TREED_KS_THEME:-treed-oled}"
+TREED_KLIPPERSCREEN_HOME="${TREED_KLIPPERSCREEN_HOME:-${PI_HOME}/KlipperScreen}"
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
+KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
+KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
+KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
+KS_SERVICE_PRESENT=0
 
 case "${TREED_MCU_TRANSPORT_RAW}" in
   usb|USB) TREED_MCU_TRANSPORT="usb" ;;
@@ -428,15 +451,18 @@ for unit in plymouth-quit.service plymouth-quit-wait.service; do
   fi
 done
 
-KS="/etc/systemd/system/KlipperScreen.service.d/override.conf"
+if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  KS_SERVICE_PRESENT=1
+fi
+
 if is_true "${TREED_KLIPPERSCREEN_REQUIRED}"; then
-  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+  if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
     pass "KlipperScreen retains splash"
   else
     failf "KlipperScreen retains splash"
   fi
 
-  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
     if systemctl is-active --quiet KlipperScreen.service; then
       pass "KlipperScreen.service active"
     else
@@ -453,13 +479,13 @@ if is_true "${TREED_KLIPPERSCREEN_REQUIRED}"; then
     failf "KlipperScreen.service present"
   fi
 else
-  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+  if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
     pass "KlipperScreen retains splash (optional)"
   else
     log_info "VERIFY KlipperScreen optional: override missing or not configured"
   fi
 
-  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
     if systemctl is-active --quiet KlipperScreen.service; then
       pass "KlipperScreen.service active (optional)"
     else
@@ -476,6 +502,31 @@ else
   else
     log_info "VERIFY KlipperScreen optional: service not installed"
   fi
+fi
+
+if [ "${TREED_KS_THEME_EXPECTED}" = "keep" ]; then
+  log_info "VERIFY KlipperScreen theme check skipped (TREED_KS_THEME=keep)"
+elif [ "${KS_SERVICE_PRESENT}" = "1" ]; then
+  if [ -f "${KS_CONFIG_FILE}" ]; then
+    ks_theme_actual="$(read_klipperscreen_main_theme "${KS_CONFIG_FILE}" | tr -d '\r\n' || true)"
+    if [ "${ks_theme_actual}" = "${TREED_KS_THEME_EXPECTED}" ]; then
+      pass "KlipperScreen configured theme (${TREED_KS_THEME_EXPECTED})"
+    else
+      failf "KlipperScreen configured theme (${TREED_KS_THEME_EXPECTED}, current=${ks_theme_actual:-missing})"
+    fi
+  else
+    failf "KlipperScreen config present (${KS_CONFIG_FILE})"
+  fi
+
+  if [ "${TREED_KS_THEME_EXPECTED}" = "treed-oled" ]; then
+    if [ -f "${KS_THEME_RUNTIME_STYLE}" ]; then
+      pass "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
+    else
+      failf "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
+    fi
+  fi
+else
+  log_info "VERIFY KlipperScreen theme check skipped (service not installed)"
 fi
 
 if command -v timedatectl >/dev/null 2>&1; then

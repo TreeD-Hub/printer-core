@@ -43,6 +43,7 @@ UI:
 
 - `klipper-mainsail-theme.sh`
 - `klipperscreen-install.sh`
+- `klipperscreen-theme.sh`
 - `klipperscreen-integr.sh`
 
 Финальная верификация:
@@ -82,6 +83,8 @@ KlipperScreen:
 - `TREED_KLIPPERSCREEN_REPO` - URL репозитория KlipperScreen для установки.
 - `TREED_KLIPPERSCREEN_REF` - pinned ref/commit для воспроизводимой установки.
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` - timeout ожидания старта сервиса.
+- `TREED_KLIPPERSCREEN_HOME` - путь до каталога установки KlipperScreen (по умолчанию `${PI_HOME}/KlipperScreen`).
+- `TREED_KS_THEME` - тема KlipperScreen для записи в `KlipperScreen.conf` (`treed-oled` по умолчанию; `material-dark` для стока; `keep` - не менять текущую тему).
 - `TREED_KLIPPERSCREEN_REQUIRED=1` - делать проверки KlipperScreen в `verify` обязательными (по умолчанию `0`, best-effort).
 
 Time/NTP:
@@ -102,7 +105,9 @@ Plymouth/systemd/verify:
 
 - `crowsnest-webcam.sh` по умолчанию best-effort, fail-fast включается через `TREED_CAMERA_REQUIRED=1`.
 - `klipperscreen-install.sh` и `klipperscreen-integr.sh` fail-fast, если сервис KlipperScreen не поднимается в заданный timeout.
+- `klipperscreen-theme.sh` по умолчанию best-effort: при отсутствии `styles/` деплой файлов темы пропускается, но переключение `TREED_KS_THEME` в `KlipperScreen.conf` выполняется; при выборе `treed-oled` без `style.css` шаг завершается ошибкой.
 - `verify.sh` по умолчанию проверяет KlipperScreen в best-effort режиме; strict-режим включается через `TREED_KLIPPERSCREEN_REQUIRED=1`.
+- `verify.sh` дополнительно проверяет целевую тему KlipperScreen (кроме `TREED_KS_THEME=keep`), а для `treed-oled` — наличие runtime-файла `style.css`.
 - `verify.sh` можно запускать standalone: `REPO_DIR` вычисляется автоматически, если не передан.
 
 Пример ручного запуска `verify`:

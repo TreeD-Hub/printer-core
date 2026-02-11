@@ -1,0 +1,92 @@
+/* TreeD OLED theme for KlipperScreen (GTK3 CSS) */
+
+* {
+  color: #e4e4e4;
+  font-weight: 500;
+}
+
+window,
+dialog,
+.dialog,
+box,
+stack,
+scrolledwindow,
+viewport {
+  background-color: #000000;
+  color: #e4e4e4;
+}
+
+label,
+.label,
+.title,
+.subtitle {
+  color: #e4e4e4;
+}
+
+button {
+  background-image: none;
+  background-color: rgba(110, 110, 110, 0.48);
+  border: 1px solid rgba(145, 99, 255, 0.45);
+  border-radius: 8px;
+  box-shadow: none;
+  color: #f3f3f3;
+  min-height: 42px;
+}
+
+button:hover {
+  background-color: rgba(130, 130, 130, 0.58);
+  border-color: rgba(145, 99, 255, 0.75);
+}
+
+button:active,
+button:checked,
+button.toggle:checked,
+.button_active {
+  background-color: rgba(145, 99, 255, 0.36);
+  border-color: rgba(145, 99, 255, 0.95);
+  color: #ffffff;
+}
+
+button:disabled {
+  background-color: rgba(90, 90, 90, 0.28);
+  border-color: rgba(120, 120, 120, 0.4);
+  color: #8e8e8e;
+}
+
+button.warning {
+  border-color: rgba(216, 174, 71, 0.95);
+  color: #d8ae47;
+}
+
+entry,
+spinbutton,
+combobox,
+combobox box {
+  background-color: rgba(80, 80, 80, 0.38);
+  border: 1px solid rgba(145, 99, 255, 0.45);
+  border-radius: 8px;
+  color: #e4e4e4;
+}
+
+progressbar,
+progressbar trough {
+  border-radius: 6px;
+  background-color: rgba(70, 70, 70, 0.45);
+}
+
+progressbar progress {
+  background-color: #9163ff;
+}
+
+switch slider {
+  background-color: rgba(110, 110, 110, 0.62);
+  border: 1px solid rgba(145, 99, 255, 0.45);
+}
+
+switch:checked slider {
+  background-color: rgba(145, 99, 255, 0.74);
+}
+
+separator {
+  background-color: rgba(145, 99, 255, 0.3);
+}

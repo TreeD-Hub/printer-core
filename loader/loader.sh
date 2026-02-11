@@ -86,6 +86,7 @@ STEPS=(
   "treed-cam"
   "klipper-mainsail-theme"
   "klipperscreen-install"
+  "klipperscreen-theme"
   "klipperscreen-integr"
   "maintenance-start"  # bring core services back before final verification
   "verify"
@@ -94,6 +95,7 @@ STEPS=(
 OPTIONAL_STEPS=(
   "crowsnest-webcam"
   "klipperscreen-install"
+  "klipperscreen-theme"
   "klipperscreen-integr"
 )
 

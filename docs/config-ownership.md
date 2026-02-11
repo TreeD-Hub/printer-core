@@ -30,9 +30,10 @@ Entrypoint:
 19. `treed-cam`
 20. `klipper-mainsail-theme`
 21. `klipperscreen-install`
-22. `klipperscreen-integr`
-23. `maintenance-start`
-24. `verify`
+22. `klipperscreen-theme`
+23. `klipperscreen-integr`
+24. `maintenance-start`
+25. `verify`
 
 ## 2. Слои и source of truth
 
@@ -41,6 +42,7 @@ Repo (источник правды):
 - `moonraker/*`
 - `runtime-scripts/*`
 - `mainsail/.theme/*`
+- `klipperscreen/themes/*`
 
 Staging:
 - `/home/pi/treed/klipper` (результат шага `klipper-sync`)
@@ -48,6 +50,7 @@ Staging:
 Runtime:
 - `/home/pi/printer_data/config` (раскладка шага `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка шага `treed-cam`)
+- `/home/pi/KlipperScreen/styles/treed-oled` (раскладка шага `klipperscreen-theme`)
 
 ## 3. Ownership map (runtime)
 
@@ -67,6 +70,11 @@ Runtime-скрипты камеры:
 - source: `runtime-scripts/treed-cam/*`
 - deploy: `/home/pi/treed/cam/bin/*`
 - владелец: `loader/steps/treed-cam.sh`
+
+Тема KlipperScreen:
+- source: `klipperscreen/themes/treed-oled/*`
+- deploy: `/home/pi/KlipperScreen/styles/treed-oled/*`
+- владелец: `loader/steps/klipperscreen-theme.sh`
 
 ## 4. Локальные override-файлы
 
