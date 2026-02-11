@@ -16,7 +16,7 @@ sudo reboot
 ```bash
 set -euo pipefail
 REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
-INSTALL_REF="${INSTALL_REF:-dev}"
+INSTALL_REF="${INSTALL_REF:-main}"
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
 TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT:-uart}"  # uart|usb
