@@ -28,6 +28,100 @@ is_true() {
   esac
 }
 
+check_required_service_active() {
+  local unit="$1"
+  local state=""
+  local substate=""
+
+  if systemctl cat "${unit}" >/dev/null 2>&1; then
+    pass "${unit} present"
+  else
+    failf "${unit} present"
+    return 0
+  fi
+
+  if systemctl is-active --quiet "${unit}"; then
+    pass "${unit} active"
+  else
+    state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
+    failf "${unit} active (state=${state:-unknown})"
+    return 0
+  fi
+
+  substate="$(systemctl show -p SubState --value "${unit}" 2>/dev/null | tr -d '\r\n')"
+  if [ "${substate}" = "running" ]; then
+    pass "${unit} substate running"
+  else
+    failf "${unit} substate running (state=${substate:-unknown})"
+  fi
+}
+
+moonraker_ready_check() {
+  local check_name="$1"
+  local url="$2"
+  local tmp code retries attempt
+
+  if ! command -v curl >/dev/null 2>&1; then
+    failf "${check_name} (curl missing)"
+    return 0
+  fi
+
+  tmp="$(mktemp "/tmp/treed_verify_server_info_XXXXXX.json")"
+  retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
+  code=""
+
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
+    if [ "${code}" = "200" ] \
+      && grep -qE '"klippy_connected"[[:space:]]*:[[:space:]]*true' "${tmp}" \
+      && grep -qE '"klippy_state"[[:space:]]*:[[:space:]]*"ready"' "${tmp}"; then
+      pass "${check_name}"
+      rm -f "${tmp}"
+      return 0
+    fi
+    sleep 1
+  done
+
+  failf "${check_name} (http=${code:-n/a})"
+  rm -f "${tmp}"
+}
+
+klipper_mcu_journal_clean_check() {
+  local check_name="$1"
+  local unit="klipper.service"
+  local since=""
+  local tmp=""
+  local patterns=""
+
+  if ! command -v journalctl >/dev/null 2>&1; then
+    failf "${check_name} (journalctl missing)"
+    return 0
+  fi
+
+  since="$(systemctl show -p ActiveEnterTimestamp --value "${unit}" 2>/dev/null | tr -d '\r\n')"
+  case "${since}" in
+    ""|"n/a") since="-20 min" ;;
+  esac
+
+  tmp="$(mktemp "/tmp/treed_verify_klipper_journal_XXXXXX.log")"
+  if journalctl -u "${unit}" --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
+    :
+  else
+    failf "${check_name} (cannot read journal since=${since})"
+    rm -f "${tmp}"
+    return 0
+  fi
+
+  patterns="Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|mcu[.]error|Error configuring printer|Unable to open serial port|mcu 'mcu': Unable to connect"
+  if grep -Eiq "${patterns}" "${tmp}"; then
+    failf "${check_name} (mcu errors found since=${since})"
+  else
+    pass "${check_name}"
+  fi
+
+  rm -f "${tmp}"
+}
+
 http_snapshot_check() {
   local check_name="$1"
   local url="$2"
@@ -136,6 +230,148 @@ else
   failf "cmdline file missing (${CMDLINE_PATH})"
 fi
 
+PI_USER="${PI_USER:-pi}"
+PI_HOME="${PI_HOME:-/home/${PI_USER}}"
+TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
+TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
+TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
+TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-0}"
+MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
+MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
+
+case "${TREED_MCU_TRANSPORT_RAW}" in
+  usb|USB) TREED_MCU_TRANSPORT="usb" ;;
+  uart|UART) TREED_MCU_TRANSPORT="uart" ;;
+  *)
+    failf "TREED_MCU_TRANSPORT is valid (value=${TREED_MCU_TRANSPORT_RAW})"
+    TREED_MCU_TRANSPORT="uart"
+    ;;
+esac
+
+check_required_service_active "klipper.service"
+check_required_service_active "moonraker.service"
+moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
+klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
+
+if [ -f "${MCU_CFG_RUNTIME}" ]; then
+  pass "mcu config present (${MCU_CFG_RUNTIME})"
+  runtime_mcu_serial="$(
+    sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\1|p' "${MCU_CFG_RUNTIME}" \
+      | head -n 1 || true
+  )"
+  if [ -n "${runtime_mcu_serial}" ]; then
+    pass "mcu serial line present (${runtime_mcu_serial})"
+  else
+    failf "mcu serial line present (${MCU_CFG_RUNTIME})"
+  fi
+else
+  failf "mcu config present (${MCU_CFG_RUNTIME})"
+  runtime_mcu_serial=""
+fi
+
+if [ "${TREED_MCU_TRANSPORT}" = "usb" ]; then
+  if printf '%s' "${runtime_mcu_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
+    pass "mcu transport usb serial path format"
+  else
+    failf "mcu transport usb serial path format"
+  fi
+
+  if [ -n "${runtime_mcu_serial}" ] && [ -e "${runtime_mcu_serial}" ] && [ -r "${runtime_mcu_serial}" ]; then
+    pass "mcu usb serial path exists (${runtime_mcu_serial})"
+  else
+    failf "mcu usb serial path exists (${runtime_mcu_serial:-missing})"
+  fi
+fi
+
+if [ "${TREED_MCU_TRANSPORT}" = "uart" ]; then
+  if [ "${runtime_mcu_serial}" = "${TREED_MCU_UART_DEV}" ]; then
+    pass "mcu transport uart serial target (${TREED_MCU_UART_DEV})"
+  else
+    failf "mcu transport uart serial target (${TREED_MCU_UART_DEV}, current=${runtime_mcu_serial:-missing})"
+  fi
+
+  if [ -e "${TREED_MCU_UART_DEV}" ] || [ -L "${TREED_MCU_UART_DEV}" ]; then
+    pass "mcu uart device path exists (${TREED_MCU_UART_DEV})"
+  else
+    failf "mcu uart device path exists (${TREED_MCU_UART_DEV})"
+  fi
+
+  for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do
+    if out="$(systemctl is-enabled "${unit}" 2>&1)"; then
+      st=0
+    else
+      st=$?
+    fi
+    state="$(printf '%s' "${out}" | head -n 1 | tr -d '\r\n')"
+    case "${state}" in
+      enabled|disabled|static|indirect|generated|masked|masked-runtime|linked|linked-runtime|alias) ;;
+      *)
+        log_error "verify: systemctl is-enabled ${unit} failed rc=${st}: ${out}"
+        exit 1
+        ;;
+    esac
+
+    if [ "${state}" = "masked" ] || [ "${state}" = "masked-runtime" ]; then
+      pass "${unit} masked for uart transport (state=${state})"
+    else
+      failf "${unit} masked for uart transport (state=${state})"
+    fi
+  done
+
+  if [ "$(id -u)" -eq 0 ]; then
+    if sudo -u "${PI_USER}" test -r "${TREED_MCU_UART_DEV}" \
+      && sudo -u "${PI_USER}" test -w "${TREED_MCU_UART_DEV}"; then
+      pass "mcu uart device readable/writable by ${PI_USER} (${TREED_MCU_UART_DEV})"
+    else
+      failf "mcu uart device readable/writable by ${PI_USER} (${TREED_MCU_UART_DEV})"
+    fi
+  else
+    log_info "VERIFY uart rw-check skipped (script not running as root)"
+  fi
+
+  UART_RULE_FILE="/etc/udev/rules.d/99-treed-uart-perms.rules"
+  if [ -f "${UART_RULE_FILE}" ] \
+    && grep -qE '^[[:space:]]*KERNEL=="ttyAMA0",[[:space:]]*MODE="0660",[[:space:]]*GROUP="dialout"[[:space:]]*$' "${UART_RULE_FILE}" \
+    && grep -qE '^[[:space:]]*KERNEL=="ttyS0",[[:space:]]*MODE="0660",[[:space:]]*GROUP="dialout"[[:space:]]*$' "${UART_RULE_FILE}"; then
+    pass "uart udev permissions rule present (${UART_RULE_FILE})"
+  else
+    failf "uart udev permissions rule present (${UART_RULE_FILE})"
+  fi
+
+  enable_uart_val="$(
+    sed -nE 's|^[[:space:]]*enable_uart[[:space:]]*=[[:space:]]*([0-9]+).*|\1|p' "${CONFIG_FILE}" \
+      | tail -n 1 || true
+  )"
+  if [ "${enable_uart_val}" = "1" ]; then
+    pass "config.txt enable_uart=1"
+  else
+    failf "config.txt enable_uart=1"
+  fi
+
+  if is_true "${TREED_UART_DISABLE_BT}"; then
+    if grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*disable-bt([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
+      pass "config.txt dtoverlay=disable-bt for uart transport"
+    else
+      failf "config.txt dtoverlay=disable-bt for uart transport"
+    fi
+  elif [ "${TREED_UART_DISABLE_BT}" = "0" ] || [ "${TREED_UART_DISABLE_BT}" = "false" ] || [ "${TREED_UART_DISABLE_BT}" = "FALSE" ] || [ "${TREED_UART_DISABLE_BT}" = "no" ] || [ "${TREED_UART_DISABLE_BT}" = "NO" ]; then
+    log_info "VERIFY bluetooth UART check skipped (TREED_UART_DISABLE_BT=${TREED_UART_DISABLE_BT})"
+  else
+    if grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*disable-bt([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
+      pass "config.txt dtoverlay=disable-bt for uart transport (auto)"
+    else
+      log_info "VERIFY bluetooth UART check auto: dtoverlay=disable-bt not found"
+    fi
+  fi
+
+  if [ -n "${CMDLINE_CONTENT}" ] \
+    && printf '%s\n' "${CMDLINE_CONTENT}" | grep -qE '(^| )console=(serial0|ttyAMA0|ttyS0),[^ ]+'; then
+    failf "cmdline has no serial console tokens for uart transport"
+  else
+    pass "cmdline has no serial console tokens for uart transport"
+  fi
+fi
+
 TREED_MASK_TTY1="${TREED_MASK_TTY1:-1}"
 if out="$(systemctl is-enabled getty@tty1.service 2>&1)"; then
   rc=0
@@ -193,27 +429,53 @@ for unit in plymouth-quit.service plymouth-quit-wait.service; do
 done
 
 KS="/etc/systemd/system/KlipperScreen.service.d/override.conf"
-if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
-  pass "KlipperScreen retains splash"
-else
-  failf "KlipperScreen retains splash"
-fi
-
-if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
-  if systemctl is-active --quiet KlipperScreen.service; then
-    pass "KlipperScreen.service active"
+if is_true "${TREED_KLIPPERSCREEN_REQUIRED}"; then
+  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+    pass "KlipperScreen retains splash"
   else
-    failf "KlipperScreen.service active"
+    failf "KlipperScreen retains splash"
   fi
 
-  ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
-  if [ "${ks_substate}" = "running" ]; then
-    pass "KlipperScreen.service substate running"
+  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+    if systemctl is-active --quiet KlipperScreen.service; then
+      pass "KlipperScreen.service active"
+    else
+      failf "KlipperScreen.service active"
+    fi
+
+    ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
+    if [ "${ks_substate}" = "running" ]; then
+      pass "KlipperScreen.service substate running"
+    else
+      failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
+    fi
   else
-    failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
+    failf "KlipperScreen.service present"
   fi
 else
-  failf "KlipperScreen.service present"
+  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+    pass "KlipperScreen retains splash (optional)"
+  else
+    log_info "VERIFY KlipperScreen optional: override missing or not configured"
+  fi
+
+  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+    if systemctl is-active --quiet KlipperScreen.service; then
+      pass "KlipperScreen.service active (optional)"
+    else
+      ks_state="$(systemctl is-active KlipperScreen.service 2>/dev/null || true)"
+      log_info "VERIFY KlipperScreen optional: service not active (state=${ks_state:-unknown})"
+    fi
+
+    ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
+    if [ "${ks_substate}" = "running" ]; then
+      pass "KlipperScreen.service substate running (optional)"
+    else
+      log_info "VERIFY KlipperScreen optional: substate is ${ks_substate:-unknown}"
+    fi
+  else
+    log_info "VERIFY KlipperScreen optional: service not installed"
+  fi
 fi
 
 if command -v timedatectl >/dev/null 2>&1; then
@@ -255,8 +517,6 @@ else
   failf "gpu_mem >= 96"
 fi
 
-PI_USER="${PI_USER:-pi}"
-PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
 CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
 MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"

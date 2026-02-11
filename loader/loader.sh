@@ -71,6 +71,7 @@ STEPS=(
   "maintenance-stop"   # controlled stop of runtime services before provisioning
   "packages-core"
   "boot-hdmi-config"
+  "rpi-uart-config"     # optional UART transport prep (enable_uart/serial-getty)
   "plymouth-theme-install"
   "plymouth-initramfs"
   "plymouth-initramfs-config"
@@ -90,6 +91,32 @@ STEPS=(
   "verify"
 )
 
+OPTIONAL_STEPS=(
+  "crowsnest-webcam"
+  "klipperscreen-install"
+  "klipperscreen-integr"
+)
+
+is_optional_step() {
+  local step_name="$1"
+  local opt=""
+  for opt in "${OPTIONAL_STEPS[@]}"; do
+    if [ "${opt}" = "${step_name}" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+run_step_script() {
+  local script_path="$1"
+  if [ -x "${script_path}" ]; then
+    "${script_path}"
+  else
+    bash "${script_path}"
+  fi
+}
+
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, CMDLINE_FILE=${CMDLINE_FILE}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
@@ -97,14 +124,26 @@ log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"
   script="${REPO_DIR}/loader/steps/${step}.sh"
-  if [ -x "$script" ]; then
-    log_info "Running step: ${step}"
-    "$script"
-  elif [ -f "$script" ]; then
-    log_info "Running step: ${step}"
-    bash "$script"
+  if [ ! -f "${script}" ]; then
+    if is_optional_step "${step}"; then
+      log_warn "Optional step script not found: ${script} (skipping)"
+      continue
+    fi
+    log_error "Required step script not found: ${script}"
+    exit 1
+  fi
+
+  if is_optional_step "${step}"; then
+    log_info "Running optional step: ${step}"
+    if run_step_script "${script}"; then
+      :
+    else
+      rc=$?
+      log_warn "Optional step failed: ${step} rc=${rc} (continuing)"
+    fi
   else
-    log_warn "Step script not found: ${script} (skipping)"
+    log_info "Running step: ${step}"
+    run_step_script "${script}"
   fi
 done
 

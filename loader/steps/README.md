@@ -19,6 +19,7 @@
 
 - `packages-core.sh`
 - `boot-hdmi-config.sh`
+- `rpi-uart-config.sh`
 - `plymouth-theme-install.sh`
 - `plymouth-initramfs.sh`
 - `plymouth-initramfs-config.sh`
@@ -60,6 +61,10 @@ UI:
 
 Klipper:
 
+- `TREED_MCU_TRANSPORT` - режим связи с MCU (`usb` или `uart`).
+- `TREED_MCU_UART_DEV` - UART-устройство для MCU (по умолчанию `/dev/serial0`).
+- `TREED_UART_DISABLE_BT` - добавить `dtoverlay=disable-bt` в `config.txt` для UART-контура (default для `uart`: `1`, установите `0`, если BT нужно сохранить).
+  В `verify` без явного значения используется auto-режим проверки (не падает, если BT оставлен включенным).
 - `MCU_SERIAL_BY_ID` - явная привязка MCU serial (`/dev/serial/by-id/*`).
 - `KLIPPER_SERVICE` - имя systemd-сервиса для шага `klipper-anti-shutdown` (по умолчанию `klipper`).
 
@@ -67,6 +72,8 @@ Klipper:
 
 - `CAM_DEVICE` - принудительно указать устройство камеры.
 - `CAM_ALLOW_VIDEO0_FALLBACK=1` - разрешить fallback на `/dev/video0`.
+- `TREED_CAM_RESOLUTION` - постоянное разрешение стрима crowsnest (по умолчанию `800x600`).
+- `TREED_CAM_FPS` - постоянный FPS стрима crowsnest (по умолчанию `10`).
 - `MOONRAKER_READY_RETRIES` - количество попыток ожидания API Moonraker после рестарта.
 
 KlipperScreen:
@@ -75,6 +82,7 @@ KlipperScreen:
 - `TREED_KLIPPERSCREEN_REPO` - URL репозитория KlipperScreen для установки.
 - `TREED_KLIPPERSCREEN_REF` - pinned ref/commit для воспроизводимой установки.
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` - timeout ожидания старта сервиса.
+- `TREED_KLIPPERSCREEN_REQUIRED=1` - делать проверки KlipperScreen в `verify` обязательными (по умолчанию `0`, best-effort).
 
 Time/NTP:
 
@@ -92,9 +100,10 @@ Plymouth/systemd/verify:
 
 ## Важные замечания по поведению
 
-- `crowsnest-webcam.sh` fail-fast при неоднозначной/неразрешимой камере, если не задан `CAM_DEVICE` и не включен fallback.
+- `crowsnest-webcam.sh` по умолчанию best-effort, fail-fast включается через `TREED_CAMERA_REQUIRED=1`.
 - `klipperscreen-install.sh` и `klipperscreen-integr.sh` fail-fast, если сервис KlipperScreen не поднимается в заданный timeout.
-- `verify.sh` рассчитан на запуск из loader. Для ручного запуска требуется передать `REPO_DIR`.
+- `verify.sh` по умолчанию проверяет KlipperScreen в best-effort режиме; strict-режим включается через `TREED_KLIPPERSCREEN_REQUIRED=1`.
+- `verify.sh` можно запускать standalone: `REPO_DIR` вычисляется автоматически, если не передан.
 
 Пример ручного запуска `verify`:
 
@@ -102,3 +111,12 @@ Plymouth/systemd/verify:
 cd /home/pi/treed/treed-mainshellOS
 sudo REPO_DIR="$(pwd)" bash loader/steps/verify.sh
 ```
+
+## UART-контур (дополнительно)
+
+В режиме `TREED_MCU_TRANSPORT=uart` шаг `rpi-uart-config.sh` дополнительно делает две вещи для стабильного старта Klipper:
+
+- маскирует `serial-getty@ttyAMA0.service` и `serial-getty@ttyS0.service`, чтобы исключить захват UART-консолью;
+- разворачивает udev-правило `/etc/udev/rules.d/99-treed-uart-perms.rules` с правами `0660` и группой `dialout` для `/dev/ttyAMA0` и `/dev/ttyS0`, а также применяет эти права сразу в рантайме.
+
+Это убирает сценарий, когда Klipper получает `Permission denied` на `/dev/serial0` после чистого деплоя.

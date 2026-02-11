@@ -8,8 +8,19 @@ PROFILES_DIR="${KLIPPER_DIR}/profiles"
 PROFILE_NAME="rn12_hbot_v1"
 PROFILE_DIR="${PROFILES_DIR}/${PROFILE_NAME}"
 MCU_CFG="${PROFILE_DIR}/mcu_rn12.cfg"
+MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
+MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 
-log_info "Step klipper-profiles: fixed profile ${PROFILE_NAME}, update MCU serial"
+case "${MCU_TRANSPORT_RAW}" in
+  usb|USB) MCU_TRANSPORT="usb" ;;
+  uart|UART) MCU_TRANSPORT="uart" ;;
+  *)
+    log_error "klipper-profiles: unsupported TREED_MCU_TRANSPORT='${MCU_TRANSPORT_RAW}' (expected: usb|uart)"
+    exit 1
+    ;;
+esac
+
+log_info "Step klipper-profiles: fixed profile ${PROFILE_NAME}, apply MCU transport=${MCU_TRANSPORT}"
 
 if [ ! -d "${KLIPPER_DIR}" ] || [ ! -f "${KLIPPER_DIR}/printer.cfg" ] || [ ! -d "${PROFILES_DIR}" ]; then
   log_error "klipper-profiles: staging missing or incomplete: ${KLIPPER_DIR}"
@@ -26,26 +37,48 @@ fi
 current_serial="$(sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\\1|p' "${MCU_CFG}" | head -n 1 || true)"
 SERIAL_PATH=""
 
-if [ -n "${MCU_SERIAL_BY_ID:-}" ]; then
-  if [ ! -e "${MCU_SERIAL_BY_ID}" ] || [ ! -r "${MCU_SERIAL_BY_ID}" ]; then
-    log_error "klipper-profiles: MCU_SERIAL_BY_ID set but invalid/unreadable: ${MCU_SERIAL_BY_ID}"
+if [ "${MCU_TRANSPORT}" = "uart" ]; then
+  if [ -n "${MCU_SERIAL_BY_ID:-}" ]; then
+    log_error "klipper-profiles: MCU_SERIAL_BY_ID cannot be used when TREED_MCU_TRANSPORT=uart"
     exit 1
   fi
-  case "${MCU_SERIAL_BY_ID}" in
-    /dev/serial/by-id/*) ;;
+
+  case "${MCU_UART_DEV}" in
+    /dev/*) ;;
     *)
-      log_error "klipper-profiles: MCU_SERIAL_BY_ID must be a /dev/serial/by-id/* path, got: ${MCU_SERIAL_BY_ID}"
+      log_error "klipper-profiles: TREED_MCU_UART_DEV must be an absolute /dev/* path, got: ${MCU_UART_DEV}"
       exit 1
       ;;
   esac
-  SERIAL_PATH="${MCU_SERIAL_BY_ID}"
-elif [ -n "${current_serial}" ] && [ -e "${current_serial}" ] && [ -r "${current_serial}" ]; then
-  case "${current_serial}" in
-    /dev/serial/by-id/*) SERIAL_PATH="${current_serial}" ;;
-  esac
+
+  if [ ! -e "${MCU_UART_DEV}" ] || [ ! -r "${MCU_UART_DEV}" ]; then
+    log_error "klipper-profiles: UART device is missing/unreadable: ${MCU_UART_DEV}"
+    exit 1
+  fi
+
+  SERIAL_PATH="${MCU_UART_DEV}"
+else
+  if [ -n "${MCU_SERIAL_BY_ID:-}" ]; then
+    if [ ! -e "${MCU_SERIAL_BY_ID}" ] || [ ! -r "${MCU_SERIAL_BY_ID}" ]; then
+      log_error "klipper-profiles: MCU_SERIAL_BY_ID set but invalid/unreadable: ${MCU_SERIAL_BY_ID}"
+      exit 1
+    fi
+    case "${MCU_SERIAL_BY_ID}" in
+      /dev/serial/by-id/*) ;;
+      *)
+        log_error "klipper-profiles: MCU_SERIAL_BY_ID must be a /dev/serial/by-id/* path, got: ${MCU_SERIAL_BY_ID}"
+        exit 1
+        ;;
+    esac
+    SERIAL_PATH="${MCU_SERIAL_BY_ID}"
+  elif [ -n "${current_serial}" ] && [ -e "${current_serial}" ] && [ -r "${current_serial}" ]; then
+    case "${current_serial}" in
+      /dev/serial/by-id/*) SERIAL_PATH="${current_serial}" ;;
+    esac
+  fi
 fi
 
-if [ -z "${SERIAL_PATH}" ]; then
+if [ "${MCU_TRANSPORT}" = "usb" ] && [ -z "${SERIAL_PATH}" ]; then
   shopt -s nullglob
   by_id_paths=(/dev/serial/by-id/*)
   shopt -u nullglob
@@ -66,6 +99,11 @@ if [ -z "${SERIAL_PATH}" ]; then
       exit 1
       ;;
   esac
+fi
+
+if [ -z "${SERIAL_PATH}" ]; then
+  log_error "klipper-profiles: unable to resolve MCU serial path for transport=${MCU_TRANSPORT}"
+  exit 1
 fi
 
 if ! grep -qE '^[[:space:]]*serial:[[:space:]]*' "${MCU_CFG}"; then
