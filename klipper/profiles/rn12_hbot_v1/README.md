@@ -29,9 +29,10 @@
 4. `extruder.cfg`
 5. `bed_heater_dc.cfg`
 6. `fans.cfg`
-7. `macros.cfg`
-8. `ui.cfg`
-9. `local_overrides.cfg` (локальный runtime-файл на Pi)
+7. `beeper.cfg`
+8. `macros.cfg`
+9. `ui.cfg`
+10. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
 ## Карта файлов профиля
 
@@ -41,6 +42,7 @@
 - `extruder.cfg` — экструдер, хотэнд, PID и ограничения подачи.
 - `bed_heater_dc.cfg` — нагрев стола (DC), лимиты и verify_heater.
 - `fans.cfg` — вентиляторы.
+- `beeper.cfg` — бипер (M300/BEEP, стартовая мелодия).
 - `macros.cfg` — пользовательские макросы печати и камеры.
 - `ui.cfg` — интерфейсные блоки для Mainsail/Fluidd.
 - `filament_sensor.cfg` — опциональный шаблон датчика филамента (по умолчанию не подключен).
