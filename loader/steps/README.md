@@ -103,9 +103,9 @@ Plymouth/systemd/verify:
 
 ## Важные замечания по поведению
 
-- `crowsnest-webcam.sh` по умолчанию best-effort, fail-fast включается через `TREED_CAMERA_REQUIRED=1`.
-- `klipperscreen-install.sh` и `klipperscreen-integr.sh` fail-fast, если сервис KlipperScreen не поднимается в заданный timeout.
-- `klipperscreen-theme.sh` по умолчанию best-effort: при отсутствии `styles/` деплой файлов темы пропускается, но переключение `TREED_KS_THEME` в `KlipperScreen.conf` выполняется; при выборе `treed-oled` без `style.css` шаг завершается ошибкой.
+- `crowsnest-webcam.sh` по умолчанию best-effort (optional step). `TREED_CAMERA_REQUIRED=1` делает шаг строгим локально, но для падения всего прогона добавляйте `TREED_VERIFY_CAMERA=1`.
+- `klipperscreen-install.sh` и `klipperscreen-integr.sh` могут вернуть ошибку, но на уровне `loader.sh` остаются best-effort, так как шаги optional.
+- `klipperscreen-theme.sh` по умолчанию best-effort: при отсутствии `styles/` деплой файлов темы пропускается, но переключение `TREED_KS_THEME` в `KlipperScreen.conf` выполняется; при выборе `treed-oled` без `style.css` шаг завершится ошибкой, которую `loader.sh` обработает как warning (optional step).
 - `verify.sh` по умолчанию проверяет KlipperScreen в best-effort режиме; strict-режим включается через `TREED_KLIPPERSCREEN_REQUIRED=1`.
 - `verify.sh` дополнительно проверяет целевую тему KlipperScreen (кроме `TREED_KS_THEME=keep`), а для `treed-oled` — наличие runtime-файла `style.css`.
 - `verify.sh` можно запускать standalone: `REPO_DIR` вычисляется автоматически, если не передан.

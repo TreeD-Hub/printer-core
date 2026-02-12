@@ -37,7 +37,7 @@ sudo reboot
 ## Примечания
 
 - По умолчанию камера не является блокером установки.
-- Для fail-fast режима камеры используйте: `TREED_CAMERA_REQUIRED=1`.
+- Для строгого режима камеры используйте вместе: `TREED_CAMERA_REQUIRED=1 TREED_VERIFY_CAMERA=1`.
 - UART (рекомендуется): `sudo TREED_MCU_TRANSPORT=uart TREED_MCU_UART_DEV=/dev/serial0 TREED_UART_DISABLE_BT=1 bash loader/loader.sh`.
 - Legacy USB: `sudo TREED_MCU_TRANSPORT=usb TREED_UART_DISABLE_BT=0 bash loader/loader.sh`.
 - Полный порядок шагов и ownership: `docs/config-ownership.md`.
