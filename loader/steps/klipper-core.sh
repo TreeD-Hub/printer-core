@@ -16,6 +16,16 @@ log_info "Step klipper-core: install full Klipper tree into /home/${PI_USER}/pri
 
 STAGE_DIR="${PI_HOME}/treed/klipper"
 CONFIG_DIR="${PI_HOME}/printer_data/config"
+DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
+
+case "${DEPLOY_MODE}" in
+  clean|preserve)
+    ;;
+  *)
+    log_error "klipper-core: unsupported TREED_DEPLOY_MODE_EFFECTIVE=${DEPLOY_MODE} (allowed: clean|preserve)"
+    exit 1
+    ;;
+esac
 
 if [ ! -d "${STAGE_DIR}" ]; then
   log_error "klipper-core: stage dir not found: ${STAGE_DIR}"
@@ -32,45 +42,33 @@ if [ -z "$(find "${STAGE_DIR}/profiles" -mindepth 1 -print -quit 2>/dev/null)" ]
   exit 1
 fi
 
-# Список файлов/конфигов, которые НЕ затираем при обновлении
-PRESERVE_LIST=(
-  "local_overrides.cfg"
-  "moonraker.conf"
-  "mainsail.cfg"
-  "timelapse.cfg"
-  "crowsnest.conf"
-  "KlipperScreen.conf"
-  "sonar.conf"
-)
-
 ensure_dir "${CONFIG_DIR}"
 
-# Временный буфер для сохранения локальных конфигов
-TMP_KEEP="$(mktemp -d)"
-for f in "${PRESERVE_LIST[@]}"; do
-  if [ -e "${CONFIG_DIR}/${f}" ]; then
-    mkdir -p "${TMP_KEEP}"
-    cp -a "${CONFIG_DIR}/${f}" "${TMP_KEEP}/" || true
-  fi
-done
+TMP_KEEP=""
+if [ "${DEPLOY_MODE}" = "preserve" ] && [ -e "${CONFIG_DIR}/local_overrides.cfg" ]; then
+  TMP_KEEP="$(mktemp -d)"
+  cp -a "${CONFIG_DIR}/local_overrides.cfg" "${TMP_KEEP}/" || true
+  log_info "klipper-core: preserve mode, saving local_overrides.cfg"
+else
+  log_info "klipper-core: deploy mode ${DEPLOY_MODE}, runtime config will be rebuilt from staging"
+fi
 
-# Полная очистка runtime-слоя (без удаления самого каталога)
+# Полная очистка runtime-слоя (без удаления самого каталога).
 find "${CONFIG_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
-# Полная раскладка дерева из staging в runtime
+# Полная раскладка дерева из staging в runtime.
 cp -a "${STAGE_DIR}/." "${CONFIG_DIR}/"
 
-# Возврат локальных конфигов
-if [ -d "${TMP_KEEP}" ]; then
+# Возврат локального override только в режиме preserve.
+if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
   cp -a "${TMP_KEEP}/." "${CONFIG_DIR}/" || true
   rm -rf "${TMP_KEEP}"
 fi
 
-# Гарантируем наличие local_overrides.cfg
+# Гарантируем наличие local_overrides.cfg после деплоя.
 [ -f "${CONFIG_DIR}/local_overrides.cfg" ] || touch "${CONFIG_DIR}/local_overrides.cfg"
 
-
-# Никаких лишних каталогов в runtime
+# В runtime не должно оставаться каталога treed.
 rm -rf "${CONFIG_DIR}/treed" || true
 
 chown -R "${PI_USER}:${grp}" "${CONFIG_DIR}"

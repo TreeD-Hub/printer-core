@@ -23,8 +23,18 @@ THEME_DST="${KS_STYLES_DIR}/${TREED_THEME_NAME}"
 KS_CONFIG_DIR="${PI_HOME}/printer_data/config"
 KS_CONFIG_FILE="${KS_CONFIG_DIR}/KlipperScreen.conf"
 KS_THEME="${TREED_KS_THEME:-${TREED_THEME_NAME}}"
+DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 THEME_DEPLOYED=0
 THEME_CONFIG_UPDATED=0
+
+case "${DEPLOY_MODE}" in
+  clean|preserve)
+    ;;
+  *)
+    log_error "klipperscreen-theme: unsupported TREED_DEPLOY_MODE_EFFECTIVE=${DEPLOY_MODE} (allowed: clean|preserve)"
+    exit 1
+    ;;
+esac
 
 if [ ! -f "${THEME_SRC}/style.css" ]; then
   log_error "klipperscreen-theme: missing theme source ${THEME_SRC}/style.css"
@@ -48,7 +58,11 @@ if [ -n "${KS_THEME}" ] && [ "${KS_THEME}" != "keep" ]; then
   fi
 
   ensure_dir "${KS_CONFIG_DIR}"
-  backup_file_once "${KS_CONFIG_FILE}"
+  if [ "${DEPLOY_MODE}" = "preserve" ]; then
+    backup_file_once "${KS_CONFIG_FILE}"
+  else
+    log_info "klipperscreen-theme: clean mode, skip backup for ${KS_CONFIG_FILE}"
+  fi
 
   if [ ! -f "${KS_CONFIG_FILE}" ]; then
     cat > "${KS_CONFIG_FILE}" <<EOF

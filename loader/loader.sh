@@ -59,8 +59,62 @@ export CONFIG_FILE
 TREED_MAINTENANCE_MODE="${TREED_MAINTENANCE_MODE:-1}"
 export TREED_MAINTENANCE_MODE
 
+resolve_repo_branch() {
+  local branch=""
+
+  if command -v git >/dev/null 2>&1 && git -C "${REPO_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    branch="$(git -C "${REPO_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  fi
+
+  case "${branch}" in
+    ""|HEAD)
+      printf '%s\n' ""
+      ;;
+    *)
+      printf '%s\n' "${branch}"
+      ;;
+  esac
+}
+
+resolve_deploy_mode() {
+  local raw_mode="${TREED_DEPLOY_MODE:-auto}"
+  local repo_branch=""
+  local effective_mode=""
+
+  case "${raw_mode}" in
+    auto|clean|preserve)
+      ;;
+    *)
+      log_error "Invalid TREED_DEPLOY_MODE=${raw_mode} (allowed: auto|clean|preserve)"
+      exit 1
+      ;;
+  esac
+
+  repo_branch="$(resolve_repo_branch)"
+
+  if [ "${raw_mode}" = "auto" ]; then
+    if [ "${repo_branch}" = "dev" ]; then
+      effective_mode="clean"
+    elif [ -n "${repo_branch}" ]; then
+      effective_mode="preserve"
+    else
+      effective_mode="clean"
+    fi
+  else
+    effective_mode="${raw_mode}"
+  fi
+
+  TREED_DEPLOY_MODE="${raw_mode}"
+  TREED_DEPLOY_MODE_EFFECTIVE="${effective_mode}"
+  TREED_DEPLOY_BRANCH="${repo_branch}"
+
+  export TREED_DEPLOY_MODE
+  export TREED_DEPLOY_MODE_EFFECTIVE
+  export TREED_DEPLOY_BRANCH
+}
 
 . "${REPO_DIR}/loader/lib/plymouth.sh"
+resolve_deploy_mode
 
 trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BASH_LINENO[0]} cmd=${BASH_COMMAND}"; exit ${rc}' ERR
 
@@ -122,6 +176,7 @@ run_step_script() {
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, CMDLINE_FILE=${CMDLINE_FILE}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
+log_info "TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE}, TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}, TREED_DEPLOY_BRANCH=${TREED_DEPLOY_BRANCH:-unknown}"
 
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"
