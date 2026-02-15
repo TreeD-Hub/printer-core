@@ -329,6 +329,5 @@ git pull
 `/home/pi/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg`
 и перезапусти `klipper`.
 
-
 > Карта слоев и ownership: `README.md`
 > Актуальная модель конфигов и ownership: `docs/config-ownership.md`.
