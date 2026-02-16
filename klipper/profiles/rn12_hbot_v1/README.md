@@ -25,23 +25,27 @@
 Текущая include-цепочка для профиля:
 1. `mcu_rn12.cfg`
 2. `printer_base.cfg`
-3. `steppers.cfg`
-4. `extruder.cfg`
-5. `bed_heater_dc.cfg`
-6. `fans.cfg`
-7. `macros.cfg`
-8. `ui.cfg`
-9. `local_overrides.cfg` (локальный runtime-файл на Pi)
+3. `gcode_features.cfg`
+4. `steppers.cfg`
+5. `extruder.cfg`
+6. `bed_heater_dc.cfg`
+7. `fans.cfg`
+8. `beeper.cfg`
+9. `macros.cfg`
+10. `ui.cfg`
+11. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
 ## Карта файлов профиля
 
 - `mcu_rn12.cfg` — подключение к MCU (serial + restart method, transport `usb|uart`).
 - `printer_base.cfg` — кинематика и базовые лимиты принтера.
+- `gcode_features.cfg` — совместимость G-code: `G2/G3`, `G10/G11`, `M486`; `M600` = пауза + выгрузка филамента.
 - `steppers.cfg` — полные параметры осей X/Y/Z.
 - `extruder.cfg` — экструдер, хотэнд, PID и ограничения подачи.
 - `bed_heater_dc.cfg` — нагрев стола (DC), лимиты и verify_heater.
 - `fans.cfg` — вентиляторы.
-- `macros.cfg` — пользовательские макросы печати и камеры.
+- `beeper.cfg` — бипер (M300/BEEP, стартовая мелодия один раз за загрузку ОС).
+- `macros.cfg` — пользовательские макросы печати и камеры (`PAUSE`: park + `E-5` + `140C` + hold motors; `RESUME`: прогрев + `E+50` + `G10` + круговой wipe).
 - `ui.cfg` — интерфейсные блоки для Mainsail/Fluidd.
 - `filament_sensor.cfg` — опциональный шаблон датчика филамента (по умолчанию не подключен).
 

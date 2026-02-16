@@ -28,6 +28,47 @@ is_true() {
   esac
 }
 
+read_klipperscreen_main_theme() {
+  local cfg="$1"
+  awk '
+    BEGIN { in_main = 0 }
+    /^[[:space:]]*\[main\][[:space:]]*$/ { in_main = 1; next }
+    in_main && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_main = 0 }
+    in_main && /^[[:space:]]*theme[[:space:]]*[:=]/ {
+      line = $0
+      sub(/^[[:space:]]*theme[[:space:]]*[:=][[:space:]]*/, "", line)
+      sub(/[[:space:]]*(#|;).*$/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      print line
+      exit
+    }
+  ' "${cfg}"
+}
+
+extract_required_theme_icons() {
+  local style_file="$1"
+  if [ ! -f "${style_file}" ]; then
+    return 0
+  fi
+
+  grep -Eo "images/[^\"' )?#;]+" "${style_file}" 2>/dev/null \
+    | sed 's|^images/||' \
+    | sort -u
+}
+
+missing_required_icons() {
+  local images_dir="$1"
+  local required_icons="$2"
+  local icon=""
+
+  while IFS= read -r icon; do
+    [ -z "${icon}" ] && continue
+    if [ ! -f "${images_dir}/${icon}" ]; then
+      printf '%s\n' "${icon}"
+    fi
+  done <<< "${required_icons}"
+}
+
 check_required_service_active() {
   local unit="$1"
   local state=""
@@ -236,8 +277,22 @@ TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
 TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-0}"
+TREED_KS_THEME_EXPECTED="${TREED_KS_THEME:-treed-oled}"
+TREED_KLIPPERSCREEN_HOME_RAW="${TREED_KLIPPERSCREEN_HOME:-}"
+if [ -n "${TREED_KLIPPERSCREEN_HOME_RAW}" ]; then
+  TREED_KLIPPERSCREEN_HOME="${TREED_KLIPPERSCREEN_HOME_RAW}"
+  log_info "VERIFY KlipperScreen home forced via TREED_KLIPPERSCREEN_HOME=${TREED_KLIPPERSCREEN_HOME}"
+else
+  TREED_KLIPPERSCREEN_HOME="$(detect_klipperscreen_home "${PI_HOME}/KlipperScreen")"
+  log_info "VERIFY KlipperScreen home resolved as ${TREED_KLIPPERSCREEN_HOME}"
+fi
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
+KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
+KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
+KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
+KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
+KS_SERVICE_PRESENT=0
 
 case "${TREED_MCU_TRANSPORT_RAW}" in
   usb|USB) TREED_MCU_TRANSPORT="usb" ;;
@@ -428,15 +483,18 @@ for unit in plymouth-quit.service plymouth-quit-wait.service; do
   fi
 done
 
-KS="/etc/systemd/system/KlipperScreen.service.d/override.conf"
+if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  KS_SERVICE_PRESENT=1
+fi
+
 if is_true "${TREED_KLIPPERSCREEN_REQUIRED}"; then
-  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+  if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
     pass "KlipperScreen retains splash"
   else
     failf "KlipperScreen retains splash"
   fi
 
-  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
     if systemctl is-active --quiet KlipperScreen.service; then
       pass "KlipperScreen.service active"
     else
@@ -453,13 +511,13 @@ if is_true "${TREED_KLIPPERSCREEN_REQUIRED}"; then
     failf "KlipperScreen.service present"
   fi
 else
-  if [ -f "${KS}" ] && grep -q "plymouth quit --retain-splash" "${KS}"; then
+  if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
     pass "KlipperScreen retains splash (optional)"
   else
     log_info "VERIFY KlipperScreen optional: override missing or not configured"
   fi
 
-  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
     if systemctl is-active --quiet KlipperScreen.service; then
       pass "KlipperScreen.service active (optional)"
     else
@@ -476,6 +534,53 @@ else
   else
     log_info "VERIFY KlipperScreen optional: service not installed"
   fi
+fi
+
+if [ "${TREED_KS_THEME_EXPECTED}" = "keep" ]; then
+  log_info "VERIFY KlipperScreen theme check skipped (TREED_KS_THEME=keep)"
+elif [ "${KS_SERVICE_PRESENT}" = "1" ]; then
+  if [ -f "${KS_CONFIG_FILE}" ]; then
+    ks_theme_actual="$(read_klipperscreen_main_theme "${KS_CONFIG_FILE}" | tr -d '\r\n' || true)"
+    if [ "${ks_theme_actual}" = "${TREED_KS_THEME_EXPECTED}" ]; then
+      pass "KlipperScreen configured theme (${TREED_KS_THEME_EXPECTED})"
+    else
+      failf "KlipperScreen configured theme (${TREED_KS_THEME_EXPECTED}, current=${ks_theme_actual:-missing})"
+    fi
+  else
+    failf "KlipperScreen config present (${KS_CONFIG_FILE})"
+  fi
+
+  if [ "${TREED_KS_THEME_EXPECTED}" = "treed-oled" ]; then
+    required_ks_icons=""
+    missing_ks_icons=""
+    if [ -f "${KS_THEME_RUNTIME_STYLE}" ]; then
+      pass "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
+      required_ks_icons="$(extract_required_theme_icons "${KS_THEME_RUNTIME_STYLE}" || true)"
+      if [ -n "${required_ks_icons}" ]; then
+        pass "KlipperScreen treed-oled style icon refs parsed"
+      else
+        log_info "VERIFY KlipperScreen treed-oled: no explicit images/* refs in style (${KS_THEME_RUNTIME_STYLE})"
+      fi
+    else
+      failf "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
+    fi
+    if [ -d "${KS_THEME_RUNTIME_IMAGES_DIR}" ] \
+      && [ -n "$(find "${KS_THEME_RUNTIME_IMAGES_DIR}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+      pass "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
+    else
+      failf "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
+    fi
+    if [ -n "${required_ks_icons}" ]; then
+      missing_ks_icons="$(missing_required_icons "${KS_THEME_RUNTIME_IMAGES_DIR}" "${required_ks_icons}" || true)"
+      if [ -z "${missing_ks_icons}" ]; then
+        pass "KlipperScreen treed-oled required icons present"
+      else
+        failf "KlipperScreen treed-oled required icons present (missing=$(printf '%s' "${missing_ks_icons}" | tr '\n' ' '))"
+      fi
+    fi
+  fi
+else
+  log_info "VERIFY KlipperScreen theme check skipped (service not installed)"
 fi
 
 if command -v timedatectl >/dev/null 2>&1; then

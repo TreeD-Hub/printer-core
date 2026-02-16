@@ -1,6 +1,6 @@
 # Loader Steps
 
-Каталог `loader/steps/` содержит атомарные этапы провижининга, которые запускаются из `loader/loader.sh`.
+Каталог `loader/steps/` содержит атомарные этапы provisioning, которые запускаются из `loader/loader.sh`.
 
 ## Группы шагов
 
@@ -43,6 +43,7 @@ UI:
 
 - `klipper-mainsail-theme.sh`
 - `klipperscreen-install.sh`
+- `klipperscreen-theme.sh`
 - `klipperscreen-integr.sh`
 
 Финальная верификация:
@@ -53,7 +54,7 @@ UI:
 
 Каждый шаг должен:
 
-- быть идемпотентным (повторный запуск не ломает систему);
+- быть идемпотентным;
 - логировать ключевые действия через `log_info`/`log_warn`/`log_error`;
 - завершаться с ненулевым кодом только при реальной блокирующей ошибке.
 
@@ -61,48 +62,65 @@ UI:
 
 Klipper:
 
-- `TREED_MCU_TRANSPORT` - режим связи с MCU (`usb` или `uart`).
-- `TREED_MCU_UART_DEV` - UART-устройство для MCU (по умолчанию `/dev/serial0`).
-- `TREED_UART_DISABLE_BT` - добавить `dtoverlay=disable-bt` в `config.txt` для UART-контура (default для `uart`: `1`, установите `0`, если BT нужно сохранить).
-  В `verify` без явного значения используется auto-режим проверки (не падает, если BT оставлен включенным).
-- `MCU_SERIAL_BY_ID` - явная привязка MCU serial (`/dev/serial/by-id/*`).
-- `KLIPPER_SERVICE` - имя systemd-сервиса для шага `klipper-anti-shutdown` (по умолчанию `klipper`).
+- `TREED_MCU_TRANSPORT` — режим связи с MCU (`usb` или `uart`).
+- `TREED_MCU_UART_DEV` — UART-устройство для MCU (по умолчанию `/dev/serial0`).
+- `TREED_UART_DISABLE_BT` — добавлять `dtoverlay=disable-bt` для UART-контура (`1`/`0`).
+- `MCU_SERIAL_BY_ID` — явная привязка MCU serial (`/dev/serial/by-id/*`).
+- `KLIPPER_SERVICE` — имя systemd-сервиса для `klipper-anti-shutdown`.
+- `TREED_DEPLOY_MODE` — режим runtime-деплоя (`auto|clean|preserve`, по умолчанию `auto`).
+  Auto-резолв: `dev -> clean`, любая определенная не-`dev` ветка -> `preserve`, неопределенная ветка (`HEAD`) -> `clean`.
+  Для шагов используется вычисленное значение `TREED_DEPLOY_MODE_EFFECTIVE`.
 
 Камера:
 
-- `CAM_DEVICE` - принудительно указать устройство камеры.
-- `CAM_ALLOW_VIDEO0_FALLBACK=1` - разрешить fallback на `/dev/video0`.
-- `TREED_CAM_RESOLUTION` - постоянное разрешение стрима crowsnest (по умолчанию `800x600`).
-- `TREED_CAM_FPS` - постоянный FPS стрима crowsnest (по умолчанию `10`).
-- `MOONRAKER_READY_RETRIES` - количество попыток ожидания API Moonraker после рестарта.
+- `CAM_DEVICE` — принудительно задать устройство камеры.
+- `CAM_ALLOW_VIDEO0_FALLBACK=1` — разрешить fallback на `/dev/video0`.
+- `TREED_CAM_RESOLUTION` — разрешение crowsnest (по умолчанию `1024x768`).
+- `TREED_CAM_FPS` — FPS crowsnest (по умолчанию `10`).
+- `MOONRAKER_READY_RETRIES` — число попыток ожидания API Moonraker.
 
 KlipperScreen:
 
-- `TREED_FORCE_KLIPPERSCREEN_INSTALL=1` - принудительная переустановка KlipperScreen.
-- `TREED_KLIPPERSCREEN_REPO` - URL репозитория KlipperScreen для установки.
-- `TREED_KLIPPERSCREEN_REF` - pinned ref/commit для воспроизводимой установки.
-- `TREED_KLIPPERSCREEN_START_TIMEOUT` - timeout ожидания старта сервиса.
-- `TREED_KLIPPERSCREEN_REQUIRED=1` - делать проверки KlipperScreen в `verify` обязательными (по умолчанию `0`, best-effort).
+- `TREED_FORCE_KLIPPERSCREEN_INSTALL=1` — принудительная переустановка KlipperScreen.
+- `TREED_KLIPPERSCREEN_REPO` — URL репозитория KlipperScreen.
+- `TREED_KLIPPERSCREEN_REF` — pinned ref/commit.
+- `TREED_KLIPPERSCREEN_START_TIMEOUT` — timeout ожидания старта сервиса.
+- `TREED_KLIPPERSCREEN_HOME` — путь к каталогу установки KlipperScreen.
+  Если не задан, шаги KlipperScreen пытаются взять `WorkingDirectory` из `KlipperScreen.service`, fallback — `${PI_HOME}/KlipperScreen`.
+- `TREED_KS_THEME` — тема KlipperScreen (`treed-oled`, `material-dark`, `keep`).
+- `TREED_KLIPPERSCREEN_REQUIRED=1` — сделать проверки KlipperScreen обязательными в `verify`.
 
 Time/NTP:
 
-- `TREED_SET_TIMEZONE=1` - применять timezone в `timezone-sync`.
-- `TREED_TIMEZONE` - целевая timezone (по умолчанию `Europe/Moscow`).
-- `TREED_ENABLE_NTP=1` - включать NTP через `timedatectl`.
+- `TREED_SET_TIMEZONE=1` — применять timezone.
+- `TREED_TIMEZONE` — целевая timezone.
+- `TREED_ENABLE_NTP=1` — включать NTP через `timedatectl`.
 
 Plymouth/systemd/verify:
 
-- `PLYMOUTH_THEME_NAME` - имя темы Plymouth.
-- `TREED_MASK_TTY1` - политика `getty@tty1` (используется в `plymouth-systemd` и `verify`).
-- `TREED_VERIFY_CAMERA` - режим camera-проверок в `verify` (`auto`, `0`, `1`).
-- `TREED_CAM_HTTP_RETRIES`, `TREED_CAM_HTTP_TIMEOUT` - retry/timeout для snapshot-проверок.
-- `TREED_MOONRAKER_HTTP_RETRIES` - retry для проверки `server/webcams/list`.
+- `PLYMOUTH_THEME_NAME` — имя темы Plymouth.
+- `TREED_MASK_TTY1` — политика `getty@tty1`.
+- `TREED_VERIFY_CAMERA` — режим camera-проверок в `verify` (`auto`, `0`, `1`).
+- `TREED_CAM_HTTP_RETRIES`, `TREED_CAM_HTTP_TIMEOUT` — retry/timeout snapshot-проверок.
+- `TREED_MOONRAKER_HTTP_RETRIES` — retry проверки `server/webcams/list`.
+
+## TREED_DEPLOY_MODE: матрица поведения
+
+- `klipper-core.sh`
+  `clean`: полная пересборка runtime без восстановления локальных файлов.
+  `preserve`: сохраняется только `local_overrides.cfg`.
+- `moonraker-config.sh`
+  `clean`: `moonraker.conf` перезаписывается без `.bak`.
+  `preserve`: перед перезаписью выполняется `backup_file_once`.
+- `klipperscreen-theme.sh`
+  `clean`: `KlipperScreen.conf` обновляется без `.bak`.
+  `preserve`: перед обновлением выполняется `backup_file_once`.
 
 ## Важные замечания по поведению
 
-- `crowsnest-webcam.sh` по умолчанию best-effort, fail-fast включается через `TREED_CAMERA_REQUIRED=1`.
-- `klipperscreen-install.sh` и `klipperscreen-integr.sh` fail-fast, если сервис KlipperScreen не поднимается в заданный timeout.
-- `verify.sh` по умолчанию проверяет KlipperScreen в best-effort режиме; strict-режим включается через `TREED_KLIPPERSCREEN_REQUIRED=1`.
+- `crowsnest-webcam.sh` по умолчанию best-effort (optional step). Для строгого режима используйте `TREED_CAMERA_REQUIRED=1` и/или `TREED_VERIFY_CAMERA=1`.
+- `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` остаются optional на уровне `loader.sh`.
+- `klipperscreen-theme.sh` для `treed-oled` дополнительно гарантирует наличие `styles/treed-oled/images`: если в теме нет иконок, копирует fallback-пакет из доступной стоковой темы KlipperScreen и выбирает пакет, который покрывает обязательные `images/*`-ссылки из `style.css`.
 - `verify.sh` можно запускать standalone: `REPO_DIR` вычисляется автоматически, если не передан.
 
 Пример ручного запуска `verify`:
@@ -114,9 +132,10 @@ sudo REPO_DIR="$(pwd)" bash loader/steps/verify.sh
 
 ## UART-контур (дополнительно)
 
-В режиме `TREED_MCU_TRANSPORT=uart` шаг `rpi-uart-config.sh` дополнительно делает две вещи для стабильного старта Klipper:
+В режиме `TREED_MCU_TRANSPORT=uart` шаг `rpi-uart-config.sh`:
 
-- маскирует `serial-getty@ttyAMA0.service` и `serial-getty@ttyS0.service`, чтобы исключить захват UART-консолью;
-- разворачивает udev-правило `/etc/udev/rules.d/99-treed-uart-perms.rules` с правами `0660` и группой `dialout` для `/dev/ttyAMA0` и `/dev/ttyS0`, а также применяет эти права сразу в рантайме.
+- маскирует `serial-getty@ttyAMA0.service` и `serial-getty@ttyS0.service`;
+- разворачивает правило `/etc/udev/rules.d/99-treed-uart-perms.rules` c правами `0660` и группой `dialout` для `ttyAMA0/ttyS0`;
+- применяет права сразу в runtime.
 
-Это убирает сценарий, когда Klipper получает `Permission denied` на `/dev/serial0` после чистого деплоя.
+Это убирает сценарий `Permission denied` на `/dev/serial0` после чистого деплоя.

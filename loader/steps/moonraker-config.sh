@@ -13,6 +13,16 @@ DST_BASE_DIR="${PI_HOME}/printer_data/config/moonraker/base"
 DST_GENERATED_DIR="${PI_HOME}/printer_data/config/moonraker/generated"
 SRC_COMPONENT="${REPO_DIR}/moonraker/components/treed_shell_command.py"
 COMPONENT_NAME="treed_shell_command.py"
+DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
+
+case "${DEPLOY_MODE}" in
+  clean|preserve)
+    ;;
+  *)
+    log_error "moonraker-config: unsupported TREED_DEPLOY_MODE_EFFECTIVE=${DEPLOY_MODE} (allowed: clean|preserve)"
+    exit 1
+    ;;
+esac
 
 CONFIG_DEPLOYED=0
 BASE_DEPLOYED=0
@@ -172,7 +182,11 @@ EOF
 
 validate_repo_moonraker_layout
 
-backup_file_once "${DST_CONF}"
+if [ "${DEPLOY_MODE}" = "preserve" ]; then
+  backup_file_once "${DST_CONF}"
+else
+  log_info "moonraker-config: clean mode, skip backup for ${DST_CONF}"
+fi
 cp -f "${SRC_CONF}" "${DST_CONF}"
 chown "${PI_USER}:${grp}" "${DST_CONF}" || true
 CONFIG_DEPLOYED=1

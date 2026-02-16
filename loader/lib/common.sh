@@ -45,6 +45,26 @@ backup_file_once() {
   fi
 }
 
+detect_klipperscreen_home() {
+  local fallback_home="${1:-}"
+  local workdir=""
+
+  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+    workdir="$(systemctl show -p WorkingDirectory --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
+    if [ -n "${workdir}" ] && [ -d "${workdir}" ]; then
+      printf '%s\n' "${workdir}"
+      return 0
+    fi
+  fi
+
+  if [ -n "${fallback_home}" ]; then
+    printf '%s\n' "${fallback_home}"
+    return 0
+  fi
+
+  return 1
+}
+
 pi_primary_group() {
   local user="${1:-}"
   local grp=""
