@@ -120,6 +120,7 @@ Plymouth/systemd/verify:
 
 - `crowsnest-webcam.sh` по умолчанию best-effort (optional step). Для строгого режима используйте `TREED_CAMERA_REQUIRED=1` и/или `TREED_VERIFY_CAMERA=1`.
 - `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` остаются optional на уровне `loader.sh`.
+- `klipperscreen-theme.sh` для `treed-oled` дополнительно гарантирует наличие `styles/treed-oled/images`: если в теме нет иконок, копирует fallback-пакет из доступной стоковой темы KlipperScreen.
 - `verify.sh` можно запускать standalone: `REPO_DIR` вычисляется автоматически, если не передан.
 
 Пример ручного запуска `verify`:

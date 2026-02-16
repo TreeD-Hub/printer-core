@@ -267,6 +267,7 @@ MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
 KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
 KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
+KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
 KS_SERVICE_PRESENT=0
 
 case "${TREED_MCU_TRANSPORT_RAW}" in
@@ -530,6 +531,12 @@ elif [ "${KS_SERVICE_PRESENT}" = "1" ]; then
       pass "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
     else
       failf "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
+    fi
+    if [ -d "${KS_THEME_RUNTIME_IMAGES_DIR}" ] \
+      && [ -n "$(find "${KS_THEME_RUNTIME_IMAGES_DIR}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+      pass "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
+    else
+      failf "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
     fi
   fi
 else

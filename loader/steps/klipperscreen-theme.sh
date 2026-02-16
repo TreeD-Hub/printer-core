@@ -49,10 +49,51 @@ if [ ! -f "${THEME_SRC}/style.css" ]; then
   exit 1
 fi
 
+find_fallback_icon_pack() {
+  local candidate=""
+
+  for candidate in \
+    "${KS_STYLES_DIR}/material-dark/images" \
+    "${KS_STYLES_DIR}/material-light/images" \
+    "${KS_STYLES_DIR}/z-bolt/images"
+  do
+    if [ -d "${candidate}" ] \
+      && [ -n "$(find "${candidate}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  candidate="$(
+    find "${KS_STYLES_DIR}" -mindepth 2 -maxdepth 2 -type d -name images 2>/dev/null \
+      | head -n 1 || true
+  )"
+  if [ -n "${candidate}" ] \
+    && [ -n "$(find "${candidate}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+
+  return 1
+}
+
 if [ -d "${KS_STYLES_DIR}" ]; then
   ensure_dir "${THEME_DST}"
   find "${THEME_DST}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
   cp -a "${THEME_SRC}/." "${THEME_DST}/"
+
+  if [ ! -d "${THEME_DST}/images" ] \
+    || [ -z "$(find "${THEME_DST}/images" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+    fallback_images=""
+    if fallback_images="$(find_fallback_icon_pack)"; then
+      ensure_dir "${THEME_DST}/images"
+      cp -a "${fallback_images}/." "${THEME_DST}/images/"
+      log_info "klipperscreen-theme: copied fallback icon pack from ${fallback_images}"
+    else
+      log_warn "klipperscreen-theme: fallback icon pack not found, icons may be missing"
+    fi
+  fi
+
   chown -R "${PI_USER}:${grp}" "${THEME_DST}" || true
   THEME_DEPLOYED=1
 else
@@ -60,9 +101,16 @@ else
 fi
 
 if [ -n "${KS_THEME}" ] && [ "${KS_THEME}" != "keep" ]; then
-  if [ "${KS_THEME}" = "${TREED_THEME_NAME}" ] && [ ! -f "${THEME_DST}/style.css" ]; then
-    log_error "klipperscreen-theme: requested theme ${TREED_THEME_NAME} but deployed style is missing (${THEME_DST}/style.css)"
-    exit 1
+  if [ "${KS_THEME}" = "${TREED_THEME_NAME}" ]; then
+    if [ ! -f "${THEME_DST}/style.css" ]; then
+      log_error "klipperscreen-theme: requested theme ${TREED_THEME_NAME} but deployed style is missing (${THEME_DST}/style.css)"
+      exit 1
+    fi
+    if [ ! -d "${THEME_DST}/images" ] \
+      || [ -z "$(find "${THEME_DST}/images" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+      log_error "klipperscreen-theme: requested theme ${TREED_THEME_NAME} but icon pack is missing (${THEME_DST}/images)"
+      exit 1
+    fi
   fi
 
   ensure_dir "${KS_CONFIG_DIR}"

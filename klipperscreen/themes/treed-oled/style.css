@@ -1,92 +1,405 @@
-/* TreeD OLED theme for KlipperScreen (GTK3 CSS) */
+/* TreeD OLED theme (stock-base + overrides).
+   Карта настройки:
+   1) Палитра и семантика цветов: блок @define-color ниже.
+   2) Базовая (стоковая) логика Material Dark: до блока "TreeD overrides".
+      Обычно трогать только при необходимости совместимости.
+   3) Рабочие кастомизации TreeD: блок "TreeD overrides" в конце файла.
+      Здесь регулируются форма/фон кнопок, акценты, прозрачность иконок.
+   4) Прозрачность подложки иконок: селекторы "button box", "button image", "image". */
 
+/* [PALETTE] Текст и базовые поверхности */
+@define-color text #e4e4e4;        /* Основной цвет текста интерфейса. */
+@define-color bg #000000;          /* Фон приложения (OLED black). */
+@define-color buttons-bg #111111;  /* Базовый фон стоковых кнопок/панелей.
+                                       Варианты: #0d0d0d (темнее), #1a1a1a (светлее). */
+
+/* [PALETTE] 4 оттенка для цветных нижних полос у button.color1..color4 и dialog-* */
+@define-color color1 #7a4dff;      /* Самый глубокий оттенок.
+                                       Вариант слабее: #6c45df. */
+@define-color color2 #9163ff;      /* Основной фирменный акцент TreeD. */
+@define-color color3 #a67dff;      /* Средне-светлый оттенок.
+                                       Вариант контрастнее: #b08eff. */
+@define-color color4 #be9bff;      /* Самый светлый оттенок градиента. */
+
+/* [PALETTE] Системные семантические цвета */
+@define-color echo #006412;        /* Нормальные сервисные уведомления (green). */
+@define-color warning #d8ae47;     /* Предупреждения.
+                                       Вариант теплее: #e0b858. */
+@define-color error #b84a4a;       /* Ошибки/аварийные состояния.
+                                       Вариант мягче: #a94646. */
+
+/* [PALETTE] Состояния интерактивных элементов */
+@define-color active #9163ff;      /* Активное состояние кнопок/переключателей.
+                                       Варианты: #8458ef (спокойнее), #9f75ff (ярче). */
+@define-color active-dark #2a2a2a; /* Темная подложка для ряда стоковых блоков. */
+@define-color lines #9e9e9e;       /* Вторичные линии/подписи (графики, time-labels). */
+@define-color slider #9163ff;      /* Полоса прогресса/заливка trough highlight.
+                                       Вариант спокойнее: #8660df. */
+
+/* [BASE] Глобальный цвет текста */
 * {
-  color: #e4e4e4;
-  font-weight: 500;
+    color: @text;
 }
 
-window,
-dialog,
-.dialog,
-box,
-stack,
-scrolledwindow,
-viewport {
-  background-color: #000000;
-  color: #e4e4e4;
+/* [BASE] Общие поверхности: фон базовых контейнеров и виджетов */
+junction,
+list row,
+treeview.view,
+button,
+window {
+    background-color: @bg;
 }
 
-label,
-.label,
-.title,
-.subtitle {
-  color: #e4e4e4;
+/* [BASE] Типовые "color-кнопки" стоковой темы с нижним цветным акцентом */
+button.color1 {
+    background-color: @buttons-bg;
+    border-color: @color1;
+    border-radius: 1em;
 }
 
-button {
-  background-image: none;
-  background-color: rgba(110, 110, 110, 0.48);
-  border: 1px solid rgba(145, 99, 255, 0.45);
-  border-radius: 8px;
-  box-shadow: none;
-  color: #f3f3f3;
-  min-height: 42px;
+button.color2 {
+    background-color: @buttons-bg;
+    border-color: @color2;
+    border-radius: 1em;
 }
 
-button:hover {
-  background-color: rgba(130, 130, 130, 0.58);
-  border-color: rgba(145, 99, 255, 0.75);
+button.color3 {
+    background-color: @buttons-bg;
+    border-color: @color3;
+    border-radius: 1em;
+}
+
+button.color4 {
+    background-color: @buttons-bg;
+    border-color: @color4;
+    border-radius: 1em;
+}
+
+/* [BASE] Активная кнопка в стоковой логике */
+.button_active {
+    background-color: @active-dark;
+    border-width: .25em;
+    border-radius: 1em;
+}
+
+/* [BASE] Правило для состояния :active в стоке (убирает контур) */
+.active image,
+button.color1:active,
+button.color2:active,
+button.color3:active,
+button.color4:active,
+button.update:active,
+button.invalid:active,
+.dialog button:active {
+    border-style: none;
+}
+
+/* [BASE] Сервисные кнопки update/invalid с нижней цветной полосой */
+button.update,
+button.invalid {
+    background-color: @buttons-bg;
+    border: 0;
+    border-bottom: .3em solid;
+    border-radius: .75em;
+}
+
+button.update {
+    border-bottom-color: @echo;
+}
+
+button.invalid {
+    border-bottom-color: @error;
+}
+
+/* [BASE] Меню/комбобоксы/контекстные элементы */
+menu,
+menuitem,
+combobox button,
+combobox arrow,
+combobox menuitem {
+    background-color: @active-dark;
+    border-color: @bg;
+}
+
+/* [BASE] Переключатели и чекбоксы (стоковое поведение) */
+treeview.view check,
+switch {
+    background-color: @active-dark;
+}
+
+treeview.view check:checked,
+switch:checked {
+    background-color: @echo;
+}
+
+/* [BASE] Иконка отмеченного чекбокса из каталога текущей темы */
+treeview.view check:checked {
+    -gtk-icon-source: url("./styles/treed-oled/images/complete.svg");
+}
+
+/* [BASE] Поля ввода в стоковой части */
+entry {
+    background-color: @active-dark;
+    border-color: @active-dark;
+}
+
+label {
+    color: @text;
+}
+
+/* [BASE] Полосы прогресса/шкалы в стоковой части */
+trough {
+    background-color: @active-dark;
+    color: @text;
+}
+
+trough highlight,
+trough progress {
+    background-color: @slider;
+    color: @text;
+    border-color: @bg;
+}
+
+scale-mark {
+    color: @text;
+}
+
+/* [BASE] Скроллбары */
+scrollbar,
+scrollbar button,
+scrollbar trough {
+    background-color: @bg;
+}
+
+scrollbar slider {
+    background-color: @active-dark;
+}
+
+/* [BASE] Вторичный цвет времени/сетки в textview */
+textview .time {
+    color: @lines;
+}
+
+/* [BASE] Диалоги и горизонтальные toggle-группы */
+.dialog {
+    border: @bg;
+    background-color: @bg;
+}
+
+.dialog button {
+    background-color: @buttons-bg;
+    border-radius: .75em;
+}
+
+.horizontal_togglebuttons {
+    border-color: @bg;
+    background-color: @buttons-bg;
 }
 
 button:active,
+.horizontal_togglebuttons_active,
+button.active {
+    background-color: @active;
+}
+
+.fan_slider {
+    color: @text;
+}
+
+/* [BASE] Цвета popup-сообщений */
+.message_popup {
+    border-bottom-color: @text;
+}
+
+.message_popup_echo,
+.message_popup_echo button {
+    background-color: @echo;
+}
+
+.message_popup_warning,
+.message_popup_warning button {
+    background-color: @warning;
+}
+
+.message_popup_error,
+.message_popup_error button {
+    background-color: @error;
+}
+
+/* [BASE] Numpad и статусные подписи */
+.numpad_key {
+    border-color: @bg;
+    background-color: @buttons-bg;
+}
+
+.printing-status,
+.printing-progress-text,
+.printing-status-label {
+    color: @text;
+}
+
+/* [BASE] Сообщения об ошибке и кнопки внутри сообщений */
+.message {
+    border-color: @error;
+    color: @text;
+    background-color: @error;
+}
+
+.message button {
+    background-color: @text;
+    color: @bg;
+}
+
+.warning {
+    background-color: @warning;
+}
+
+.error {
+    background-color: @error;
+}
+
+.keyboard_pad {
+    background-color: @buttons-bg;
+}
+
+/* [BASE] Цвет нижней полосы у типов dialog-* */
+.dialog-error {
+    border-bottom-color: @error;
+}
+
+.dialog-warning {
+    border-bottom-color: @warning;
+}
+
+.dialog-info {
+    border-bottom-color: @color4;
+}
+
+.dialog-default {
+    border-bottom-color: @color3;
+}
+
+.dialog-secondary {
+    border-bottom-color: @color2;
+}
+
+.dialog-primary {
+    border-bottom-color: @color1;
+}
+
+/* TreeD overrides
+   Поддерживаемая зона кастомизации. Изменения здесь приоритетнее стоковой базы выше. */
+
+/* [OVERRIDE] Глобальная насыщенность шрифта.
+   Варианты: 400 (тоньше), 600 (жирнее). */
+* {
+    font-weight: 500; /* Текущая толщина текста для читаемости на OLED. */
+}
+
+/* [OVERRIDE] Основной вид кнопок TreeD */
+button {
+    background-image: none;                     /* Убираем градиенты GTK, чтобы фон был предсказуем. */
+    background-color: rgba(110, 110, 110, 0.48); /* Серый полупрозрачный фон кнопки.
+                                                      Варианты alpha: 0.42-0.58. */
+    border: 1px solid rgba(145, 99, 255, 0.45);   /* Фиолетовый контур.
+                                                      Варианты alpha: 0.35-0.75. */
+    border-radius: 8px;                         /* Скругление кнопки.
+                                                   Варианты: 6-12px. */
+    box-shadow: none;                           /* Без теней для "чистого" OLED вида. */
+    color: #f3f3f3;                             /* Цвет текста на кнопке. */
+    min-height: 42px;                           /* Минимальная высота кнопок на тач-экране.
+                                                   Варианты: 38-48px. */
+}
+
+/* [OVERRIDE] Hover-состояние: немного светлее и с более заметным контуром */
+button:hover {
+    background-color: rgba(130, 130, 130, 0.58); /* Осветление фона при наведении. */
+    border-color: rgba(145, 99, 255, 0.75);      /* Усиление контура в hover. */
+}
+
+/* [OVERRIDE] Активные/выбранные состояния кнопок и toggle-групп */
+button:active,
 button:checked,
 button.toggle:checked,
-.button_active {
-  background-color: rgba(145, 99, 255, 0.36);
-  border-color: rgba(145, 99, 255, 0.95);
-  color: #ffffff;
+.button_active,
+.horizontal_togglebuttons_active,
+button.active {
+    background-color: rgba(145, 99, 255, 0.36); /* Фиолетовая подложка состояния active/checked.
+                                                    Варианты alpha: 0.28-0.46. */
+    border-color: rgba(145, 99, 255, 0.95);     /* Почти сплошной контур для четкого фокуса. */
+    color: #ffffff;                              /* Белый текст в активе. */
 }
 
+/* [OVERRIDE] Неактивные кнопки */
 button:disabled {
-  background-color: rgba(90, 90, 90, 0.28);
-  border-color: rgba(120, 120, 120, 0.4);
-  color: #8e8e8e;
+    background-color: rgba(90, 90, 90, 0.28); /* Приглушенный фон disabled-состояния. */
+    border-color: rgba(120, 120, 120, 0.40);  /* Серый контур disabled. */
+    color: #8e8e8e;                            /* Цвет текста disabled.
+                                                  Вариант контрастнее: #9a9a9a. */
 }
 
+/* [OVERRIDE] Предупреждающие кнопки */
 button.warning {
-  border-color: rgba(216, 174, 71, 0.95);
-  color: #d8ae47;
+    border-color: rgba(216, 174, 71, 0.95); /* Теплый контур warning. */
+    color: #d8ae47;                          /* Цвет текста warning-кнопки. */
 }
 
+/* [OVERRIDE] Поля ввода и комбобоксы в стиле TreeD */
 entry,
 spinbutton,
 combobox,
 combobox box {
-  background-color: rgba(80, 80, 80, 0.38);
-  border: 1px solid rgba(145, 99, 255, 0.45);
-  border-radius: 8px;
-  color: #e4e4e4;
+    background-color: rgba(80, 80, 80, 0.38);   /* Фон полей ввода.
+                                                    Варианты alpha: 0.30-0.48. */
+    border: 1px solid rgba(145, 99, 255, 0.45); /* Контур полей в фирменном акценте. */
+    border-radius: 8px;                          /* Скругление полей.
+                                                    Варианты: 6-10px. */
+    color: #e4e4e4;                              /* Текст в полях. */
 }
 
+/* [OVERRIDE] Подложка и форма прогресс-бара */
 progressbar,
 progressbar trough {
-  border-radius: 6px;
-  background-color: rgba(70, 70, 70, 0.45);
+    border-radius: 6px;                       /* Скругление trough прогресс-бара. */
+    background-color: rgba(70, 70, 70, 0.45); /* Фон подложки прогресса.
+                                                  Варианты alpha: 0.35-0.55. */
 }
 
-progressbar progress {
-  background-color: #9163ff;
+/* [OVERRIDE] Заливка прогресса (и унаследованные trough highlight/progress) */
+progressbar progress,
+trough highlight,
+trough progress {
+    background-color: #9163ff; /* Цвет заливки прогресса.
+                                  Вариант спокойнее: #8660df. */
 }
 
+/* [OVERRIDE] Ручка switch в неактивном состоянии */
 switch slider {
-  background-color: rgba(110, 110, 110, 0.62);
-  border: 1px solid rgba(145, 99, 255, 0.45);
+    background-color: rgba(110, 110, 110, 0.62); /* Фон ползунка switch.
+                                                     Варианты alpha: 0.50-0.70. */
+    border: 1px solid rgba(145, 99, 255, 0.45);  /* Контур ползунка switch. */
 }
 
-switch:checked slider {
-  background-color: rgba(145, 99, 255, 0.74);
+/* [OVERRIDE] Активный switch/checked checkbox */
+switch:checked,
+switch:checked slider,
+treeview.view check:checked {
+    background-color: rgba(145, 99, 255, 0.74); /* Акцент checked.
+                                                    Варианты alpha: 0.60-0.85. */
 }
 
+/* [OVERRIDE] Разделители между блоками */
 separator {
-  background-color: rgba(145, 99, 255, 0.3);
+    background-color: rgba(145, 99, 255, 0.30); /* Цвет линий-разделителей.
+                                                    Варианты alpha: 0.20-0.40. */
+}
+
+/* [OVERRIDE] Критично для иконок:
+   фон самой кнопки остается серым, а подложка иконки — прозрачная.
+   Это убирает "черные квадраты" вокруг SVG/PNG иконок. */
+button box,
+button image,
+image {
+    background-color: transparent; /* Полная прозрачность подложки иконки. */
+    background-image: none;        /* Без фоновой картинки у контейнера иконок. */
 }
