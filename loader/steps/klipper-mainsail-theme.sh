@@ -3,7 +3,19 @@ set -euo pipefail
 
 . "${REPO_DIR}/loader/lib/common.sh"
 
+ensure_root
+
 log_info "Step klipper-mainsail-theme: deploying Mainsail .theme"
+PI_USER="${PI_USER:-${SUDO_USER:-pi}}"
+PI_HOME="${PI_HOME:-/home/${PI_USER}}"
+if [ -z "${PI_HOME}" ] || [ ! -d "${PI_HOME}" ]; then
+  PI_HOME="$(getent passwd "${PI_USER}" | cut -d: -f6 || true)"
+fi
+if [ -z "${PI_HOME}" ] || [ ! -d "${PI_HOME}" ]; then
+  log_error "klipper-mainsail-theme: cannot determine home for user ${PI_USER}"
+  exit 1
+fi
+
 if ! grp="$(pi_primary_group "${PI_USER}")"; then
   exit 1
 fi

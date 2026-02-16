@@ -262,6 +262,25 @@ tr:hover,
     color: var(--v-warning-base) !important;
 }
 
+/* === Ползунки (v-slider): акцент d8ae47 === */
+.v-application .v-slider .v-slider__track-fill {
+    background-color: var(--p-accent-yellow) !important;
+    border-color: var(--p-accent-yellow) !important;
+}
+
+.v-application .v-slider .v-slider__thumb {
+    color: var(--p-accent-yellow) !important;
+}
+
+.v-application .v-slider .v-slider__thumb::before {
+    background-color: var(--p-accent-yellow) !important;
+}
+
+.v-application .v-slider .v-input--selection-controls__ripple,
+.v-application .v-slider .primary--text {
+    color: var(--p-accent-yellow) !important;
+}
+
 
 /* === Правки поверх Vuetify: ошибки и "акцентные" слова === */
 
@@ -324,4 +343,3 @@ tr:hover,
   color: var(--v-warning-base) !important;  /* ← или поставь var(--p-accent-yellow) */
   text-decoration-color: currentColor !important;
 }
-
