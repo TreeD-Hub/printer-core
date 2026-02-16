@@ -347,14 +347,33 @@ button.warning {
 /* [OVERRIDE] Поля ввода и комбобоксы в стиле TreeD */
 entry,
 spinbutton,
-combobox,
-combobox box {
+combobox {
     background-color: rgba(80, 80, 80, 0.38);   /* Фон полей ввода.
                                                     Варианты alpha: 0.30-0.48. */
     border: 1px solid rgba(145, 99, 255, 0.45); /* Контур полей в фирменном акценте. */
     border-radius: 8px;                          /* Скругление полей.
                                                     Варианты: 6-10px. */
     color: #e4e4e4;                              /* Текст в полях. */
+}
+
+/* [OVERRIDE] Combobox: убираем "рамка в рамке".
+   Внешняя рамка остается у combobox, внутренний box/button/entry рисуем без контура. */
+combobox box,
+combobox button,
+combobox entry,
+combobox arrow {
+    background-color: transparent; /* Внутренняя подложка без отдельной плашки. */
+    background-image: none;        /* Без внутренних градиентов GTK. */
+    border: 0;                     /* Ключевой фикс: убираем внутреннюю рамку. */
+    border-radius: 0;              /* Внутренние элементы без скругления. */
+    box-shadow: none;              /* Без теней внутри комбобокса. */
+}
+
+combobox button:hover,
+combobox button:active,
+combobox button:checked {
+    background-color: transparent; /* Hover/active не создают вторую рамку. */
+    border-color: transparent;
 }
 
 /* [OVERRIDE] Подложка и форма прогресс-бара */
