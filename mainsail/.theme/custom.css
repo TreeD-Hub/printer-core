@@ -262,22 +262,36 @@ tr:hover,
     color: var(--v-warning-base) !important;
 }
 
-/* === Ползунки (v-slider): акцент d8ae47 === */
-.v-application .v-slider .v-slider__track-fill {
+/* === Ползунки (v-slider): акцент d8ae47 ===
+   Делаем расширенный набор селекторов, т.к. в разных виджетах Vuetify
+   используются разные внутренние классы (primary / primary--text / thumb-container). */
+.v-application .v-slider .v-slider__track-fill,
+.v-application .v-slider .v-slider__track-fill.primary,
+.v-application .v-input--slider .v-slider__track-fill,
+.v-application .v-input--slider .v-slider__track-fill.primary {
     background-color: var(--p-accent-yellow) !important;
     border-color: var(--p-accent-yellow) !important;
 }
 
-.v-application .v-slider .v-slider__thumb {
+.v-application .v-slider .v-slider__thumb,
+.v-application .v-input--slider .v-slider__thumb {
+    background-color: var(--p-accent-yellow) !important;
+    border-color: var(--p-accent-yellow) !important;
     color: var(--p-accent-yellow) !important;
 }
 
-.v-application .v-slider .v-slider__thumb::before {
+.v-application .v-slider .v-slider__thumb::before,
+.v-application .v-input--slider .v-slider__thumb::before {
     background-color: var(--p-accent-yellow) !important;
 }
 
-.v-application .v-slider .v-input--selection-controls__ripple,
-.v-application .v-slider .primary--text {
+.v-application .v-slider .v-slider__thumb-container.primary--text,
+.v-application .v-input--slider .v-slider__thumb-container.primary--text,
+.v-application .v-slider .primary--text,
+.v-application .v-input--slider .primary--text,
+.v-application .v-slider .primary,
+.v-application .v-input--slider .primary,
+.v-application .v-slider .v-input--selection-controls__ripple {
     color: var(--p-accent-yellow) !important;
 }
 
