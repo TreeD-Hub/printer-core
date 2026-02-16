@@ -16,7 +16,15 @@ fi
 TREED_THEME_NAME="treed-oled"
 THEME_SRC="${REPO_DIR}/klipperscreen/themes/${TREED_THEME_NAME}"
 
-KS_HOME="${TREED_KLIPPERSCREEN_HOME:-${PI_HOME}/KlipperScreen}"
+KS_HOME_DEFAULT="${PI_HOME}/KlipperScreen"
+if [ -n "${TREED_KLIPPERSCREEN_HOME:-}" ]; then
+  KS_HOME="${TREED_KLIPPERSCREEN_HOME}"
+  log_info "klipperscreen-theme: using TREED_KLIPPERSCREEN_HOME=${KS_HOME}"
+else
+  KS_HOME="$(detect_klipperscreen_home "${KS_HOME_DEFAULT}")"
+  log_info "klipperscreen-theme: resolved KlipperScreen home=${KS_HOME}"
+fi
+
 KS_STYLES_DIR="${KS_HOME}/styles"
 THEME_DST="${KS_STYLES_DIR}/${TREED_THEME_NAME}"
 

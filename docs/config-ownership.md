@@ -55,7 +55,7 @@ Runtime:
 
 - `/home/pi/printer_data/config` (раскладка `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
-- `/home/pi/KlipperScreen/styles/treed-oled` (раскладка `klipperscreen-theme`)
+- `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
 
 ## 3. Ownership map (runtime)
 
@@ -83,8 +83,10 @@ Runtime-скрипты камеры:
 Тема KlipperScreen:
 
 - source: `klipperscreen/themes/treed-oled/*`
-- deploy: `/home/pi/KlipperScreen/styles/treed-oled/*`
+- deploy: `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/*`
 - владелец: `loader/steps/klipperscreen-theme.sh`
+
+По умолчанию `TREED_KLIPPERSCREEN_HOME` определяется из `WorkingDirectory` сервиса `KlipperScreen.service`, fallback — `/home/pi/KlipperScreen`.
 
 ## 4. Локальные override и TREED_DEPLOY_MODE
 

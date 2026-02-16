@@ -86,6 +86,7 @@ KlipperScreen:
 - `TREED_KLIPPERSCREEN_REF` — pinned ref/commit.
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` — timeout ожидания старта сервиса.
 - `TREED_KLIPPERSCREEN_HOME` — путь к каталогу установки KlipperScreen.
+  Если не задан, шаги KlipperScreen пытаются взять `WorkingDirectory` из `KlipperScreen.service`, fallback — `${PI_HOME}/KlipperScreen`.
 - `TREED_KS_THEME` — тема KlipperScreen (`treed-oled`, `material-dark`, `keep`).
 - `TREED_KLIPPERSCREEN_REQUIRED=1` — сделать проверки KlipperScreen обязательными в `verify`.
 

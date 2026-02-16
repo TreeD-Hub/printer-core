@@ -55,6 +55,7 @@ sudo bash loader/loader.sh
 - `TREED_UART_DISABLE_BT` — отключение BT UART (`1`/`0`).
 - `TREED_KS_THEME` — тема KlipperScreen (`treed-oled`, `material-dark`, `keep`).
 - `TREED_KLIPPERSCREEN_HOME` — путь до каталога установки KlipperScreen.
+  Если переменная не задана, путь определяется из `WorkingDirectory` сервиса `KlipperScreen.service`, fallback — `${PI_HOME}/KlipperScreen`.
 - `TREED_DEPLOY_MODE` — режим runtime-деплоя (`auto|clean|preserve`, по умолчанию `auto`).
 - `TREED_DEPLOY_MODE_EFFECTIVE` — вычисленный режим для шагов.
 - `TREED_DEPLOY_BRANCH` — определенная ветка репозитория (пусто в detached `HEAD`).
