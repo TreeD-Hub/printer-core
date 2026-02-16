@@ -31,9 +31,12 @@ THEME_DST="${KS_STYLES_DIR}/${TREED_THEME_NAME}"
 KS_CONFIG_DIR="${PI_HOME}/printer_data/config"
 KS_CONFIG_FILE="${KS_CONFIG_DIR}/KlipperScreen.conf"
 KS_THEME="${TREED_KS_THEME:-${TREED_THEME_NAME}}"
+KS_LANGUAGE="${TREED_KS_LANGUAGE:-ru}"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 THEME_DEPLOYED=0
 THEME_CONFIG_UPDATED=0
+APPLY_THEME=0
+APPLY_LANGUAGE=0
 
 case "${DEPLOY_MODE}" in
   clean|preserve)
@@ -47,6 +50,13 @@ esac
 if [ ! -f "${THEME_SRC}/style.css" ]; then
   log_error "klipperscreen-theme: missing theme source ${THEME_SRC}/style.css"
   exit 1
+fi
+
+if [ -n "${KS_THEME}" ] && [ "${KS_THEME}" != "keep" ]; then
+  APPLY_THEME=1
+fi
+if [ -n "${KS_LANGUAGE}" ] && [ "${KS_LANGUAGE}" != "keep" ]; then
+  APPLY_LANGUAGE=1
 fi
 
 extract_required_theme_icons() {
@@ -127,6 +137,70 @@ find_fallback_icon_pack() {
   return 1
 }
 
+set_ks_main_key() {
+  local cfg_file="$1"
+  local cfg_key="$2"
+  local cfg_value="$3"
+  local tmp_cfg=""
+
+  if [ ! -f "${cfg_file}" ]; then
+    cat > "${cfg_file}" <<EOF
+[main]
+${cfg_key} = ${cfg_value}
+EOF
+    return 0
+  fi
+
+  tmp_cfg="$(mktemp)"
+  awk -v key="${cfg_key}" -v value="${cfg_value}" '
+    BEGIN {
+      in_main = 0
+      main_seen = 0
+      key_written = 0
+    }
+    {
+      if ($0 ~ /^\[main\][[:space:]]*$/) {
+        if (in_main && !key_written) {
+          print key " = " value
+          key_written = 1
+        }
+        print $0
+        in_main = 1
+        main_seen = 1
+        next
+      }
+      if (in_main && $0 ~ /^\[[^]]+\][[:space:]]*$/) {
+        if (!key_written) {
+          print key " = " value
+          key_written = 1
+        }
+        in_main = 0
+      }
+      if (in_main && $0 ~ ("^[[:space:]]*" key "[[:space:]]*[:=][[:space:]]*")) {
+        if (!key_written) {
+          print key " = " value
+          key_written = 1
+        }
+        next
+      }
+      print $0
+    }
+    END {
+      if (in_main && !key_written) {
+        print key " = " value
+      }
+      if (!main_seen) {
+        if (NR > 0) {
+          print ""
+        }
+        print "[main]"
+        print key " = " value
+      }
+    }
+  ' "${cfg_file}" > "${tmp_cfg}"
+  mv "${tmp_cfg}" "${cfg_file}"
+}
+
 if [ -d "${KS_STYLES_DIR}" ]; then
   ensure_dir "${THEME_DST}"
   find "${THEME_DST}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -150,7 +224,7 @@ else
   log_warn "klipperscreen-theme: styles dir not found (${KS_STYLES_DIR}), theme files deploy skipped"
 fi
 
-if [ -n "${KS_THEME}" ] && [ "${KS_THEME}" != "keep" ]; then
+if [ "${APPLY_THEME}" = "1" ]; then
   if [ "${KS_THEME}" = "${TREED_THEME_NAME}" ]; then
     if [ ! -f "${THEME_DST}/style.css" ]; then
       log_error "klipperscreen-theme: requested theme ${TREED_THEME_NAME} but deployed style is missing (${THEME_DST}/style.css)"
@@ -169,7 +243,9 @@ if [ -n "${KS_THEME}" ] && [ "${KS_THEME}" != "keep" ]; then
       fi
     fi
   fi
+fi
 
+if [ "${APPLY_THEME}" = "1" ] || [ "${APPLY_LANGUAGE}" = "1" ]; then
   ensure_dir "${KS_CONFIG_DIR}"
   if [ "${DEPLOY_MODE}" = "preserve" ]; then
     backup_file_once "${KS_CONFIG_FILE}"
@@ -177,66 +253,17 @@ if [ -n "${KS_THEME}" ] && [ "${KS_THEME}" != "keep" ]; then
     log_info "klipperscreen-theme: clean mode, skip backup for ${KS_CONFIG_FILE}"
   fi
 
-  if [ ! -f "${KS_CONFIG_FILE}" ]; then
-    cat > "${KS_CONFIG_FILE}" <<EOF
-[main]
-theme = ${KS_THEME}
-EOF
-  else
-    tmp_cfg="$(mktemp)"
-    awk -v theme="${KS_THEME}" '
-      BEGIN {
-        in_main = 0
-        main_seen = 0
-        theme_written = 0
-      }
-      {
-        if ($0 ~ /^\[main\][[:space:]]*$/) {
-          if (in_main && !theme_written) {
-            print "theme = " theme
-            theme_written = 1
-          }
-          print $0
-          in_main = 1
-          main_seen = 1
-          next
-        }
-        if (in_main && $0 ~ /^\[[^]]+\][[:space:]]*$/) {
-          if (!theme_written) {
-            print "theme = " theme
-            theme_written = 1
-          }
-          in_main = 0
-        }
-        if (in_main && $0 ~ /^[[:space:]]*theme[[:space:]]*[:=][[:space:]]*/) {
-          if (!theme_written) {
-            print "theme = " theme
-            theme_written = 1
-          }
-          next
-        }
-        print $0
-      }
-      END {
-        if (in_main && !theme_written) {
-          print "theme = " theme
-          theme_written = 1
-        }
-        if (!main_seen) {
-          if (NR > 0) {
-            print ""
-          }
-          print "[main]"
-          print "theme = " theme
-        }
-      }
-    ' "${KS_CONFIG_FILE}" > "${tmp_cfg}"
-    mv "${tmp_cfg}" "${KS_CONFIG_FILE}"
+  if [ "${APPLY_THEME}" = "1" ]; then
+    set_ks_main_key "${KS_CONFIG_FILE}" "theme" "${KS_THEME}"
   fi
+  if [ "${APPLY_LANGUAGE}" = "1" ]; then
+    set_ks_main_key "${KS_CONFIG_FILE}" "language" "${KS_LANGUAGE}"
+  fi
+
   chown "${PI_USER}:${grp}" "${KS_CONFIG_FILE}" || true
   THEME_CONFIG_UPDATED=1
 else
-  log_info "klipperscreen-theme: theme switch skipped (TREED_KS_THEME=${KS_THEME:-empty})"
+  log_info "klipperscreen-theme: config update skipped (TREED_KS_THEME=${KS_THEME:-empty}, TREED_KS_LANGUAGE=${KS_LANGUAGE:-empty})"
 fi
 
 if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
@@ -250,4 +277,4 @@ else
   log_warn "klipperscreen-theme: KlipperScreen.service not found, restart skipped"
 fi
 
-log_info "klipperscreen-theme: OK (theme=${TREED_THEME_NAME}, deployed=${THEME_DEPLOYED}, config_updated=${THEME_CONFIG_UPDATED}, selected=${KS_THEME})"
+log_info "klipperscreen-theme: OK (theme=${TREED_THEME_NAME}, deployed=${THEME_DEPLOYED}, config_updated=${THEME_CONFIG_UPDATED}, selected_theme=${KS_THEME}, selected_language=${KS_LANGUAGE})"

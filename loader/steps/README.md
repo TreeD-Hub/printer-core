@@ -88,6 +88,7 @@ KlipperScreen:
 - `TREED_KLIPPERSCREEN_HOME` — путь к каталогу установки KlipperScreen.
   Если не задан, шаги KlipperScreen пытаются взять `WorkingDirectory` из `KlipperScreen.service`, fallback — `${PI_HOME}/KlipperScreen`.
 - `TREED_KS_THEME` — тема KlipperScreen (`treed-oled`, `material-dark`, `keep`).
+- `TREED_KS_LANGUAGE` — язык интерфейса KlipperScreen (по умолчанию `ru`, `keep` — не менять `language` в `KlipperScreen.conf`).
 - `TREED_KLIPPERSCREEN_REQUIRED=1` — сделать проверки KlipperScreen обязательными в `verify`.
 
 Time/NTP:
