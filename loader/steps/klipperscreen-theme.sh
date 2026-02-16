@@ -49,6 +49,59 @@ if [ ! -f "${THEME_SRC}/style.css" ]; then
   exit 1
 fi
 
+extract_required_theme_icons() {
+  local style_file="$1"
+  if [ ! -f "${style_file}" ]; then
+    return 0
+  fi
+
+  grep -Eo "images/[^\"' )?#;]+" "${style_file}" 2>/dev/null \
+    | sed 's|^images/||' \
+    | sort -u
+}
+
+missing_required_icons() {
+  local images_dir="$1"
+  local required_icons="$2"
+  local icon=""
+
+  while IFS= read -r icon; do
+    [ -z "${icon}" ] && continue
+    if [ ! -f "${images_dir}/${icon}" ]; then
+      printf '%s\n' "${icon}"
+    fi
+  done <<< "${required_icons}"
+}
+
+REQUIRED_THEME_ICONS="$(extract_required_theme_icons "${THEME_SRC}/style.css" || true)"
+if [ -n "${REQUIRED_THEME_ICONS}" ]; then
+  log_info "klipperscreen-theme: required theme icons from style.css: $(printf '%s' "${REQUIRED_THEME_ICONS}" | tr '\n' ' ')"
+else
+  log_info "klipperscreen-theme: no explicit images/* references in ${THEME_SRC}/style.css"
+fi
+
+icon_pack_is_usable() {
+  local candidate="$1"
+  local missing=""
+
+  if [ ! -d "${candidate}" ]; then
+    return 1
+  fi
+  if [ -z "$(find "${candidate}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+    return 1
+  fi
+  if [ -z "${REQUIRED_THEME_ICONS}" ]; then
+    return 0
+  fi
+
+  missing="$(missing_required_icons "${candidate}" "${REQUIRED_THEME_ICONS}" || true)"
+  if [ -n "${missing}" ]; then
+    return 1
+  fi
+
+  return 0
+}
+
 find_fallback_icon_pack() {
   local candidate=""
 
@@ -57,22 +110,19 @@ find_fallback_icon_pack() {
     "${KS_STYLES_DIR}/material-light/images" \
     "${KS_STYLES_DIR}/z-bolt/images"
   do
-    if [ -d "${candidate}" ] \
-      && [ -n "$(find "${candidate}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
+    if icon_pack_is_usable "${candidate}"; then
       printf '%s\n' "${candidate}"
       return 0
     fi
   done
 
-  candidate="$(
-    find "${KS_STYLES_DIR}" -mindepth 2 -maxdepth 2 -type d -name images 2>/dev/null \
-      | head -n 1 || true
-  )"
-  if [ -n "${candidate}" ] \
-    && [ -n "$(find "${candidate}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
-    printf '%s\n' "${candidate}"
-    return 0
-  fi
+  while IFS= read -r candidate; do
+    [ -z "${candidate}" ] && continue
+    if icon_pack_is_usable "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done < <(find "${KS_STYLES_DIR}" -mindepth 2 -maxdepth 2 -type d -name images 2>/dev/null)
 
   return 1
 }
@@ -110,6 +160,13 @@ if [ -n "${KS_THEME}" ] && [ "${KS_THEME}" != "keep" ]; then
       || [ -z "$(find "${THEME_DST}/images" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
       log_error "klipperscreen-theme: requested theme ${TREED_THEME_NAME} but icon pack is missing (${THEME_DST}/images)"
       exit 1
+    fi
+    if [ -n "${REQUIRED_THEME_ICONS}" ]; then
+      missing_icons="$(missing_required_icons "${THEME_DST}/images" "${REQUIRED_THEME_ICONS}" || true)"
+      if [ -n "${missing_icons}" ]; then
+        log_error "klipperscreen-theme: requested theme ${TREED_THEME_NAME} missing required icons: $(printf '%s' "${missing_icons}" | tr '\n' ' ')"
+        exit 1
+      fi
     fi
   fi
 

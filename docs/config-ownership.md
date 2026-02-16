@@ -85,7 +85,7 @@ Runtime-скрипты камеры:
 - source: `klipperscreen/themes/treed-oled/*`
 - deploy: `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/*`
 - владелец: `loader/steps/klipperscreen-theme.sh`
-- примечание: если в теме нет `images/`, шаг добавляет fallback icon-pack из доступной стоковой темы KlipperScreen.
+- примечание: если в теме нет `images/`, шаг подбирает fallback icon-pack из доступной стоковой темы KlipperScreen так, чтобы закрыть обязательные `images/*`-ссылки из `style.css`.
 
 По умолчанию `TREED_KLIPPERSCREEN_HOME` определяется из `WorkingDirectory` сервиса `KlipperScreen.service`, fallback — `/home/pi/KlipperScreen`.
 

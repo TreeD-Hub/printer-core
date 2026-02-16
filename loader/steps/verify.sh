@@ -45,6 +45,30 @@ read_klipperscreen_main_theme() {
   ' "${cfg}"
 }
 
+extract_required_theme_icons() {
+  local style_file="$1"
+  if [ ! -f "${style_file}" ]; then
+    return 0
+  fi
+
+  grep -Eo "images/[^\"' )?#;]+" "${style_file}" 2>/dev/null \
+    | sed 's|^images/||' \
+    | sort -u
+}
+
+missing_required_icons() {
+  local images_dir="$1"
+  local required_icons="$2"
+  local icon=""
+
+  while IFS= read -r icon; do
+    [ -z "${icon}" ] && continue
+    if [ ! -f "${images_dir}/${icon}" ]; then
+      printf '%s\n' "${icon}"
+    fi
+  done <<< "${required_icons}"
+}
+
 check_required_service_active() {
   local unit="$1"
   local state=""
@@ -527,8 +551,16 @@ elif [ "${KS_SERVICE_PRESENT}" = "1" ]; then
   fi
 
   if [ "${TREED_KS_THEME_EXPECTED}" = "treed-oled" ]; then
+    required_ks_icons=""
+    missing_ks_icons=""
     if [ -f "${KS_THEME_RUNTIME_STYLE}" ]; then
       pass "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
+      required_ks_icons="$(extract_required_theme_icons "${KS_THEME_RUNTIME_STYLE}" || true)"
+      if [ -n "${required_ks_icons}" ]; then
+        pass "KlipperScreen treed-oled style icon refs parsed"
+      else
+        log_info "VERIFY KlipperScreen treed-oled: no explicit images/* refs in style (${KS_THEME_RUNTIME_STYLE})"
+      fi
     else
       failf "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
     fi
@@ -537,6 +569,14 @@ elif [ "${KS_SERVICE_PRESENT}" = "1" ]; then
       pass "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
     else
       failf "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
+    fi
+    if [ -n "${required_ks_icons}" ]; then
+      missing_ks_icons="$(missing_required_icons "${KS_THEME_RUNTIME_IMAGES_DIR}" "${required_ks_icons}" || true)"
+      if [ -z "${missing_ks_icons}" ]; then
+        pass "KlipperScreen treed-oled required icons present"
+      else
+        failf "KlipperScreen treed-oled required icons present (missing=$(printf '%s' "${missing_ks_icons}" | tr '\n' ' '))"
+      fi
     fi
   fi
 else
