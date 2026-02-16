@@ -41,6 +41,14 @@ sudo TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT}" \
 sudo reboot
 ```
 
+## Перечень оборудования:
+
+- Контроллер принтера (RN): `MKS Robin Nano v1.2`.
+- SBC: `Raspberry Pi 3 Model B Rev 1.2` (MainsailOS).
+- Блок питания принтера: `24V 15A` (текущий выход `24.4V`).
+- Понижайка питания Raspberry Pi: `5.25V`
+- Камера: `USB 2.0 Camera (Sonix)`, рабочий поток через `crowsnest`/`mjpegstreamer`.
+
 ## Карта слоев
 
 1. Репозиторий (source of truth)
