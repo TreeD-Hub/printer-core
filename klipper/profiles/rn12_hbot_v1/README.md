@@ -35,6 +35,16 @@
 10. `ui.cfg`
 11. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
+Опциональные include (по умолчанию отключены в `klipper/printer.cfg`):
+- `optional_idle_timeout.cfg`
+- `optional_input_shaper.cfg`
+- `optional_resonance_tester.cfg`
+- `optional_bed_mesh.cfg`
+- `optional_safe_z_home.cfg`
+- `optional_screws_tilt_adjust.cfg`
+- `optional_homing_heaters.cfg`
+- `optional_service_fans.cfg`
+
 ## Карта файлов профиля
 
 - `mcu_rn12.cfg` — подключение к MCU (serial + restart method, transport `usb|uart`).
@@ -48,6 +58,14 @@
 - `macros.cfg` — пользовательские макросы печати и камеры (`PAUSE`: park + `E-5` + `140C` + hold motors; `RESUME`: прогрев + `E+50` + `G10` + круговой wipe).
 - `ui.cfg` — интерфейсные блоки для Mainsail/Fluidd.
 - `filament_sensor.cfg` — опциональный шаблон датчика филамента (по умолчанию не подключен).
+- `optional_idle_timeout.cfg` — опциональный `[idle_timeout]`.
+- `optional_input_shaper.cfg` — опциональный `[input_shaper]` (резонансная компенсация).
+- `optional_resonance_tester.cfg` — опциональный шаблон `[resonance_tester]` (ADXL).
+- `optional_bed_mesh.cfg` — опциональный шаблон `[bed_mesh]`.
+- `optional_safe_z_home.cfg` — опциональный шаблон `[safe_z_home]`.
+- `optional_screws_tilt_adjust.cfg` — опциональный шаблон `[screws_tilt_adjust]`.
+- `optional_homing_heaters.cfg` — опциональный шаблон `[homing_heaters]`.
+- `optional_service_fans.cfg` — опциональные шаблоны `[heater_fan]`/`[controller_fan]`.
 
 ## Как это разворачивается loader-ом
 
