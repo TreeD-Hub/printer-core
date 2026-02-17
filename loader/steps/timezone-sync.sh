@@ -10,6 +10,13 @@ TREED_SET_TIMEZONE="${TREED_SET_TIMEZONE:-1}"
 TREED_TIMEZONE="${TREED_TIMEZONE:-Europe/Moscow}"
 TREED_ENABLE_NTP="${TREED_ENABLE_NTP:-1}"
 
+# Нормализуем timezone (убираем CR/LF и пробелы по краям).
+TREED_TIMEZONE="$(printf '%s' "${TREED_TIMEZONE}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+if [ -z "${TREED_TIMEZONE}" ]; then
+  log_error "timezone-sync: TREED_TIMEZONE is empty after normalization"
+  exit 1
+fi
+
 is_true() {
   case "${1:-}" in
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
@@ -25,9 +32,18 @@ fi
 timezone_changed=0
 
 if is_true "${TREED_SET_TIMEZONE}"; then
-  if ! timedatectl list-timezones 2>/dev/null | grep -Fxq "${TREED_TIMEZONE}"; then
+  # Основная проверка через timedatectl, fallback — через /usr/share/zoneinfo
+  # (на случай временной недоступности timedated/dbus).
+  if tz_list="$(timedatectl list-timezones 2>/dev/null)"; then
+    if ! printf '%s\n' "${tz_list}" | grep -Fxq "${TREED_TIMEZONE}"; then
+      log_error "timezone-sync: invalid timezone '${TREED_TIMEZONE}'"
+      exit 1
+    fi
+  elif [ ! -f "/usr/share/zoneinfo/${TREED_TIMEZONE}" ]; then
     log_error "timezone-sync: invalid timezone '${TREED_TIMEZONE}'"
     exit 1
+  else
+    log_warn "timezone-sync: timedatectl list-timezones unavailable, validated timezone via /usr/share/zoneinfo"
   fi
 
   current_tz="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
