@@ -55,7 +55,7 @@
 - `bed_heater_dc.cfg` — нагрев стола (DC), лимиты и verify_heater.
 - `fans.cfg` — вентиляторы.
 - `beeper.cfg` — бипер (M300/BEEP, стартовая мелодия один раз за загрузку ОС).
-- `macros.cfg` — пользовательские макросы печати и камеры (`PAUSE`: park + `E-5` + `140C` + hold motors; `RESUME`: прогрев + `E+50` + `G10` + круговой wipe).
+- `macros.cfg` — пользовательские макросы печати и камеры (`PAUSE`: park + `E-5` + `140C` + hold motors; `RESUME`: прогрев + `E+50` + `G10` + круговой wipe; `TREED_SAVE_CONFIG`: безопасный `SAVE_CONFIG` из KS/веб-морды, блокируется в `printing/paused`).
 - `ui.cfg` — интерфейсные блоки для Mainsail/Fluidd.
 - `filament_sensor.cfg` — опциональный шаблон датчика филамента (по умолчанию не подключен).
 - `optional_idle_timeout.cfg` — опциональный `[idle_timeout]`.
