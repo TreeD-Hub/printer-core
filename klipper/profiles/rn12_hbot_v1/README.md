@@ -55,7 +55,7 @@
 - `bed_heater_dc.cfg` — нагрев стола (DC), лимиты и verify_heater.
 - `fans.cfg` — вентиляторы.
 - `beeper.cfg` — бипер (M300/BEEP, стартовая мелодия один раз за загрузку ОС).
-- `macros.cfg` — пользовательские макросы печати и камеры (`PAUSE`: park + `E-5` + `140C` + hold motors; `RESUME`: прогрев + `E+50` + `G10` + круговой wipe; `TREED_SAVE_CONFIG`: безопасный `SAVE_CONFIG` из KS/веб-морды, блокируется в `printing/paused`).
+- `macros.cfg` — пользовательские макросы печати и камеры (`TREED_PRINT_AREA_CFG`: смещение и размер печатной зоны в конфиге, по умолчанию `offset Y+65`, `size 245x180`; `TREED_PAUSE_PARK_CFG`: парковка `PAUSE/M600` в минимуме полной механики; `PAUSE`: park + `E-5` + `140C` + hold motors; `RESUME`: прогрев + `E+50` + `G10` + круговой wipe; `CLEAR_PAUSE`: сбрасывает паузу и возвращает рабочий print-offset; `TREED_SAVE_CONFIG`: безопасный `SAVE_CONFIG` из KS/веб-морды, блокируется в `printing/paused`).
 - `ui.cfg` — интерфейсные блоки для Mainsail/Fluidd.
 - `filament_sensor.cfg` — опциональный шаблон датчика филамента (по умолчанию не подключен).
 - `optional_idle_timeout.cfg` — опциональный `[idle_timeout]`.
@@ -66,6 +66,10 @@
 - `optional_screws_tilt_adjust.cfg` — опциональный шаблон `[screws_tilt_adjust]`.
 - `optional_homing_heaters.cfg` — опциональный шаблон `[homing_heaters]`.
 - `optional_service_fans.cfg` — опциональные шаблоны `[heater_fan]`/`[controller_fan]`.
+
+Контракт со слайсером для текущей схемы смещения:
+- смещение в слайсере не задается (X=0, Y=0);
+- размер стола в слайсере должен соответствовать `TREED_PRINT_AREA_CFG.print_size_x/print_size_y` (по умолчанию `245x180`).
 
 ## Как это разворачивается loader-ом
 
