@@ -1,91 +1,130 @@
 # Профиль `rn12_hbot_v1` (MKS Robin Nano 1.2)
 
-Этот профиль описывает рабочую конфигурацию Klipper для TreeD и разворачивается активным loader-пайплайном.
+Профиль описывает рабочую конфигурацию Klipper для RN12 и раскладывается loader-пайплайном в runtime (`/home/pi/printer_data/config`).
 
-## Зачем конфиг разбит на несколько файлов
-
-Раньше все обычно лежит в одном большом `printer.cfg`, из-за чего сложно:
-- быстро найти нужный параметр;
-- безопасно менять один узел без риска зацепить другой;
-- понимать границы ответственности.
-
-В этом профиле выбран модульный подход:
-- один файл = одна зона ответственности;
-- базовая точка входа остается единой (`klipper/printer.cfg`);
-- локальные правки устройства отделены от репозитория.
-
-Отдельно важно:
-- параметры осей X/Y/Z (моторы, концевики, границы) собраны в одном файле `steppers.cfg`;
-- разнесение одной оси по нескольким файлам не используется.
-
-## Точка входа и порядок include
+## Точка входа и include-цепочка
 
 Точка входа: `klipper/printer.cfg`.
 
-Текущая include-цепочка для профиля:
-1. `mcu_rn12.cfg`
-2. `printer_base.cfg`
-3. `gcode_features.cfg`
-4. `steppers.cfg`
-5. `extruder.cfg`
-6. `bed_heater_dc.cfg`
-7. `fans.cfg`
-8. `beeper.cfg`
-9. `macros.cfg`
-10. `ui.cfg`
+Текущий порядок include:
+1. `profiles/rn12_hbot_v1/mcu_rn12.cfg`
+2. `profiles/rn12_hbot_v1/printer_base.cfg`
+3. `profiles/rn12_hbot_v1/gcode_features.cfg`
+4. `profiles/rn12_hbot_v1/steppers.cfg`
+5. `profiles/rn12_hbot_v1/extruder.cfg`
+6. `profiles/rn12_hbot_v1/bed_heater_dc.cfg`
+7. `profiles/rn12_hbot_v1/fans.cfg`
+8. `profiles/rn12_hbot_v1/beeper.cfg`
+9. `profiles/rn12_hbot_v1/macros.cfg`
+10. `profiles/rn12_hbot_v1/ui.cfg`
 11. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
-Опциональные include (по умолчанию отключены в `klipper/printer.cfg`):
-- `optional_idle_timeout.cfg`
-- `optional_input_shaper.cfg`
-- `optional_resonance_tester.cfg`
-- `optional_bed_mesh.cfg`
-- `optional_safe_z_home.cfg`
-- `optional_screws_tilt_adjust.cfg`
-- `optional_homing_heaters.cfg`
-- `optional_service_fans.cfg`
+## Макросы: публичный интерфейс и private-слой
 
-## Карта файлов профиля
+`macros.cfg` не содержит логику и остается агрегатором include-файлов.  
+Точка входа и контракт не изменены: `printer.cfg -> macros.cfg`.
 
-- `mcu_rn12.cfg` — подключение к MCU (serial + restart method, transport `usb|uart`).
-- `printer_base.cfg` — кинематика и базовые лимиты принтера.
-- `gcode_features.cfg` — совместимость G-code: `G2/G3`, `G10/G11`, `M486`; `M600` = пауза + выгрузка филамента.
-- `steppers.cfg` — полные параметры осей X/Y/Z.
-- `extruder.cfg` — экструдер, хотэнд, PID и ограничения подачи.
-- `bed_heater_dc.cfg` — нагрев стола (DC), лимиты и verify_heater.
-- `fans.cfg` — вентиляторы.
-- `beeper.cfg` — бипер (M300/BEEP, стартовая мелодия один раз за загрузку ОС).
-- `macros.cfg` — пользовательские макросы печати и камеры (`TREED_PRINT_AREA_CFG`: смещение и размер печатной зоны в конфиге, по умолчанию `offset Y+65`, `size 245x180`; `TREED_PAUSE_PARK_CFG`: парковка `PAUSE/M600` в минимуме полной механики; `PAUSE`: park + `E-5` + `140C` + hold motors; `RESUME`: прогрев + `E+50` + `G10` + круговой wipe; `CLEAR_PAUSE`: сбрасывает паузу и возвращает рабочий print-offset; `TREED_SAVE_CONFIG`: безопасный `SAVE_CONFIG` из KS/веб-морды, блокируется в `printing/paused`).
-- `ui.cfg` — интерфейсные блоки для Mainsail/Fluidd.
-- `filament_sensor.cfg` — опциональный шаблон датчика филамента (по умолчанию не подключен).
-- `optional_idle_timeout.cfg` — опциональный `[idle_timeout]`.
-- `optional_input_shaper.cfg` — опциональный `[input_shaper]` (резонансная компенсация).
-- `optional_resonance_tester.cfg` — опциональный шаблон `[resonance_tester]` (ADXL).
-- `optional_bed_mesh.cfg` — опциональный шаблон `[bed_mesh]`.
-- `optional_safe_z_home.cfg` — опциональный шаблон `[safe_z_home]`.
-- `optional_screws_tilt_adjust.cfg` — опциональный шаблон `[screws_tilt_adjust]`.
-- `optional_homing_heaters.cfg` — опциональный шаблон `[homing_heaters]`.
-- `optional_service_fans.cfg` — опциональные шаблоны `[heater_fan]`/`[controller_fan]`.
+Порядок модулей внутри `macros.cfg`:
+1. `macros_core.cfg`
+2. `macros_camera.cfg`
+3. `macros_print_flow.cfg`
+4. `macros_pause_resume.cfg`
+5. `macros_filament.cfg`
+6. `macros_utils.cfg`
 
-Контракт со слайсером для текущей схемы смещения:
-- смещение в слайсере не задается (X=0, Y=0);
-- размер стола в слайсере должен соответствовать `TREED_PRINT_AREA_CFG.print_size_x/print_size_y` (по умолчанию `245x180`).
+### Публичные макросы (для оператора)
+- `START_PRINT`
+- `END_PRINT`
+- `PAUSE`
+- `RESUME`
+- `CANCEL_PRINT`
+- `LOAD_FILAMENT`
+- `UNLOAD_FILAMENT`
+- `TREED_SAVE_CONFIG`
+- `M600` (определен в `gcode_features.cfg`)
+- `M300` (ручной сигнал бипера)
+- `BEEP` (короткий алиас на `M300`)
 
-## Как это разворачивается loader-ом
+### Служебные системные
+- `CLEAR_PAUSE` — override штатной команды Klipper, оставлен публичным для безопасного восстановления pause-state.
+- `TREED_BEEPER` — контейнер параметров бипера (`enabled/volume`), не команда оператора.
+- `TREED_CHIME_BOOT` — сервисный проигрыш стартовой мелодии.
+- `TREED_BOOT_CHIME` (`[delayed_gcode]`) — автозапуск проверок и стартовой мелодии при старте Klipper.
 
-1. `loader/steps/klipper-sync.sh` копирует `klipper/` в staging: `/home/pi/treed/klipper`.
-2. `loader/steps/klipper-profiles.sh` подставляет актуальный `serial:` в `mcu_rn12.cfg` по `TREED_MCU_TRANSPORT`.
-3. `loader/steps/klipper-core.sh` раскладывает дерево в runtime: `/home/pi/printer_data/config`.
+### Внутренние private-макросы (не для ручного запуска)
+- `_TREED_PRINT_DEFAULTS`
+- `_TREED_PRINT_AREA_CFG`
+- `_TREED_RESTORE_PRINT_OFFSET`
+- `_TREED_PAUSE_PARK_CFG`
+- `_TREED_PAUSE_STATE`
+- `_TREED_START_STATE`
+- `_TREED_PAUSE_EXEC_STATE`
+- `_TREED_RESUME_WIPE_STATE`
+- `_TREED_CAM_STATE`
+- `_TREED_CAM_TICK` (`[delayed_gcode]`)
+- `_TREED_CAM_START`
+- `_TREED_CAM_STOP`
+- `_TREED_START_PREP_STATE`
+- `_TREED_START_MACHINE_PREP`
+- `_TREED_START_PREHEAT`
+- `_TREED_START_POSITION_AND_FINAL_HEAT`
+- `_TREED_START_PRIME`
+- `_TREED_START_POST_HOOKS`
+- `_TREED_PAUSE_PREP_STATE`
+- `_TREED_PAUSE_EXEC`
+- `_TREED_RESUME_PREP_WIPE`
+- `_TREED_RESUME_HEAT_PURGE_WIPE`
+- `_TREED_RESUME_FINALIZE`
+- `_TREED_RESUME_POST_HOOKS`
 
-## Локальные оверрайды
+`START_PRINT`, `PAUSE`, `RESUME` работают как тонкие оркестраторы и вызывают фазовые private-хелперы в фиксированном порядке.
 
-- Шаблон в репозитории: `klipper/local_overrides.example.cfg`.
-- Рабочий локальный файл на Pi: `local_overrides.cfg`.
-- `local_overrides.cfg` не коммитится и сохраняется при deploy шагом `klipper-core`.
+Для RN12 действует fail-fast контракт: рабочие фазы `START_PRINT/PAUSE/RESUME` требуют наличие секции `[heater_bed]`.
+Если секция отсутствует (поврежденный/неполный runtime-конфиг), макросы аварийно завершаются с ошибкой.
 
-## Источник истины
+### Временные алиасы совместимости (deprecated)
+| Старое имя | Новое имя | План удаления |
+|---|---|---|
+| `TREED_RESTORE_PRINT_OFFSET` | `_TREED_RESTORE_PRINT_OFFSET` | после `dev` + ближайший релиз в `main` |
+| `TREED_CAM_START` | `_TREED_CAM_START` | после `dev` + ближайший релиз в `main` |
+| `TREED_CAM_STOP` | `_TREED_CAM_STOP` | после `dev` + ближайший релиз в `main` |
 
-Если описание где-то расходится, верить в таком порядке:
-1. `loader/loader.sh`
-2. `docs/config-ownership.md`
-3. `klipper/printer.cfg`
+Все алиасы в таблице считаются системными и не предназначены для прямого использования оператором.
+
+## Политика `TREED_SAVE_CONFIG`
+
+`TREED_SAVE_CONFIG` блокируется только в двух случаях:
+- идет активная печать (`print_stats.state == printing`);
+- активна пауза (`pause_resume.is_paused == 1`).
+
+В остальных состояниях (`ready/idle/complete/cancelled` и т.д.) команда разрешена.
+
+Примечание по области P2-3: в этом шаге не менялись `END_PRINT` и `CANCEL_PRINT`.
+
+## G-code совместимость
+
+`gcode_features.cfg` отвечает за совместимость слайсерного G-code:
+- `G2/G3` (`[gcode_arcs]`)
+- `G10/G11` (`[firmware_retraction]`)
+- `M486` (`[exclude_object]`)
+- `M600` (обертка под текущую логику `PAUSE` + `UNLOAD_FILAMENT`)
+
+## Контракт со слайсером
+
+Смещение печатной области задается в конфиге (`_TREED_PRINT_AREA_CFG`), а не в слайсере.
+
+Ожидаемая настройка слайсера:
+- origin: `X=0`, `Y=0`
+- размер стола: равен `print_size_x/print_size_y` из `_TREED_PRINT_AREA_CFG`
+
+## Локальные override
+
+- Шаблон в репозитории: `klipper/local_overrides.example.cfg`
+- Runtime-файл на устройстве: `local_overrides.cfg`
+- `local_overrides.cfg` не коммитится и считается локальным source-of-truth для конкретного экземпляра принтера
+
+## Как это раскладывает loader
+
+1. `loader/steps/klipper-sync.sh` синхронизирует дерево `klipper/` в staging (`/home/pi/treed/klipper`)
+2. `loader/steps/klipper-profiles.sh` подставляет актуальный transport/serial в `mcu_rn12.cfg`
+3. `loader/steps/klipper-core.sh` раскладывает staging в runtime (`/home/pi/printer_data/config`)
