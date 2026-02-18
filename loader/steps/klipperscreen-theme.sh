@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: KLIPPERSCREEN THEME
+# ==========================================
+# Назначение:
+# - Разворачивает тему TreeD для KlipperScreen и шрифт темы.
+# - Поддерживает fallback ресурсов и проверку целостности темы.
+# Контур:
+# - required при наличии KlipperScreen; часть действий выполняется best-effort.
+
+# Блок 1: Библиотеки, root-права и пользовательский контекст.
 . "${REPO_DIR}/loader/lib/common.sh"
 
 log_info "Step klipperscreen-theme: deploying TreeD KlipperScreen theme"
@@ -44,6 +54,7 @@ FONT_DEPLOYED=0
 APPLY_THEME=0
 APPLY_LANGUAGE=0
 
+# Блок 2: Валидация режима деплоя и обязательных исходников темы.
 case "${DEPLOY_MODE}" in
   clean|preserve)
     ;;
@@ -71,6 +82,7 @@ if [ -n "${KS_LANGUAGE}" ] && [ "${KS_LANGUAGE}" != "keep" ]; then
 fi
 
 # Из style.css извлекаем обязательные иконки, чтобы проверить полноту набора темы.
+# Блок 3: Вспомогательные функции проверки и записи конфигурации.
 extract_required_theme_icons() {
   local style_file="$1"
   if [ ! -f "${style_file}" ]; then
@@ -234,8 +246,10 @@ deploy_treed_font() {
   FONT_DEPLOYED=1
 }
 
+# Блок 4: Деплой шрифта темы.
 deploy_treed_font
 
+# Блок 5: Деплой файлов темы и fallback-иконок.
 # Копируем тему полностью и при необходимости дополняем резервным набором иконок.
 if [ -d "${KS_STYLES_DIR}" ]; then
   ensure_dir "${THEME_DST}"
@@ -260,6 +274,7 @@ else
   log_warn "klipperscreen-theme: styles dir not found (${KS_STYLES_DIR}), theme files deploy skipped"
 fi
 
+# Блок 6: Строгая проверка и запись theme/language в KlipperScreen.conf.
 if [ "${APPLY_THEME}" = "1" ]; then
   # Строгая валидация для treed-oled: style.css, images/ и обязательные иконки должны существовать.
   if [ "${KS_THEME}" = "${TREED_THEME_NAME}" ]; then
@@ -304,6 +319,7 @@ else
   log_info "klipperscreen-theme: config update skipped (TREED_KS_THEME=${KS_THEME:-empty}, TREED_KS_LANGUAGE=${KS_LANGUAGE:-empty})"
 fi
 
+# Блок 7: Перезапуск KlipperScreen для применения темы/шрифта.
 if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
   # Перезапуск нужен, чтобы тема/язык и шрифт применились сразу.
   if systemctl is-active --quiet KlipperScreen.service; then

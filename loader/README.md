@@ -1,65 +1,69 @@
 # Loader
 
-Каталог `loader/` содержит оркестратор provisioning TreeD и шаги, которые раскладывают конфиги в runtime.
+Каталог `loader/` содержит оркестратор provisioning и шаги, которые приводят систему к целевому runtime-состоянию.
 
-## Точка входа
+## Структура
 
-- `loader/loader.sh`
+- `loader/loader.sh` — главный оркестратор.
+- `loader/lib/*.sh` — общие библиотеки функций.
+- `loader/steps/*.sh` — атомарные шаги provisioning.
 
-Базовый запуск:
+## Как работает оркестратор
 
-```bash
-cd /home/pi/treed/treed-mainshellOS
-sudo bash loader/loader.sh
-```
+`loader.sh` выполняет:
 
-## Порядок шагов
+1. Нормализацию `*.sh` в `loader/**` (убирает CRLF, выставляет executable-bit).
+2. Определение `PI_USER` / `PI_HOME` и boot-путей (`BOOT_DIR`, `CMDLINE_FILE`, `CONFIG_FILE`).
+3. Fail-fast проверку наличия `cmdline.txt` и `config.txt`.
+4. Вычисление режима деплоя (`TREED_DEPLOY_MODE_EFFECTIVE`).
+5. Последовательный запуск реестра шагов.
 
-`loader.sh` выполняет шаги строго по списку:
+Контуры выполнения:
 
-1. `check-env`
-2. `detect-rpi`
-3. `timezone-sync`
-4. `maintenance-stop`
-5. `packages-core`
-6. `boot-hdmi-config`
-7. `rpi-uart-config`
-8. `plymouth-theme-install`
-9. `plymouth-initramfs`
-10. `plymouth-initramfs-config`
-11. `plymouth-cmdline`
-12. `plymouth-systemd`
-13. `klipper-sync`
-14. `klipper-profiles`
-15. `klipper-core`
-16. `klipper-anti-shutdown`
-17. `moonraker-config`
-18. `crowsnest-webcam`
-19. `treed-cam`
-20. `klipper-mainsail-theme`
-21. `klipperscreen-install`
-22. `klipperscreen-theme`
-23. `klipperscreen-integr`
-24. `maintenance-start`
-25. `verify`
+- `required` шаг: ошибка завершает loader.
+- `optional` шаг: ошибка логируется, provisioning продолжается.
 
-## Контракт окружения
+## Реестр шагов
 
-`loader.sh` экспортирует переменные, которыми пользуются шаги:
+Порядок фиксирован и задается в `loader/loader.sh`.
+
+| # | Шаг | Тип | Назначение |
+|---|---|---|---|
+| 1 | `check-env` | required | Проверка базового окружения и контракта переменных. |
+| 2 | `detect-rpi` | required | Детект модели RPi и boot-путей. |
+| 3 | `timezone-sync` | required | Синхронизация timezone/NTP. |
+| 4 | `maintenance-stop` | required | Контролируемая остановка runtime-сервисов. |
+| 5 | `packages-core` | required | Установка базовых пакетов. |
+| 6 | `boot-hdmi-config` | required | Управляемый HDMI-блок и `gpu_mem`. |
+| 7 | `rpi-uart-config` | required | Подготовка UART-контура MCU. |
+| 8 | `plymouth-theme-install` | required | Установка темы Plymouth. |
+| 9 | `plymouth-initramfs` | required | Пересборка initramfs. |
+| 10 | `plymouth-initramfs-config` | required | Привязка initramfs в `config.txt`. |
+| 11 | `plymouth-cmdline` | required | Нормализация kernel cmdline. |
+| 12 | `plymouth-systemd` | required | Политика `getty@tty1` и unit Plymouth. |
+| 13 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
+| 14 | `klipper-profiles` | required | Применение профиля RN12 и serial-path MCU. |
+| 15 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
+| 16 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
+| 17 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
+| 18 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
+| 19 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
+| 20 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
+| 21 | `klipperscreen-install` | optional | Установка/проверка KlipperScreen. |
+| 22 | `klipperscreen-theme` | optional | Деплой темы/шрифта KlipperScreen. |
+| 23 | `klipperscreen-integr` | optional | Systemd override KlipperScreen. |
+| 24 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
+| 25 | `verify` | required | Финальная валидация всего контура. |
+
+## Ключевые переменные оркестратора
 
 - `REPO_DIR` — путь к репозиторию.
-- `PI_USER`, `PI_HOME` — целевой пользователь и его home.
-- `BOOT_DIR`, `CMDLINE_FILE`, `CONFIG_FILE` — обнаруженные boot-пути.
-- `TREED_MCU_TRANSPORT` — режим связи с MCU (`usb` или `uart`).
-- `TREED_MCU_UART_DEV` — путь UART-устройства (по умолчанию `/dev/serial0`).
-- `TREED_UART_DISABLE_BT` — отключение BT UART (`1`/`0`).
-- `TREED_KS_THEME` — тема KlipperScreen (`treed-oled`, `material-dark`, `keep`).
-- `TREED_KS_LANGUAGE` — язык интерфейса KlipperScreen (по умолчанию `ru`, `keep` — не менять текущий язык в `KlipperScreen.conf`).
-- `TREED_KLIPPERSCREEN_HOME` — путь до каталога установки KlipperScreen.
-  Если переменная не задана, путь определяется из `WorkingDirectory` сервиса `KlipperScreen.service`, fallback — `${PI_HOME}/KlipperScreen`.
-- `TREED_DEPLOY_MODE` — режим runtime-деплоя (`auto|clean|preserve`, по умолчанию `auto`).
-- `TREED_DEPLOY_MODE_EFFECTIVE` — вычисленный режим для шагов.
-- `TREED_DEPLOY_BRANCH` — определенная ветка репозитория (пусто в detached `HEAD`).
+- `PI_USER`, `PI_HOME` — целевой пользователь и его домашний каталог.
+- `BOOT_DIR`, `CMDLINE_FILE`, `CONFIG_FILE` — найденные boot-пути.
+- `TREED_MAINTENANCE_MODE` — включение maintenance-шагов (`1`/`0`).
+- `TREED_DEPLOY_MODE` — `auto|clean|preserve`.
+- `TREED_DEPLOY_MODE_EFFECTIVE` — вычисленное итоговое значение.
+- `TREED_DEPLOY_BRANCH` — обнаруженная git-ветка (пусто в detached `HEAD`).
 
 Auto-резолв для `TREED_DEPLOY_MODE=auto`:
 
@@ -67,15 +71,16 @@ Auto-резолв для `TREED_DEPLOY_MODE=auto`:
 - любая определенная не-`dev` ветка -> `preserve`
 - неопределенная ветка (`HEAD`) -> `clean`
 
-## Границы ответственности
+## Запуск
 
-- `loader.sh` оркестрирует порядок шагов и общие переменные.
-- Бизнес-логика каждого этапа находится в `loader/steps/*.sh`.
-- Общие функции вынесены в `loader/lib/*.sh`.
+```bash
+cd /home/pi/treed/treed-mainshellOS
+sudo bash loader/loader.sh
+```
 
-## Где смотреть детали
+## Смежная документация
 
-- `loader/lib/README.md` — общие библиотеки.
-- `loader/steps/README.md` — описание шагов и управляющих переменных.
-- `docs/config-ownership.md` — карта слоев и ownership runtime-артефактов.
-- `docs/rn_v12_to_klipper.md` — переход RN12 `usb -> uart`.
+- `loader/lib/README.md` — описание библиотек `loader/lib`.
+- `loader/steps/README.md` — описание шагов и env-параметров.
+- `docs/config-ownership.md` — ownership runtime-артефактов.
+- `docs/rn_v12_to_klipper.md` — детали перехода RN12 `usb -> uart`.

@@ -1,10 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: CROWSNEST WEBCAM
+# ==========================================
+# Назначение:
+# - Настраивает crowsnest и moonraker webcam-фрагмент для runtime.
+# - Применяет безопасные fallback-проверки устройства камеры.
+# Контур:
+# - required при TREED_CAMERA_REQUIRED=1, иначе best-effort.
+
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 LIB_DIR="${REPO_DIR}/loader/lib"
+# Блок 1: Библиотеки и базовая инициализация.
 source "${LIB_DIR}/common.sh"
 
+# Блок 2: Старт шага и расчет пользовательских путей.
 log_info "Step crowsnest-webcam: fixed 1024x768@10 for single USB cam"
 
 PI_USER="${PI_USER:-pi}"
@@ -32,9 +43,11 @@ CAM_RESOLUTION="${TREED_CAM_RESOLUTION:-1024x768}"
 CAM_FPS="${TREED_CAM_FPS:-10}"
 CAM_PORT="8080"
 
+# Блок 3: Подготовка каталогов конфигурации.
 ensure_dir "${CONFIG_DIR}"
 ensure_dir "${MOONRAKER_GENERATED_DIR}"
 
+# Блок 4: Вспомогательные функции выбора камеры и деплоя конфигов.
 resolve_cam_device() {
   local byid_dir="/dev/v4l/by-id"
   local allow_video0_fallback="${CAM_ALLOW_VIDEO0_FALLBACK:-0}"
@@ -215,6 +228,7 @@ apply_services() {
   fi
 }
 
+# Блок 5: Основной сценарий — resolve камеры, деплой конфигов и рестарты сервисов.
 ensure_moonraker_generated_include
 if resolve_cam_device; then
   :

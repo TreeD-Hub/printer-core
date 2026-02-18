@@ -1,51 +1,54 @@
-# Loader Libraries
+# Loader Lib
 
-Каталог `loader/lib/` содержит переиспользуемые функции для шагов loader.
+Каталог `loader/lib/` содержит общие функции, которые переиспользуются шагами из `loader/steps/`.
 
-## Файлы
+## Состав
 
-- `common.sh`
-- `rpi.sh`
-- `plymouth.sh`
+- `loader/lib/common.sh`
+- `loader/lib/rpi.sh`
+- `loader/lib/plymouth.sh`
 
 ## `common.sh`
 
-Базовые утилиты:
+Базовая библиотека loader:
 
-- логирование: `log_info`, `log_warn`, `log_error`;
-- проверки: `ensure_root`;
-- filesystem helpers: `ensure_dir`, `backup_file_once`;
-- пользователи/группы: `pi_primary_group`.
+- логирование: `log_ts`, `log_info`, `log_warn`, `log_error`;
+- проверки и файловые helper-операции: `ensure_root`, `ensure_dir`, `backup_file_once`;
+- резолв путей/пользователей:
+  - `detect_klipperscreen_home` — путь к KlipperScreen (`WorkingDirectory` -> fallback),
+  - `pi_primary_group` — primary group пользователя.
 
-Требование:
+Контракт:
 
-- при source файла должен быть задан `REPO_DIR`, иначе скрипт завершится с ошибкой.
+- перед `source` должен быть определен `REPO_DIR`;
+- при отсутствии `REPO_DIR` библиотека завершает выполнение с ошибкой.
 
 ## `rpi.sh`
 
-Функции детекта платформы и boot-путей:
+Функции для RPi/boot-детекта:
 
-- `detect_rpi_model`
-- `detect_boot_dir`
-- `detect_cmdline_file`
-- `detect_config_file`
+- `detect_rpi_model` — модель RPi.
+- `is_mounted` — проверка монтирования каталога.
+- `detect_boot_dir` — выбор актуального boot-каталога.
+- `detect_cmdline_file` — поиск `cmdline.txt`.
+- `detect_config_file` — поиск `config.txt`.
 
-Используется шагами, которые работают с `config.txt` и `cmdline.txt`.
+Используется в шагах, которые правят boot-файлы и cmdline.
 
 ## `plymouth.sh`
 
-Хелперы для Plymouth:
+Функции для контура Plymouth:
 
-- `plymouth_set_default_theme`
-- `plymouth_rebuild_initramfs`
+- `plymouth_set_default_theme` — установка default-темы;
+- `plymouth_rebuild_initramfs` — пересборка initramfs для текущего ядра.
 
-Управляющая переменная:
+Переменная:
 
 - `PLYMOUTH_THEME_NAME` (по умолчанию `treed`).
 
-## Правила для изменений
+## Правила развития библиотеки
 
-- не дублировать логику из `steps` в библиотеках;
-- добавлять только обобщаемые функции;
-- сохранять совместимость с `set -euo pipefail`;
-- для новых функций использовать явные входные параметры и проверку ошибок.
+- в `lib` держим только переиспользуемую общую логику;
+- step-специфичные операции остаются в `loader/steps/*.sh`;
+- все функции должны быть совместимы с `set -euo pipefail`;
+- новые функции принимают явные входные параметры и корректно обрабатывают ошибки.

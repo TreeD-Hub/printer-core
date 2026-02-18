@@ -1,16 +1,29 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ОРКЕСТРАТОР LOADER: MAIN ENTRYPOINT
+# ==========================================
+# Назначение:
+# - Управляет полным жизненным циклом provisioning TreeD через последовательность step-скриптов.
+# - Применяет единый fail-fast/best-effort контракт и экспортирует общий контекст шагов.
+# Контур:
+# - required-steps: любая ошибка завершает loader с ненулевым кодом,
+# - optional-steps: ошибка логируется и не прерывает provisioning.
+
+# Блок 1: Определение корня репозитория и базовой рабочей директории.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Нормализуем CRLF в loader-скриптах после Windows checkout
-# и выставляем права на исполнение.
+# Блок 2: Нормализация shell-скриптов loader после Windows checkout.
+# - Убираем CRLF для *.sh в loader/**,
+# - Восстанавливаем executable-бит для entrypoint и step-скриптов.
 if [ -d "${REPO_DIR}/loader" ]; then
   find "${REPO_DIR}/loader" -type f -name "*.sh" -print0 | xargs -0 -r sed -i 's/\r$//'
   chmod +x "${REPO_DIR}/loader/loader.sh" || true
   chmod +x "${REPO_DIR}/loader/steps/"*.sh 2>/dev/null || true
 fi
 
+# Блок 3: Определение целевого пользователя deploy и его home.
 PI_USER="${PI_USER:-${SUDO_USER:-$(id -un)}}"
 PI_HOME="$(getent passwd "$PI_USER" | cut -d: -f6 || true)"
 
@@ -19,6 +32,7 @@ if [ -z "${PI_HOME}" ] || [ ! -d "${PI_HOME}" ]; then
   exit 1
 fi
 
+# Блок 4: Экспорт общего контекста и подключение базовых библиотек.
 export REPO_DIR
 export PI_USER
 export PI_HOME
@@ -26,12 +40,13 @@ export PI_HOME
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
+# Блок 5: Определение boot-путей (BOOT_DIR/cmdline.txt/config.txt).
 BOOT_DIR="$(detect_boot_dir)"
 CMDLINE_FILE="$(detect_cmdline_file "${BOOT_DIR}")"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
 
-# Приводим BOOT_DIR к фактическому каталогу config.txt/cmdline.txt,
-# если путь удалось определить.
+# Блок 6: Нормализация BOOT_DIR до фактического каталога boot-файлов.
+# Если cmdline/config оказались в одном каталоге, считаем его источником правды.
 if [ -n "${CMDLINE_FILE}" ] && [ -n "${CONFIG_FILE}" ]; then
   cmd_dir="$(dirname "${CMDLINE_FILE}")"
   cfg_dir="$(dirname "${CONFIG_FILE}")"
@@ -44,8 +59,7 @@ elif [ -n "${CONFIG_FILE}" ]; then
   BOOT_DIR="$(dirname "${CONFIG_FILE}")"
 fi
 
-# Режим fail-fast: пустые/битые пути до boot-файлов считаем блокирующей ошибкой
-# (без silent skip).
+# Блок 7: Жесткая валидация boot-файлов (fail-fast без silent skip).
 if [ -z "${CMDLINE_FILE}" ] || [ ! -f "${CMDLINE_FILE}" ]; then
   echo "[loader] ERROR: cmdline.txt not found (BOOT_DIR=${BOOT_DIR})" >&2
   exit 1
@@ -59,9 +73,11 @@ export BOOT_DIR
 export CMDLINE_FILE
 export CONFIG_FILE
 
+# Блок 8: Глобальные режимы оркестрации (maintenance/deploy mode).
 TREED_MAINTENANCE_MODE="${TREED_MAINTENANCE_MODE:-1}"
 export TREED_MAINTENANCE_MODE
 
+# Блок 9: Helper-функция определения текущей ветки репозитория.
 resolve_repo_branch() {
   local branch=""
 
@@ -79,6 +95,11 @@ resolve_repo_branch() {
   esac
 }
 
+# Блок 10: Helper-функция вычисления эффективного deploy-режима.
+# Правило auto:
+# - ветка dev  -> clean,
+# - любая иная -> preserve,
+# - неизвестно -> clean.
 resolve_deploy_mode() {
   local raw_mode="${TREED_DEPLOY_MODE:-auto}"
   local repo_branch=""
@@ -116,46 +137,59 @@ resolve_deploy_mode() {
   export TREED_DEPLOY_BRANCH
 }
 
+# Блок 11: Подключение доп. библиотек и вычисление deploy-режима.
 . "${REPO_DIR}/loader/lib/plymouth.sh"
 resolve_deploy_mode
 
+# Блок 12: Глобальный trap ошибок.
+# Логирует имя шага, код, строку и команду, после чего завершает loader.
 trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BASH_LINENO[0]} cmd=${BASH_COMMAND}"; exit ${rc}' ERR
 
+# Блок 13: Реестр шагов оркестрации (порядок критичен).
 STEPS=(
-  "check-env"
-  "detect-rpi"
-  "timezone-sync"      # базовая синхронизация timezone/NTP для UI и сервисов
-  "maintenance-stop"   # контролируемо останавливаем runtime-сервисы перед provisioning
-  "packages-core"
-  "boot-hdmi-config"
-  "rpi-uart-config"    # подготовка UART-контура (enable_uart/serial-getty)
-  "plymouth-theme-install"
-  "plymouth-initramfs"
-  "plymouth-initramfs-config"
-  "plymouth-cmdline"
-  "plymouth-systemd"
-  "klipper-sync"       # репозиторные конфиги -> ~/treed/klipper (staging)
-  "klipper-profiles"   # фиксированный профиль + подстановка serial в staging
-  "klipper-core"       # полная раскладка klipper/ в runtime (/printer_data/config)
-  "klipper-anti-shutdown"
-  "moonraker-config"
-  "crowsnest-webcam"
-  "treed-cam"
-  "klipper-mainsail-theme"
-  "klipperscreen-install"
-  "klipperscreen-theme"
-  "klipperscreen-integr"
-  "maintenance-start"  # поднимаем критичные сервисы перед финальной проверкой
-  "verify"
+  # Предварительные проверки и подготовка окружения.
+  "check-env"                # Контракт окружения: root, PI_USER/PI_HOME, OS sanity.
+  "detect-rpi"               # Выявление boot-путей и модели RPi для последующих шагов.
+  "timezone-sync"            # Синхронизация timezone/NTP для корректного времени UI/логов.
+  "maintenance-stop"         # Остановка runtime-сервисов перед изменением конфигов.
+
+  # Системная база и boot-контур.
+  "packages-core"            # Установка базовых пакетов provisioning-контура.
+  "boot-hdmi-config"         # Управляемый HDMI-блок + контроль gpu_mem.
+  "rpi-uart-config"          # Настройка UART-транспорта MCU (enable_uart/getty/udev).
+  "plymouth-theme-install"   # Установка темы TreeD в системный каталог Plymouth.
+  "plymouth-initramfs"       # Пересборка initramfs с активной темой Plymouth.
+  "plymouth-initramfs-config" # Привязка initramfs строки в config.txt.
+  "plymouth-cmdline"         # Нормализация kernel cmdline (splash/UART).
+  "plymouth-systemd"         # Политика getty@tty1 и unit-цепочки Plymouth.
+
+  # Конфигурация Klipper/Moonraker/камера/UI.
+  "klipper-sync"             # Репозиторные конфиги -> staging: ~/treed/klipper.
+  "klipper-profiles"         # Применение профиля RN12 и serial-path MCU в staging.
+  "klipper-core"             # Раскладка staging -> runtime: ~/printer_data/config.
+  "klipper-anti-shutdown"    # Сброс MCU shutdown при обнаружении после раскладки.
+  "moonraker-config"         # Деплой moonraker.conf/base/generated и shell-компонента.
+  "crowsnest-webcam"         # Деплой камеры (crowsnest + moonraker webcam fragment).
+  "treed-cam"                # Runtime-скрипты TreeD камеры в ~/treed/cam.
+  "klipper-mainsail-theme"   # Синхронизация темы Mainsail в runtime-конфиг.
+  "klipperscreen-install"    # Установка/health-check KlipperScreen.
+  "klipperscreen-theme"      # Деплой темы/шрифта и обновление KlipperScreen.conf.
+  "klipperscreen-integr"     # Systemd override KlipperScreen для корректного splash.
+
+  # Финализация и контроль.
+  "maintenance-start"        # Запуск required/best-effort сервисов после provisioning.
+  "verify"                   # Финальная валидация всего контура (must-pass).
 )
 
+# Блок 14: Явный список optional-шагов (не прерывают provisioning при ошибке).
 OPTIONAL_STEPS=(
-  "crowsnest-webcam"
-  "klipperscreen-install"
-  "klipperscreen-theme"
-  "klipperscreen-integr"
+  "crowsnest-webcam"         # Камера может быть недоступна на конкретном хосте.
+  "klipperscreen-install"    # UI-слой допускается как best-effort.
+  "klipperscreen-theme"      # Темизация UI не блокирует базовый запуск принтера.
+  "klipperscreen-integr"     # Integr override применяется по возможности.
 )
 
+# Блок 15: Helper-проверка принадлежности шага к optional-контуру.
 is_optional_step() {
   local step_name="$1"
   local opt=""
@@ -167,6 +201,8 @@ is_optional_step() {
   return 1
 }
 
+# Блок 16: Унифицированный запуск step-скрипта.
+# Если у файла нет executable-бита, запускаем через bash явно.
 run_step_script() {
   local script_path="$1"
   if [ -x "${script_path}" ]; then
@@ -176,14 +212,20 @@ run_step_script() {
   fi
 }
 
+# Блок 17: Стартовая диагностика оркестратора.
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, CMDLINE_FILE=${CMDLINE_FILE}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
 log_info "TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE}, TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}, TREED_DEPLOY_BRANCH=${TREED_DEPLOY_BRANCH:-unknown}"
 
+# Блок 18: Основной цикл выполнения шагов по реестру STEPS.
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"
   script="${REPO_DIR}/loader/steps/${step}.sh"
+
+  # Валидация существования step-скрипта:
+  # - optional: предупреждение + пропуск,
+  # - required: немедленная ошибка.
   if [ ! -f "${script}" ]; then
     if is_optional_step "${step}"; then
       log_warn "Optional step script not found: ${script} (skipping)"
@@ -193,6 +235,9 @@ for step in "${STEPS[@]}"; do
     exit 1
   fi
 
+  # Контур выполнения:
+  # - optional step: ошибка не блокирует общий результат,
+  # - required step: ошибка прерывает loader (через trap/exit).
   if is_optional_step "${step}"; then
     log_info "Running optional step: ${step}"
     if run_step_script "${script}"; then
@@ -207,4 +252,5 @@ for step in "${STEPS[@]}"; do
   fi
 done
 
+# Блок 19: Успешное завершение полного контура provisioning.
 log_info "TreeD loader finished successfully"

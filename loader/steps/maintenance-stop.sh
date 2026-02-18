@@ -1,16 +1,30 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: MAINTENANCE STOP
+# ==========================================
+# Назначение:
+# - Останавливает runtime-сервисы перед provisioning.
+# - Разделяет required и best-effort контуры остановки.
+# Контур:
+# - required для базовых сервисов (klipper/moonraker),
+# - best-effort для UI/камеры.
+
+# Блок 1: Библиотеки и root-права.
 . "${REPO_DIR}/loader/lib/common.sh"
 ensure_root
 
+# Блок 2: Режим maintenance (ранний выход при отключении шага).
 if [ "${TREED_MAINTENANCE_MODE:-1}" != "1" ]; then
   log_info "Step maintenance-stop: skipped (TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE:-0})"
   exit 0
 fi
 
+# Блок 3: Старт шага и параметры остановки сервисов.
 log_info "Step maintenance-stop: stopping runtime services"
 
+# Блок 4: Списки сервисов и таймауты остановки.
 REQUIRED_SERVICES=(
   "klipper.service"
   "moonraker.service"
@@ -25,6 +39,7 @@ BEST_EFFORT_SERVICES=(
 REQUIRED_STOP_TIMEOUT="${TREED_REQUIRED_SERVICE_STOP_TIMEOUT:-20}"
 BEST_EFFORT_STOP_TIMEOUT="${TREED_BEST_EFFORT_SERVICE_STOP_TIMEOUT:-10}"
 
+# Блок 5: Вспомогательные функции (ожидание, required-stop, best-effort-stop).
 wait_service_inactive() {
   local unit="$1"
   local timeout="$2"
@@ -111,6 +126,7 @@ stop_best_effort_service() {
   fi
 }
 
+# Блок 6: Основной сценарий остановки сервисов.
 for unit in "${REQUIRED_SERVICES[@]}"; do
   stop_required_service "${unit}"
 done

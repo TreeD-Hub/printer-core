@@ -1,12 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: KLIPPERSCREEN INSTALL
+# ==========================================
+# Назначение:
+# - Обеспечивает установку и базовую работоспособность KlipperScreen.
+# - Выполняет проверки health состояния systemd-сервиса.
+# Контур:
+# - required, если сервис уже установлен или включена принудительная установка.
+
+# Блок 1: Библиотеки и root-права.
 . "${REPO_DIR}/loader/lib/common.sh"
 
 ensure_root
 
+# Блок 2: Старт шага.
 log_info "Step klipperscreen-install: ensuring KlipperScreen is installed"
 
+# Блок 3: Вспомогательные функции проверки/установки KlipperScreen.
 wait_service_active() {
   local unit="$1"
   local timeout="${2:-30}"
@@ -65,6 +77,7 @@ checkout_klipperscreen_ref() {
   sudo -u "${PI_USER}" -H git -C "${dst_dir}" checkout --detach FETCH_HEAD >/dev/null
 }
 
+# Блок 4: Основной сценарий установки и health-check.
 PI_USER="${PI_USER:-${SUDO_USER:-pi}}"
 PI_HOME="${PI_HOME:-$(getent passwd "${PI_USER}" | cut -d: -f6 || true)}"
 

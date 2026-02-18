@@ -1,8 +1,18 @@
+# ==========================================
+# PLYMOUTH THEME MANIFEST: TREED
+# ==========================================
+# Назначение:
+# - Объявляет метаданные темы и script-модуль рендера.
+# Контур:
+# - путь и имя script-файла должны совпадать с runtime-раскладкой loader.
+
+# Блок 1: Паспорт темы Plymouth.
 [Plymouth Theme]
 Name=treed
 Description=TreeD boot splash
 ModuleName=script
 
+# Блок 2: Путь до script-ресурсов темы.
 [script]
 ImageDir=/usr/share/plymouth/themes/treed
 ScriptFile=/usr/share/plymouth/themes/treed/treed.script

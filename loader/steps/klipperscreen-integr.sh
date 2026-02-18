@@ -1,8 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: KLIPPERSCREEN INTEGR
+# ==========================================
+# Назначение:
+# - Настраивает systemd override для интеграции KlipperScreen.
+# - Применяет изменения идемпотентно и перезагружает daemon.
+# Контур:
+# - required при наличии KlipperScreen.service.
+
+# Блок 1: Библиотеки и базовые параметры шага.
 . "${REPO_DIR}/loader/lib/common.sh"
 
+# Блок 2: Старт шага и параметры override/systemd.
 log_info "Step klipperscreen-integr: configuring KlipperScreen systemd override"
 
 OVERRIDE_DIR="/etc/systemd/system/KlipperScreen.service.d"
@@ -10,6 +21,7 @@ OVERRIDE_FILE="${OVERRIDE_DIR}/override.conf"
 KS_UNIT="KlipperScreen.service"
 KS_TIMEOUT="${TREED_KLIPPERSCREEN_START_TIMEOUT:-45}"
 
+# Блок 3: Вспомогательная функция ожидания активного состояния сервиса.
 wait_service_active() {
   local unit="$1"
   local timeout="$2"
@@ -25,6 +37,7 @@ wait_service_active() {
   return 1
 }
 
+# Блок 4: Основной сценарий применения override и перезапуска сервиса.
 ensure_root
 ensure_dir "${OVERRIDE_DIR}"
 backup_file_once "${OVERRIDE_FILE}"

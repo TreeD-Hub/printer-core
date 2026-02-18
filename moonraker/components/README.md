@@ -1,18 +1,34 @@
 # Moonraker Components
 
-Папка для кастомных компонентов Moonraker, которые устанавливает лоадер.
+Каталог для кастомных компонентов Moonraker, которые деплоятся loader.
 
-Текущий компонент:
+## Состав
+
 - `treed_shell_command.py`
 
-Назначение `treed_shell_command.py`:
-- добавляет интеграцию shell_command для вызовов из макросов Klipper;
-- используется в связке с командами камеры (`treed_cam_*`).
+## Назначение `treed_shell_command.py`
 
-Деплой:
+- читает секции `[shell_command <name>]` из Moonraker-конфига;
+- регистрирует remote method `machine.shell_command`;
+- выполняет команды асинхронно через стандартный Moonraker `shell_command` factory;
+- безопасно экранирует параметры (`shlex.quote`) перед запуском.
+
+## Интеграция
+
+- конфиг-секции объявляются в `moonraker/base/00-core.conf`;
+- текущие команды используются для camera runtime:
+  - `treed_cam_session_start`
+  - `treed_cam_snapshot`
+  - `treed_cam_session_stop`
+- скрипты команд лежат в `runtime-scripts/treed-cam/*`.
+
+## Деплой
+
 - выполняет `loader/steps/moonraker-config.sh`;
-- целевой путь определяется автоматически по установленному Moonraker.
+- путь назначения определяется автоматически по фактической установке Moonraker
+  (process path -> systemd unit -> типовые пути -> fallback поиск).
 
-Важно:
-- компонент должен оставаться совместимым с текущей версией Moonraker;
-- любые изменения проверять вместе с `moonraker/base/00-core.conf` и `runtime-scripts/treed-cam/*`.
+## Ограничения
+
+- компонент должен оставаться совместимым с текущим API Moonraker;
+- изменения компонента проверяются вместе с `moonraker/base/00-core.conf`.

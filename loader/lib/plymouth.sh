@@ -1,10 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# БИБЛИОТЕКА LOADER: PLYMOUTH
+# ==========================================
+# Назначение:
+# - Инкапсулирует операции с темой Plymouth и пересборкой initramfs.
+# - Используется шагами, где нужен единый контракт boot-визуализации.
+
+# Блок 1: Подключение общей библиотеки loader.
 . "${REPO_DIR}/loader/lib/common.sh"
 
+# Блок 2: Дефолт имени темы Plymouth (может быть переопределен env).
 PLYMOUTH_THEME_NAME="${PLYMOUTH_THEME_NAME:-treed}"
 
+# Блок 3: Установка default-темы Plymouth (best-effort).
 plymouth_set_default_theme() {
   if command -v plymouth-set-default-theme >/dev/null 2>&1; then
     plymouth-set-default-theme "${PLYMOUTH_THEME_NAME}" >/dev/null 2>&1 || true
@@ -14,6 +24,7 @@ plymouth_set_default_theme() {
   fi
 }
 
+# Блок 4: Пересборка initramfs для текущего ядра.
 plymouth_rebuild_initramfs() {
   if command -v update-initramfs >/dev/null 2>&1; then
     local kver

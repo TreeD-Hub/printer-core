@@ -1,16 +1,28 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: VERIFY
+# ==========================================
+# Назначение:
+# - Выполняет финальные post-configuration проверки provisioning-контура.
+# - Валидирует сервисы, boot-параметры, Klipper/Moonraker и optional-модули.
+# Контур:
+# - required (непрошедшие проверки завершают loader с ошибкой).
+
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
+# Блок 1: Библиотеки и базовая инициализация шага.
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
+# Блок 2: Счетчики итогов verify.
 log_info "Step verify: running post-configuration checks"
 
 ok=0
 fail=0
 
+# Блок 3: Вспомогательные функции подсчета/парсинга/проверок.
 pass() {
   log_info "VERIFY $1: ok"
   ok=$((ok+1))
@@ -208,6 +220,7 @@ moonraker_webcams_check() {
   rm -f "${tmp}"
 }
 
+# Блок 4: Подготовка boot-путей при ручном запуске verify.
 # Гарантируем BOOT_DIR / CMDLINE_FILE / CONFIG_FILE даже при ручном запуске
 if [ -z "${BOOT_DIR:-}" ]; then
   BOOT_DIR="$(detect_boot_dir)"
@@ -224,6 +237,7 @@ fi
 KVER="$(uname -r)"
 INITRD="${BOOT_DIR}/initrd.img-${KVER}"
 
+# Блок 5: Проверки initramfs и boot/config привязки.
 if [ -f "${INITRD}" ]; then
   pass "initramfs file ${INITRD}"
 else
@@ -241,7 +255,7 @@ else
   failf "config.txt (${CONFIG_FILE} missing)"
 fi
 
-
+# Блок 6: Проверки содержимого kernel cmdline.
 CMDLINE_CONTENT=""
 CMDLINE_PATH="${CMDLINE_FILE:-<empty>}"
 
@@ -271,6 +285,7 @@ else
   failf "cmdline file missing (${CMDLINE_PATH})"
 fi
 
+# Блок 7: Подготовка переменных окружения для runtime-проверок.
 PI_USER="${PI_USER:-pi}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
@@ -303,11 +318,13 @@ case "${TREED_MCU_TRANSPORT_RAW}" in
     ;;
 esac
 
+# Блок 8: Базовые проверки обязательных сервисов и API Moonraker.
 check_required_service_active "klipper.service"
 check_required_service_active "moonraker.service"
 moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
 klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
 
+# Блок 9: Проверка runtime mcu_rn12.cfg и строки serial.
 if [ -f "${MCU_CFG_RUNTIME}" ]; then
   pass "mcu config present (${MCU_CFG_RUNTIME})"
   runtime_mcu_serial="$(
@@ -324,6 +341,7 @@ else
   runtime_mcu_serial=""
 fi
 
+# Блок 10: Валидация serial-path для USB-транспорта.
 if [ "${TREED_MCU_TRANSPORT}" = "usb" ]; then
   if printf '%s' "${runtime_mcu_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
     pass "mcu transport usb serial path format"
@@ -338,6 +356,7 @@ if [ "${TREED_MCU_TRANSPORT}" = "usb" ]; then
   fi
 fi
 
+# Блок 11: Валидация UART-режима (device/getty/udev/config/cmdline).
 if [ "${TREED_MCU_TRANSPORT}" = "uart" ]; then
   if [ "${runtime_mcu_serial}" = "${TREED_MCU_UART_DEV}" ]; then
     pass "mcu transport uart serial target (${TREED_MCU_UART_DEV})"
@@ -427,6 +446,7 @@ if [ "${TREED_MCU_TRANSPORT}" = "uart" ]; then
   fi
 fi
 
+# Блок 12: Проверка политики getty@tty1 и plymouth-quit unit.
 TREED_MASK_TTY1="${TREED_MASK_TTY1:-1}"
 if out="$(systemctl is-enabled getty@tty1.service 2>&1)"; then
   rc=0
@@ -483,6 +503,7 @@ for unit in plymouth-quit.service plymouth-quit-wait.service; do
   fi
 done
 
+# Блок 13: Проверки состояния KlipperScreen (required/optional режимы).
 if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
   KS_SERVICE_PRESENT=1
 fi
@@ -583,6 +604,7 @@ else
   log_info "VERIFY KlipperScreen theme check skipped (service not installed)"
 fi
 
+# Блок 14: Проверки timezone/NTP через timedatectl.
 if command -v timedatectl >/dev/null 2>&1; then
   TREED_SET_TIMEZONE="${TREED_SET_TIMEZONE:-1}"
   TREED_TIMEZONE="${TREED_TIMEZONE:-Europe/Moscow}"
@@ -613,6 +635,7 @@ else
   failf "timedatectl present"
 fi
 
+# Блок 15: Проверка минимального gpu_mem.
 gm="$(grep -E "^gpu_mem=" "${CONFIG_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2)"
 case "${gm}" in ''|*[!0-9]*) gm=0;; esac
 
@@ -622,6 +645,7 @@ else
   failf "gpu_mem >= 96"
 fi
 
+# Блок 16: Подготовка и переключение режима camera-проверок.
 CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
 CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
 MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"
@@ -662,6 +686,7 @@ case "${TREED_VERIFY_CAMERA}" in
     ;;
 esac
 
+# Блок 17: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
 if [ "${camera_checks_enabled}" = "1" ]; then
   byid_index0_available=0
   if find /dev/v4l/by-id -maxdepth 1 -type l -name '*-video-index0' -print -quit 2>/dev/null | grep -q .; then
@@ -747,6 +772,7 @@ else
   log_info "VERIFY camera checks skipped (${camera_checks_reason})"
 fi
 
+# Блок 18: Итог verify (pass/fail счетчики).
 if [ "${fail}" -eq 0 ]; then
   log_info "verify: all ${ok} checks passed"
 else

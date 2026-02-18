@@ -1,16 +1,24 @@
 # Moonraker Base Fragments
 
-Здесь лежат базовые фрагменты Moonraker, которые деплоятся как:
-- `/home/pi/printer_data/config/moonraker/base/*.conf`
+`moonraker/base/` содержит статические базовые фрагменты Moonraker (repo-managed слой).
 
-Назначение:
-- хранить стабильные, репозиторные секции Moonraker;
-- не смешивать их с generated-фрагментами runtime.
+## Runtime-путь
 
-Текущий активный фрагмент:
-- `00-core.conf` — базовый серверный конфиг и shell_command-интеграция TreeD.
-  - команды камеры: `treed_cam_session_start`, `treed_cam_snapshot`, `treed_cam_session_stop`.
+- `${PI_HOME}/printer_data/config/moonraker/base/*.conf`
 
-Важно:
-- имена и порядок фрагментов задаются префиксами (`00-`, `10-` и т.д.);
-- изменения должны быть совместимы с `moonraker/moonraker.conf`.
+## Состав
+
+- `00-core.conf`
+  - базовый серверный конфиг Moonraker;
+  - секции авторизации и update_manager;
+  - подключение компонента `[treed_shell_command]`;
+  - runtime shell_command-команды камеры:
+    - `treed_cam_session_start`
+    - `treed_cam_snapshot`
+    - `treed_cam_session_stop`
+
+## Правила для фрагментов
+
+- порядок применения задается префиксами имен (`00-`, `10-`, ...);
+- фрагменты должны оставаться совместимыми с `moonraker/moonraker.conf`;
+- generated-конфиги в этот каталог не добавляются (они живут в `moonraker/generated` runtime-слое).

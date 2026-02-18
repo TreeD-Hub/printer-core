@@ -1,11 +1,19 @@
-# Чёрный фон
+# ==========================================
+# PLYMOUTH SCRIPT: TREED
+# ==========================================
+# Назначение:
+# - Рисует boot splash TreeD: логотип по центру + нижний прогресс-бар.
+# - Поддерживает мягкий автопрогресс и плавное завершение при quit-событии.
+
+# Блок 1: Базовый фон экрана (черный градиент без перехода).
 Window.SetBackgroundTopColor(0.0, 0.0, 0.0);
 Window.SetBackgroundBottomColor(0.0, 0.0, 0.0);
 
+# Блок 2: Геометрия экрана.
 screen_w = Window.GetWidth();
 screen_h = Window.GetHeight();
 
-# ЛОГО — по центру
+# Блок 3: Загрузка и позиционирование логотипа (центр экрана).
 logo_image  = Image("watermark.png");
 logo_sprite = Sprite(logo_image);
 
@@ -18,7 +26,7 @@ logo_y = Window.GetY() + (screen_h - logo_h) / 2;
 logo_sprite.SetPosition(logo_x, logo_y, 10);
 logo_sprite.SetOpacity(1.0);
 
-# ПРОГРЕСС-БАР — по низу, 20px
+# Блок 4: Инициализация прогресс-бара в нижней части экрана.
 progress = 0.0;
 bar_height = 20;
 bar_width  = screen_w;
@@ -32,6 +40,7 @@ bar_sprite.SetOpacity(1.0);
 
 last_width = 0;
 
+# Блок 5: Перерисовка бара при изменении ширины прогресса.
 fun update_bar ()
 {
     w = Math.Int(bar_width * progress);
@@ -45,14 +54,14 @@ fun update_bar ()
     last_width = w;
 }
 
-# МЯГКИЙ АВТОПРОГРЕСС до 0.92, если нет событий
+# Блок 6: Мягкий автопрогресс до 0.92 при отсутствии внешних событий.
 last_event_time = 0.0;
 
 fun tick ()
 {
-    # постепенно тянем к 0.92, но не переписываем реальный прогресс
+    # Плавно тянем значение к 0.92, не затирая фактический прогресс.
     if (progress < 0.92) {
-        soft = progress + 0.003; # ~0.3% / тик
+        soft = progress + 0.003; # ~0.3% за тик
         if (soft > 0.92) soft = 0.92;
         progress = soft;
         update_bar();
@@ -61,7 +70,7 @@ fun tick ()
 }
 tick();
 
-# Callbacks прогресса
+# Блок 7: Callback-функции внешнего boot-прогресса.
 fun boot_progress_callback (time, new_progress)
 {
     if (new_progress < 0.0) new_progress = 0.0;
@@ -80,7 +89,7 @@ fun boot_progress_callback_simple (new_progress)
 Plymouth.SetBootProgressFunction(boot_progress_callback);
 Plymouth.SetBootProgressFunction(boot_progress_callback_simple);
 
-# Аккуратное завершение: дорисовать до 100% и затухание
+# Блок 8: Плавное завершение (доводка до 100% + fade-out).
 fun fade_out_step ()
 {
     op = logo_sprite.GetOpacity();

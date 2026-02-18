@@ -1,19 +1,33 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: MAINTENANCE START
+# ==========================================
+# Назначение:
+# - Поднимает runtime-сервисы после provisioning.
+# - Разделяет required и best-effort контуры запуска.
+# Контур:
+# - required для базовых сервисов (klipper/moonraker),
+# - best-effort для UI/камеры.
+
+# Блок 1: Библиотеки и root-права.
 . "${REPO_DIR}/loader/lib/common.sh"
 ensure_root
 
+# Блок 2: Режим maintenance (ранний выход при отключении шага).
 if [ "${TREED_MAINTENANCE_MODE:-1}" != "1" ]; then
   log_info "Step maintenance-start: skipped (TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE:-0})"
   exit 0
 fi
 
+# Блок 3: Старт шага и параметры таймаутов запуска.
 log_info "Step maintenance-start: starting runtime services"
 
 REQUIRED_START_TIMEOUT="${TREED_REQUIRED_SERVICE_START_TIMEOUT:-30}"
 BEST_EFFORT_START_TIMEOUT="${TREED_BEST_EFFORT_SERVICE_START_TIMEOUT:-20}"
 
+# Блок 4: Вспомогательные функции (ожидание, required-start, best-effort-start).
 wait_service_active() {
   local unit="$1"
   local timeout="$2"
@@ -110,6 +124,7 @@ start_best_effort_service() {
   fi
 }
 
+# Блок 5: Основной сценарий запуска сервисов.
 start_required_service "klipper.service"
 start_required_service "moonraker.service"
 start_best_effort_service "KlipperScreen.service"

@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: KLIPPER CORE
+# ==========================================
+# Назначение:
+# - Раскладывает staging-дерево Klipper в runtime-конфиг принтера.
+# - Учитывает deploy mode и сохраняет идемпотентность шага.
+# Контур:
+# - required (формирует рабочий runtime-конфиг Klipper).
+
+# Блок 1: Библиотеки и базовые проверки пользователя.
 . "${REPO_DIR}/loader/lib/common.sh"
 
 if [ -z "${PI_USER:-}" ]; then
@@ -12,6 +22,7 @@ if ! grp="$(pi_primary_group "${PI_USER}")"; then
   exit 1
 fi
 
+# Блок 2: Расчет путей и режима деплоя.
 log_info "Step klipper-core: install full Klipper tree into /home/${PI_USER}/printer_data/config"
 
 STAGE_DIR="${PI_HOME}/treed/klipper"
@@ -27,6 +38,7 @@ case "${DEPLOY_MODE}" in
     ;;
 esac
 
+# Блок 3: Валидация staging-дерева перед раскладкой.
 if [ ! -d "${STAGE_DIR}" ]; then
   log_error "klipper-core: stage dir not found: ${STAGE_DIR}"
   exit 1
@@ -44,6 +56,7 @@ fi
 
 ensure_dir "${CONFIG_DIR}"
 
+# Блок 4: Preserve-режим — временно сохраняем local_overrides.cfg.
 TMP_KEEP=""
 if [ "${DEPLOY_MODE}" = "preserve" ] && [ -e "${CONFIG_DIR}/local_overrides.cfg" ]; then
   TMP_KEEP="$(mktemp -d)"
@@ -53,12 +66,14 @@ else
   log_info "klipper-core: deploy mode ${DEPLOY_MODE}, runtime config will be rebuilt from staging"
 fi
 
+# Блок 5: Полная раскладка runtime-конфига из staging.
 # Полная очистка runtime-слоя (без удаления самого каталога).
 find "${CONFIG_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
 # Полная раскладка дерева из staging в runtime.
 cp -a "${STAGE_DIR}/." "${CONFIG_DIR}/"
 
+# Блок 6: Возврат preserve-override и финальная нормализация runtime.
 # Возврат локального override только в режиме preserve.
 if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
   cp -a "${TMP_KEEP}/." "${CONFIG_DIR}/" || true
