@@ -53,8 +53,6 @@
 
 ### Внутренние private-макросы (не для ручного запуска)
 - `_TREED_PRINT_DEFAULTS`
-- `_TREED_PRINT_AREA_CFG`
-- `_TREED_RESTORE_PRINT_OFFSET`
 - `_TREED_PAUSE_PARK_CFG`
 - `_TREED_PAUSE_STATE`
 - `_TREED_START_STATE`
@@ -85,7 +83,6 @@
 ### Временные алиасы совместимости (deprecated)
 | Старое имя | Новое имя | План удаления |
 |---|---|---|
-| `TREED_RESTORE_PRINT_OFFSET` | `_TREED_RESTORE_PRINT_OFFSET` | после `dev` + ближайший релиз в `main` |
 | `TREED_CAM_START` | `_TREED_CAM_START` | после `dev` + ближайший релиз в `main` |
 | `TREED_CAM_STOP` | `_TREED_CAM_STOP` | после `dev` + ближайший релиз в `main` |
 
@@ -111,11 +108,12 @@
 
 ## Контракт со слайсером
 
-Смещение печатной области задается в конфиге (`_TREED_PRINT_AREA_CFG`), а не в слайсере.
+Область печати определяется кинематикой принтера без дополнительного смещения через макросы.
+Для RN12 рабочая область по `Y`: `0..180`.
 
 Ожидаемая настройка слайсера:
 - origin: `X=0`, `Y=0`
-- размер стола: равен `print_size_x/print_size_y` из `_TREED_PRINT_AREA_CFG`
+- размер стола: `245 x 180`
 
 ## Локальные override
 
