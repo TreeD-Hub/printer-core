@@ -7,7 +7,7 @@
 
 Назначение `treed_shell_command.py`:
 - добавляет интеграцию shell_command для вызовов из макросов Klipper;
-- используется в связке с командами камеры (`treed_cam_*`) и сервисной командой бипера (`treed_beeper_boot_once`).
+- используется в связке с командами камеры (`treed_cam_*`).
 
 Деплой:
 - выполняет `loader/steps/moonraker-config.sh`;

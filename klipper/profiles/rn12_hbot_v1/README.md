@@ -14,10 +14,9 @@
 5. `profiles/rn12_hbot_v1/extruder.cfg`
 6. `profiles/rn12_hbot_v1/bed_heater_dc.cfg`
 7. `profiles/rn12_hbot_v1/fans.cfg`
-8. `profiles/rn12_hbot_v1/beeper.cfg`
-9. `profiles/rn12_hbot_v1/macros.cfg`
-10. `profiles/rn12_hbot_v1/ui.cfg`
-11. `local_overrides.cfg` (локальный runtime-файл на Pi)
+8. `profiles/rn12_hbot_v1/macros.cfg`
+9. `profiles/rn12_hbot_v1/ui.cfg`
+10. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
 ## Макросы: публичный интерфейс и private-слой
 
@@ -42,14 +41,9 @@
 - `UNLOAD_FILAMENT`
 - `TREED_SAVE_CONFIG`
 - `M600` (определен в `gcode_features.cfg`)
-- `M300` (ручной сигнал бипера)
-- `BEEP` (короткий алиас на `M300`)
 
 ### Служебные системные
 - `CLEAR_PAUSE` — override штатной команды Klipper, оставлен публичным для безопасного восстановления pause-state.
-- `TREED_BEEPER` — контейнер параметров бипера (`enabled/volume`), не команда оператора.
-- `TREED_CHIME_BOOT` — сервисный проигрыш стартовой мелодии.
-- `TREED_BOOT_CHIME` (`[delayed_gcode]`) — автозапуск проверок и стартовой мелодии при старте Klipper.
 
 ### Внутренние private-макросы (не для ручного запуска)
 - `_TREED_PRINT_DEFAULTS`
