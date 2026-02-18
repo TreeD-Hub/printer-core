@@ -15,6 +15,11 @@ fi
 
 TREED_THEME_NAME="treed-oled"
 THEME_SRC="${REPO_DIR}/klipperscreen/themes/${TREED_THEME_NAME}"
+FONT_FILE_NAME="web_ibm_mda.ttf"
+FONT_FAMILY_NAME="WebPlus IBM MDA"
+FONT_SRC_PATH="${THEME_SRC}/${FONT_FILE_NAME}"
+FONT_DST_DIR="/usr/local/share/fonts/treed"
+FONT_DST_PATH="${FONT_DST_DIR}/${FONT_FILE_NAME}"
 
 KS_HOME_DEFAULT="${PI_HOME}/KlipperScreen"
 if [ -n "${TREED_KLIPPERSCREEN_HOME:-}" ]; then
@@ -35,6 +40,7 @@ KS_LANGUAGE="${TREED_KS_LANGUAGE:-ru}"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 THEME_DEPLOYED=0
 THEME_CONFIG_UPDATED=0
+FONT_DEPLOYED=0
 APPLY_THEME=0
 APPLY_LANGUAGE=0
 
@@ -49,6 +55,11 @@ esac
 
 if [ ! -f "${THEME_SRC}/style.css" ]; then
   log_error "klipperscreen-theme: missing theme source ${THEME_SRC}/style.css"
+  exit 1
+fi
+
+if [ ! -f "${FONT_SRC_PATH}" ]; then
+  log_error "klipperscreen-theme: missing theme font ${FONT_SRC_PATH}"
   exit 1
 fi
 
@@ -201,6 +212,29 @@ EOF
   mv "${tmp_cfg}" "${cfg_file}"
 }
 
+deploy_treed_font() {
+  ensure_dir "${FONT_DST_DIR}"
+
+  if [ ! -f "${FONT_DST_PATH}" ] || ! cmp -s "${FONT_SRC_PATH}" "${FONT_DST_PATH}"; then
+    cp -f "${FONT_SRC_PATH}" "${FONT_DST_PATH}"
+    chmod 0644 "${FONT_DST_PATH}"
+    log_info "klipperscreen-theme: deployed font ${FONT_FAMILY_NAME} -> ${FONT_DST_PATH}"
+  else
+    log_info "klipperscreen-theme: font ${FONT_FAMILY_NAME} already up to date"
+  fi
+
+  if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f "${FONT_DST_DIR}" >/dev/null 2>&1
+  else
+    log_error "klipperscreen-theme: fc-cache not found, cannot register font ${FONT_FAMILY_NAME}"
+    exit 1
+  fi
+
+  FONT_DEPLOYED=1
+}
+
+deploy_treed_font
+
 if [ -d "${KS_STYLES_DIR}" ]; then
   ensure_dir "${THEME_DST}"
   find "${THEME_DST}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -277,4 +311,4 @@ else
   log_warn "klipperscreen-theme: KlipperScreen.service not found, restart skipped"
 fi
 
-log_info "klipperscreen-theme: OK (theme=${TREED_THEME_NAME}, deployed=${THEME_DEPLOYED}, config_updated=${THEME_CONFIG_UPDATED}, selected_theme=${KS_THEME}, selected_language=${KS_LANGUAGE})"
+log_info "klipperscreen-theme: OK (theme=${TREED_THEME_NAME}, deployed=${THEME_DEPLOYED}, config_updated=${THEME_CONFIG_UPDATED}, font=${FONT_FAMILY_NAME}, font_deployed=${FONT_DEPLOYED}, selected_theme=${KS_THEME}, selected_language=${KS_LANGUAGE})"

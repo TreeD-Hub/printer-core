@@ -293,6 +293,7 @@ button.active {
 /* [OVERRIDE] Глобальная насыщенность шрифта.
    Варианты: 400 (тоньше), 600 (жирнее). */
 * {
+    font-family: "WebPlus IBM MDA", "Noto Sans", sans-serif; /* Основной шрифт темы + fallback. */
     font-weight: 500; /* Текущая толщина текста для читаемости на OLED. */
 }
 
