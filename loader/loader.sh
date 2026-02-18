@@ -3,7 +3,8 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Normalize CRLF for loader scripts (Windows clones) and ensure executable bits.
+# Нормализуем CRLF в loader-скриптах после Windows checkout
+# и выставляем права на исполнение.
 if [ -d "${REPO_DIR}/loader" ]; then
   find "${REPO_DIR}/loader" -type f -name "*.sh" -print0 | xargs -0 -r sed -i 's/\r$//'
   chmod +x "${REPO_DIR}/loader/loader.sh" || true
@@ -29,7 +30,8 @@ BOOT_DIR="$(detect_boot_dir)"
 CMDLINE_FILE="$(detect_cmdline_file "${BOOT_DIR}")"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
 
-# Align BOOT_DIR with actual config/cmdline locations when possible.
+# Приводим BOOT_DIR к фактическому каталогу config.txt/cmdline.txt,
+# если путь удалось определить.
 if [ -n "${CMDLINE_FILE}" ] && [ -n "${CONFIG_FILE}" ]; then
   cmd_dir="$(dirname "${CMDLINE_FILE}")"
   cfg_dir="$(dirname "${CONFIG_FILE}")"
@@ -42,7 +44,8 @@ elif [ -n "${CONFIG_FILE}" ]; then
   BOOT_DIR="$(dirname "${CONFIG_FILE}")"
 fi
 
-# Fail fast: do not continue with empty paths (prevents silent skips in steps).
+# Режим fail-fast: пустые/битые пути до boot-файлов считаем блокирующей ошибкой
+# (без silent skip).
 if [ -z "${CMDLINE_FILE}" ] || [ ! -f "${CMDLINE_FILE}" ]; then
   echo "[loader] ERROR: cmdline.txt not found (BOOT_DIR=${BOOT_DIR})" >&2
   exit 1
@@ -121,19 +124,19 @@ trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BAS
 STEPS=(
   "check-env"
   "detect-rpi"
-  "timezone-sync"     # timezone + NTP baseline for UI and services
-  "maintenance-stop"   # controlled stop of runtime services before provisioning
+  "timezone-sync"      # базовая синхронизация timezone/NTP для UI и сервисов
+  "maintenance-stop"   # контролируемо останавливаем runtime-сервисы перед provisioning
   "packages-core"
   "boot-hdmi-config"
-  "rpi-uart-config"     # optional UART transport prep (enable_uart/serial-getty)
+  "rpi-uart-config"    # подготовка UART-контура (enable_uart/serial-getty)
   "plymouth-theme-install"
   "plymouth-initramfs"
   "plymouth-initramfs-config"
   "plymouth-cmdline"
   "plymouth-systemd"
-  "klipper-sync"        # репо -> ~/treed/klipper
-  "klipper-profiles"    # fixed profile + serial update in staging
-  "klipper-core"        # теперь КЛАДЁМ ВЕСЬ klipper/ в /config
+  "klipper-sync"       # репозиторные конфиги -> ~/treed/klipper (staging)
+  "klipper-profiles"   # фиксированный профиль + подстановка serial в staging
+  "klipper-core"       # полная раскладка klipper/ в runtime (/printer_data/config)
   "klipper-anti-shutdown"
   "moonraker-config"
   "crowsnest-webcam"
@@ -142,7 +145,7 @@ STEPS=(
   "klipperscreen-install"
   "klipperscreen-theme"
   "klipperscreen-integr"
-  "maintenance-start"  # bring core services back before final verification
+  "maintenance-start"  # поднимаем критичные сервисы перед финальной проверкой
   "verify"
 )
 
