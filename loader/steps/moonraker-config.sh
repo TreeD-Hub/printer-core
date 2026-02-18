@@ -62,7 +62,7 @@ find_moonraker_components_dir() {
   local py_path=""
   local candidate=""
 
-  # Prefer the currently running process path.
+  # Сначала пробуем путь из уже запущенного процесса.
   py_path="$(ps -eo args 2>/dev/null | grep -Eo '/[^ ]*/moonraker/moonraker\.py' | head -n 1 || true)"
   if [ -n "${py_path}" ] && [ -f "${py_path}" ]; then
     candidate="$(dirname "${py_path}")/components"
@@ -72,7 +72,7 @@ find_moonraker_components_dir() {
     fi
   fi
 
-  # Fallback to systemd unit definition when process is not running.
+  # Если процесс не запущен, разбираем ExecStart из systemd unit.
   py_path="$(
     systemctl cat moonraker.service 2>/dev/null \
       | sed -n 's/^ExecStart=//p' \
@@ -90,7 +90,7 @@ find_moonraker_components_dir() {
     fi
   fi
 
-  # Common KIAUH / distro locations.
+  # Типовые пути KIAUH/дистрибутива.
   for candidate in \
     "${PI_HOME}/moonraker/moonraker/components" \
     "/home/${PI_USER}/moonraker/moonraker/components" \
@@ -103,7 +103,7 @@ find_moonraker_components_dir() {
     fi
   done
 
-  # Fallback discovery while excluding this repo path.
+  # Финальный fallback-поиск с исключением пути текущего репозитория.
   candidate="$(
     find /home /usr /opt \
       -maxdepth 5 \
@@ -155,6 +155,7 @@ deploy_base_fragments() {
 prune_treed_generated_fragments() {
   local file=""
 
+  # Оставляем только placeholder, остальные generated-фрагменты пересоздаются шагами loader.
   ensure_dir "${DST_GENERATED_DIR}"
 
   while IFS= read -r -d '' file; do
@@ -174,7 +175,7 @@ ensure_generated_fragments_dir() {
   placeholder="${DST_GENERATED_DIR}/00-placeholder.conf"
   if [ ! -f "${placeholder}" ]; then
     cat > "${placeholder}" <<'EOF'
-#### reserved for loader-generated moonraker fragments
+#### зарезервировано под moonraker-фрагменты, генерируемые loader
 EOF
   fi
   chown -R "${PI_USER}:${grp}" "${DST_GENERATED_DIR}" || true

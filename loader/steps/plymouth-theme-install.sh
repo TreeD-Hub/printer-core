@@ -9,6 +9,7 @@ log_info "Step plymouth-theme-install: installing TreeD plymouth theme"
 SRC="${REPO_DIR}/plymouth/theme/treed"
 DST="/usr/share/plymouth/themes/treed"
 
+# Проверяем полный набор файлов темы до копирования.
 for f in treed.plymouth treed.script watermark.png prog.png; do
   [ -f "${SRC}/${f}" ] || { log_error "plymouth-theme-install: missing ${SRC}/${f}"; exit 1; }
 done

@@ -70,6 +70,7 @@ if [ -n "${KS_LANGUAGE}" ] && [ "${KS_LANGUAGE}" != "keep" ]; then
   APPLY_LANGUAGE=1
 fi
 
+# Из style.css извлекаем обязательные иконки, чтобы проверить полноту набора темы.
 extract_required_theme_icons() {
   local style_file="$1"
   if [ ! -f "${style_file}" ]; then
@@ -235,6 +236,7 @@ deploy_treed_font() {
 
 deploy_treed_font
 
+# Копируем тему полностью и при необходимости дополняем резервным набором иконок.
 if [ -d "${KS_STYLES_DIR}" ]; then
   ensure_dir "${THEME_DST}"
   find "${THEME_DST}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -259,6 +261,7 @@ else
 fi
 
 if [ "${APPLY_THEME}" = "1" ]; then
+  # Строгая валидация для treed-oled: style.css, images/ и обязательные иконки должны существовать.
   if [ "${KS_THEME}" = "${TREED_THEME_NAME}" ]; then
     if [ ! -f "${THEME_DST}/style.css" ]; then
       log_error "klipperscreen-theme: requested theme ${TREED_THEME_NAME} but deployed style is missing (${THEME_DST}/style.css)"
@@ -280,6 +283,7 @@ if [ "${APPLY_THEME}" = "1" ]; then
 fi
 
 if [ "${APPLY_THEME}" = "1" ] || [ "${APPLY_LANGUAGE}" = "1" ]; then
+  # Настройки пишем только в секцию [main], не затрагивая другие секции конфига.
   ensure_dir "${KS_CONFIG_DIR}"
   if [ "${DEPLOY_MODE}" = "preserve" ]; then
     backup_file_once "${KS_CONFIG_FILE}"
@@ -301,6 +305,7 @@ else
 fi
 
 if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+  # Перезапуск нужен, чтобы тема/язык и шрифт применились сразу.
   if systemctl is-active --quiet KlipperScreen.service; then
     systemctl restart KlipperScreen.service
     log_info "klipperscreen-theme: restarted KlipperScreen.service"

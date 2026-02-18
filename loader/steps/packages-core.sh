@@ -7,7 +7,7 @@ log_info "Step packages-core: installing core packages"
 apt-get update
 apt-get -y install plymouth plymouth-themes plymouth-label rsync curl v4l-utils python3
 
-# treed uses python3 for Unix socket I/O, keep broken socat out of the system.
+# TreeD работает через python3 и Unix-сокеты, поэтому битый socat удаляем.
 if command -v socat >/dev/null 2>&1; then
   if socat -V >/dev/null 2>&1; then
     log_info "packages-core: socat binary is healthy"

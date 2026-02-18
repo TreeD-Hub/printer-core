@@ -44,6 +44,7 @@ read -r -a tokens <<< "${current}"
 
 new_tokens=()
 serial_console_removed=0
+# Сначала убираем конфликтные/дублирующие токены и сериал-консоль для UART-кейса.
 for t in "${tokens[@]}"; do
   case "$t" in
     quiet|splash|plymouth.ignore-serial-consoles|vt.global_cursor_default=*|consoleblank=*|loglevel=*|logo.nologo|plymouth.debug|vt.handoff=*|plymouth.enable=0|usbcore.autosuspend=*)
@@ -73,6 +74,7 @@ new_tokens+=(
   usbcore.autosuspend=-1
 )
 
+# Затем добавляем целевой набор токенов в фиксированном порядке.
 new_line="${new_tokens[*]}"
 printf '%s\n' "${new_line}" > "${CMDLINE_FILE}"
 

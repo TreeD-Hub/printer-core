@@ -29,6 +29,7 @@ fi
 
 ensure_dir "${PI_HOME}/treed"
 
+# staging-контур синхронизируется целиком: сначала очистка, затем полное копирование из репозитория.
 rm -rf "${KLIPPER_TARGET_DIR}"
 mkdir -p "${KLIPPER_TARGET_DIR}"
 

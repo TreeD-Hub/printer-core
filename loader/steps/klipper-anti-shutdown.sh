@@ -25,6 +25,7 @@ query_klippy_state() {
   local sock_path="$1"
   local timeout="${2:-2}"
 
+  # Читаем state через Unix-сокет Klippy API (метод info).
   python3 - "${sock_path}" "${timeout}" <<'PY'
 import json
 import socket
@@ -79,6 +80,7 @@ send_klippy_gcode() {
   local timeout="${2:-2}"
   local gcode="$3"
 
+  # Отправляем gcode/script в Klippy через тот же сокет API.
   python3 - "${sock_path}" "${timeout}" "${gcode}" <<'PY'
 import json
 import socket
@@ -127,7 +129,7 @@ if "error" in msg:
 PY
 }
 
-# Ensure Klipper is active; restart is non-fatal but must be logged.
+# Гарантируем, что Klipper запущен; рестарт нефатален, но обязательно логируется.
 if ! systemctl is-active --quiet "${KLIPPER_SERVICE}"; then
   if err="$(systemctl restart "${KLIPPER_SERVICE}" 2>&1)"; then
     log_info "${STEP}: restarted ${KLIPPER_SERVICE}"
@@ -136,7 +138,7 @@ if ! systemctl is-active --quiet "${KLIPPER_SERVICE}"; then
     log_warn "${STEP}: systemctl restart ${KLIPPER_SERVICE} failed rc=${rc}: ${err}"
   fi
 fi
-# Wait up to 30s for klippy.sock to appear.
+# Ждем появление klippy.sock до 30 секунд.
 for _ in $(seq 1 30); do
   [ -S "$SOCK" ] && break
   sleep 1

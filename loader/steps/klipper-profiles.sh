@@ -38,6 +38,7 @@ current_serial="$(sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|
 SERIAL_PATH=""
 
 if [ "${MCU_TRANSPORT}" = "uart" ]; then
+  # В UART-режиме используем фиксированный serial-узел и запрещаем USB by-id override.
   if [ -n "${MCU_SERIAL_BY_ID:-}" ]; then
     log_error "klipper-profiles: MCU_SERIAL_BY_ID cannot be used when TREED_MCU_TRANSPORT=uart"
     exit 1
@@ -79,6 +80,7 @@ else
 fi
 
 if [ "${MCU_TRANSPORT}" = "usb" ] && [ -z "${SERIAL_PATH}" ]; then
+  # Для USB автоподбор допустим только при однозначном /dev/serial/by-id.
   shopt -s nullglob
   by_id_paths=(/dev/serial/by-id/*)
   shopt -u nullglob
@@ -127,7 +129,7 @@ if ! grp="$(pi_primary_group "${PI_USER}")"; then
   exit 1
 fi
 
-# Keep ownership adjustments inside staging scope only.
+# Корректируем владельца только в staging-контуре.
 chown -R "${PI_USER}:${grp}" "${KLIPPER_DIR}"
 
 log_info "klipper-profiles: OK"

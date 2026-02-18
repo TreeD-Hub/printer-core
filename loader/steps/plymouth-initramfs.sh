@@ -23,6 +23,7 @@ BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
 initrd_src="/boot/initrd.img-$(uname -r)"
 initrd_dst="${BOOT_DIR}/initrd.img-$(uname -r)"
 
+# Копируем собранный initrd в boot-раздел, откуда его читает прошивка RPi.
 if [ -f "${initrd_src}" ]; then
   cp -f "${initrd_src}" "${initrd_dst}"
   log_info "plymouth-initramfs: copied initrd to ${initrd_dst}"

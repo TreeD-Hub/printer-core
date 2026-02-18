@@ -16,6 +16,7 @@ REQUIRED_SERVICES=(
   "moonraker.service"
 )
 
+# Опциональные сервисы останавливаем в best-effort режиме.
 BEST_EFFORT_SERVICES=(
   "KlipperScreen.service"
   "crowsnest.service"
@@ -51,6 +52,7 @@ stop_required_service() {
   local unit="$1"
   local state=""
 
+  # Для критичных сервисов любой сбой — блокирующий.
   if ! systemctl cat "${unit}" >/dev/null 2>&1; then
     log_error "maintenance-stop: required ${unit} not found"
     return 1
@@ -83,6 +85,7 @@ stop_best_effort_service() {
   local unit="$1"
   local state=""
 
+  # Для опциональных сервисов ошибки не блокируют provisioning.
   if ! systemctl cat "${unit}" >/dev/null 2>&1; then
     log_info "maintenance-stop: ${unit} not found, skipping"
     return 0

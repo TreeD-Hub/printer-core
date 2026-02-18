@@ -41,6 +41,7 @@ resolve_cam_device() {
   local -a candidates=()
   local candidate=""
 
+  # Приоритет выбора: явный CAM_DEVICE -> уникальный by-id -> опциональный /dev/video0.
   if [ -n "${CAM_DEVICE}" ]; then
     if [ -e "${CAM_DEVICE}" ] || [ -L "${CAM_DEVICE}" ]; then
       log_info "Using CAM_DEVICE override: ${CAM_DEVICE}"
@@ -97,6 +98,7 @@ resolve_cam_device() {
 skip_webcam_deploy() {
   local removed_fragment=0
 
+  # Если камера не определена, очищаем ранее развернутый контур и корректно выходим.
   log_warn "crowsnest-webcam: camera is not resolved, skipping webcam deployment (set TREED_CAMERA_REQUIRED=1 for fail-fast)"
 
   if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
@@ -119,6 +121,7 @@ skip_webcam_deploy() {
 }
 
 ensure_moonraker_generated_include() {
+  # generated/*.conf обязателен, иначе фрагмент вебкамеры не будет подхвачен Moonraker.
   if [[ ! -f "${MOONRAKER_CONF}" ]]; then
     log_warn "moonraker.conf not found at ${MOONRAKER_CONF}; generated webcam fragment may be ignored"
     return 0
@@ -151,7 +154,7 @@ write_crowsnest_conf() {
   log_info "Writing crowsnest.conf -> ${CROWSNEST_CONF}"
   cat > "${CROWSNEST_CONF}" <<EOF
 #### treed-managed: crowsnest-webcam
-#### single USB cam, fixed 1024x768@10 (override: TREED_CAM_RESOLUTION/TREED_CAM_FPS)
+#### одиночная USB-камера, 1024x768@10 (override: TREED_CAM_RESOLUTION/TREED_CAM_FPS)
 
 [crowsnest]
 log_path: ${PI_HOME}/printer_data/logs/crowsnest.log
@@ -181,6 +184,7 @@ ensure_crowsnest_allowed_service() {
 }
 
 apply_services() {
+  # Применяем изменения через перезапуск crowsnest и moonraker с коротким readiness-циклом API.
   if systemctl cat crowsnest.service >/dev/null 2>&1; then
     log_info "Enabling and restarting crowsnest"
     systemctl enable crowsnest.service >/dev/null 2>&1 || true

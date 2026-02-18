@@ -24,6 +24,7 @@ THEME_SRC="${REPO_DIR}/mainsail/.theme"
 THEME_DST="${PI_HOME}/printer_data/config/.theme"
 
 if [ ! -d "${THEME_SRC}" ]; then
+  # Тема Mainsail не критична для базового provisioning.
   log_warn "Mainsail theme source not found: ${THEME_SRC}; skipping"
 else
   ensure_dir "${THEME_DST}"

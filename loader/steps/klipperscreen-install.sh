@@ -73,7 +73,7 @@ if [ -z "${PI_HOME}" ] || [ ! -d "${PI_HOME}" ]; then
   exit 1
 fi
 
-# Default behavior: install only when KlipperScreen.service is absent.
+# Поведение по умолчанию: ставим только если KlipperScreen.service отсутствует.
 if systemctl cat KlipperScreen.service >/dev/null 2>&1 && [ "${TREED_FORCE_KLIPPERSCREEN_INSTALL:-0}" != "1" ]; then
   log_info "klipperscreen-install: KlipperScreen.service already exists, skipping install and validating service health"
   assert_klipperscreen_healthy
@@ -91,6 +91,7 @@ KS_PINNED_REF_DEFAULT="35c26ba4d452043695d73fa8ec2acd25bbc8911d"
 KS_REPO_REF="${TREED_KLIPPERSCREEN_REF:-${KS_PINNED_REF_DEFAULT}}"
 KS_STAGING_DIR="${PI_HOME}/treed/.staging/KlipperScreen"
 
+# Всегда пересобираем staging-клон, чтобы не наследовать старое состояние checkout.
 rm -rf "${KS_STAGING_DIR}"
 checkout_klipperscreen_ref "${KS_REPO_URL}" "${KS_STAGING_DIR}" "${KS_REPO_REF}"
 

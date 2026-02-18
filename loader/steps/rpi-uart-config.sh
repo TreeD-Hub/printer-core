@@ -47,6 +47,7 @@ fi
 backup_file_once "${CONFIG_FILE}"
 changed=0
 
+# Нормализуем enable_uart: оставляем единственную строку и фиксируем значение 1.
 tmp="$(mktemp)"
 awk '
   BEGIN { seen=0 }
@@ -75,6 +76,7 @@ fi
 rm -f "${tmp}"
 
 if is_true "${TREED_UART_DISABLE_BT}"; then
+  # Для UART убираем конфликтный miniuart-bt и оставляем единичный dtoverlay=disable-bt.
   tmp="$(mktemp)"
   awk '
     BEGIN { seen=0 }
@@ -108,6 +110,7 @@ else
   log_info "rpi-uart-config: bluetooth UART keep enabled (set TREED_UART_DISABLE_BT=1 to disable, default in uart mode)"
 fi
 
+# В UART-режиме serial-getty на аппаратных UART должен быть отключен и замаскирован.
 for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do
   if systemctl disable --now "${unit}" >/dev/null 2>&1; then
     log_info "rpi-uart-config: disabled ${unit}"
@@ -123,7 +126,7 @@ done
 
 tmp="$(mktemp)"
 cat > "${tmp}" <<'EOF'
-# treed-managed: uart permissions for klipper transport
+# treed-managed: права UART для транспорта Klipper
 KERNEL=="ttyAMA0", MODE="0660", GROUP="dialout"
 KERNEL=="ttyS0", MODE="0660", GROUP="dialout"
 EOF
@@ -148,7 +151,7 @@ else
   log_warn "rpi-uart-config: udevadm not found, skipping rule reload"
 fi
 
-# Применяем права сразу (до следующего события udev), чтобы убрать race на первом старте.
+# Применяем права сразу (до следующего события udev), чтобы убрать гонку на первом старте.
 if getent group dialout >/dev/null 2>&1; then
   for dev in /dev/ttyAMA0 /dev/ttyS0; do
     if [ -e "${dev}" ]; then

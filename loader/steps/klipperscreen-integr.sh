@@ -29,6 +29,7 @@ ensure_root
 ensure_dir "${OVERRIDE_DIR}"
 backup_file_once "${OVERRIDE_FILE}"
 
+# Override нужен, чтобы закрывать plymouth, сохраняя splash до старта UI.
 cat > "${OVERRIDE_FILE}" <<EOF
 [Unit]
 After=systemd-user-sessions.service plymouth-quit.service
@@ -47,6 +48,7 @@ fi
 
 systemctl restart "${KS_UNIT}"
 
+# После изменения unit-файлов проверяем, что сервис реально поднялся.
 if ! wait_service_active "${KS_UNIT}" "${KS_TIMEOUT}"; then
   log_error "klipperscreen-integr: ${KS_UNIT} failed to become active within ${KS_TIMEOUT}s"
   systemctl --no-pager -l status "${KS_UNIT}" || true

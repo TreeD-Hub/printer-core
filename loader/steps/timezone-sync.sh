@@ -10,7 +10,7 @@ TREED_SET_TIMEZONE="${TREED_SET_TIMEZONE:-1}"
 TREED_TIMEZONE="${TREED_TIMEZONE:-Europe/Moscow}"
 TREED_ENABLE_NTP="${TREED_ENABLE_NTP:-1}"
 
-# Нормализуем timezone (убираем CR/LF и пробелы по краям).
+# Нормализуем часовой пояс (убираем CR/LF и пробелы по краям).
 TREED_TIMEZONE="$(printf '%s' "${TREED_TIMEZONE}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
 if [ -z "${TREED_TIMEZONE}" ]; then
   log_error "timezone-sync: TREED_TIMEZONE is empty after normalization"
@@ -32,7 +32,7 @@ fi
 timezone_changed=0
 
 if is_true "${TREED_SET_TIMEZONE}"; then
-  # Основная проверка через timedatectl, fallback — через /usr/share/zoneinfo
+  # Основная проверка через timedatectl, резервная — через /usr/share/zoneinfo
   # (на случай временной недоступности timedated/dbus).
   if tz_list="$(timedatectl list-timezones 2>/dev/null)"; then
     if ! printf '%s\n' "${tz_list}" | grep -Fxq "${TREED_TIMEZONE}"; then
@@ -75,6 +75,7 @@ else
 fi
 
 if [ "${timezone_changed}" = "1" ] && systemctl is-active --quiet KlipperScreen.service; then
+  # После смены TZ перезапускаем UI, чтобы время на экране обновилось без ребута.
   if err="$(systemctl restart KlipperScreen.service 2>&1)"; then
     log_info "timezone-sync: restarted KlipperScreen.service to apply new timezone"
   else

@@ -18,7 +18,7 @@ fi
 
 backup_file_once "${CONFIG_FILE}"
 
-# Ensure gpu_mem is sufficient for UI stability and matches verify expectations.
+# Держим gpu_mem не ниже порога для стабильного UI и ожидаемого результата verify.
 GPU_MEM_MIN=96
 gpu_count="$(grep -cE '^[[:space:]]*gpu_mem[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null || true)"
 last_gpu_info="$(grep -nE '^[[:space:]]*gpu_mem[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null | tail -n 1 || true)"
@@ -58,7 +58,7 @@ fi
 BEGIN_TREED_HDMI="# BEGIN TreeD HDMI"
 END_TREED_HDMI="# END TreeD HDMI"
 
-# Conflict detection (WARN only): show HDMI/dtparam lines outside the managed TreeD block that may override settings.
+# Ищем потенциальные конфликты вне managed-блока TreeD (только предупреждения).
 conflicts="$(awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '
   BEGIN { inblk=0 }
   $0==b { inblk=1; next }
@@ -107,7 +107,7 @@ if [ -n "${conflicts}" ]; then
   done <<< "${conflicts}"
 fi
 
-# Validate marker structure if present to avoid truncating config.txt on a corrupted block.
+# Проверяем парность маркеров, чтобы не повредить config.txt при битом блоке.
 if grep -qF "${BEGIN_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null || grep -qF "${END_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null; then
   if ! awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '
     BEGIN { inblk=0; ok=1 }

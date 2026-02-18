@@ -43,6 +43,7 @@ start_required_service() {
   local rc=0
   local err=""
 
+  # Критичные сервисы обязаны подняться в таймаут, иначе выходим с ошибкой.
   if ! systemctl cat "${unit}" >/dev/null 2>&1; then
     log_error "maintenance-start: required ${unit} not found"
     return 1
@@ -79,6 +80,7 @@ start_best_effort_service() {
   local unit="$1"
   local rc=0
 
+  # Опциональные сервисы запускаем без блокировки общего результата.
   if ! systemctl cat "${unit}" >/dev/null 2>&1; then
     log_info "maintenance-start: ${unit} not found, skipping"
     return 0
