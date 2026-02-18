@@ -53,6 +53,9 @@
 
 ### Внутренние private-макросы (не для ручного запуска)
 - `_TREED_PRINT_DEFAULTS`
+- `_TREED_PRINT_AREA_CFG`
+- `_TREED_PRINT_OFFSET_ENABLE`
+- `_TREED_PRINT_OFFSET_DISABLE`
 - `_TREED_PAUSE_PARK_CFG`
 - `_TREED_PAUSE_STATE`
 - `_TREED_START_STATE`
@@ -96,8 +99,6 @@
 
 В остальных состояниях (`ready/idle/complete/cancelled` и т.д.) команда разрешена.
 
-Примечание по области P2-3: в этом шаге не менялись `END_PRINT` и `CANCEL_PRINT`.
-
 ## G-code совместимость
 
 `gcode_features.cfg` отвечает за совместимость слайсерного G-code:
@@ -108,8 +109,23 @@
 
 ## Контракт со слайсером
 
-Область печати определяется кинематикой принтера без дополнительного смещения через макросы.
-Для RN12 рабочая область по `Y`: `0..180`.
+Профиль использует две системы координат:
+- `print coords`: координаты слайсера (операторская модель).
+- `raw coords`: физические координаты механики.
+
+Текущий контракт зон в `raw coords`:
+- сервис/перемещения: `Y=0..64`
+- печать: `Y=65..245` (длина 180)
+
+Трансляция `print coords -> raw coords` выполняется макросным `SET_GCODE_OFFSET`:
+- включение: `_TREED_PRINT_OFFSET_ENABLE`
+- отключение: `_TREED_PRINT_OFFSET_DISABLE`
+
+Для `PAUSE/RESUME` действует инвариант:
+- `RESUME_BASE` вызывается только после восстановления того же offset-state,
+  который был сохранен на `PAUSE_BASE`.
+- `PAUSE` паркует голову в raw `X5 Y5` (fallback: raw `X5 Y30`).
+- purge/wipe в `RESUME` выполняются только в raw сервисной зоне (`Y<=64`).
 
 Ожидаемая настройка слайсера:
 - origin: `X=0`, `Y=0`
