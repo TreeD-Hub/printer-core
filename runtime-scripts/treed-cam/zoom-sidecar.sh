@@ -20,6 +20,8 @@ RAW_WAIT_RETRIES="${TREED_CAM_ZOOM_RAW_WAIT_RETRIES:-120}"
 RAW_WAIT_SLEEP_SEC="${TREED_CAM_ZOOM_RAW_WAIT_SLEEP_SEC:-1}"
 CONFIG_POLL_SEC="${TREED_CAM_ZOOM_CONFIG_POLL_SEC:-1}"
 SNAPSHOT_REFRESH_FPS="${TREED_CAM_ZOOM_SNAPSHOT_REFRESH_FPS:-1}"
+FFMPEG_LOGLEVEL="${TREED_CAM_ZOOM_FFMPEG_LOGLEVEL:-error}"
+SCALE_FLAGS="${TREED_CAM_ZOOM_SCALE_FLAGS:-bicubic}"
 FFMPEG_STREAM_PID=""
 FFMPEG_SNAPSHOT_PID=""
 
@@ -94,29 +96,60 @@ config_signature() {
 }
 
 # Блок 5: Запуск ffmpeg-процессов текущего профиля (stream + snapshot).
-start_children() {
-  local vf snapshot_vf snapshot_dir
-  vf="crop=${TREED_CAM_ROI_W}:${TREED_CAM_ROI_H}:${TREED_CAM_ROI_X}:${TREED_CAM_ROI_Y},scale=${TREED_CAM_ZOOM_OUTPUT_WIDTH}:${TREED_CAM_ZOOM_OUTPUT_HEIGHT}:flags=lanczos"
-  snapshot_vf="fps=${SNAPSHOT_REFRESH_FPS},${vf}"
+snapshot_loop() {
+  local vf="$1"
+  local snapshot_dir snapshot_tmp fail_count snapshot_sleep
   snapshot_dir="$(dirname "${TREED_CAM_ZOOM_SNAPSHOT_FILE}")"
+  snapshot_tmp="${TREED_CAM_ZOOM_SNAPSHOT_FILE}.tmp.jpg"
+  fail_count=0
+  snapshot_sleep="1"
+
+  if [[ "${SNAPSHOT_REFRESH_FPS}" =~ ^[1-9][0-9]*$ ]]; then
+    snapshot_sleep="$(awk "BEGIN { s = 1/${SNAPSHOT_REFRESH_FPS}; if (s < 0.1) s = 0.1; printf \"%.3f\", s }")"
+  fi
 
   mkdir -p "${snapshot_dir}"
-  rm -f "${TREED_CAM_ZOOM_SNAPSHOT_FILE}" 2>/dev/null || true
+  rm -f "${TREED_CAM_ZOOM_SNAPSHOT_FILE}" "${snapshot_tmp}" 2>/dev/null || true
+
+  while true; do
+    if ffmpeg -hide_banner -loglevel "${FFMPEG_LOGLEVEL}" -nostdin -y \
+      -i "${TREED_CAM_RAW_SNAPSHOT_URL}" \
+      -frames:v 1 -vf "${vf}" -c:v mjpeg -q:v 7 \
+      "${snapshot_tmp}" >/dev/null 2>&1; then
+      if [[ -s "${snapshot_tmp}" ]]; then
+        mv -f "${snapshot_tmp}" "${TREED_CAM_ZOOM_SNAPSHOT_FILE}"
+        fail_count=0
+      else
+        rm -f "${snapshot_tmp}" 2>/dev/null || true
+        fail_count=$((fail_count + 1))
+      fi
+    else
+      rm -f "${snapshot_tmp}" 2>/dev/null || true
+      fail_count=$((fail_count + 1))
+    fi
+
+    if [[ "${fail_count}" -eq 5 || ( "${fail_count}" -gt 0 && $((fail_count % 20)) -eq 0 ) ]]; then
+      log_zoom "snapshot refresh failed (count=${fail_count})"
+    fi
+
+    sleep "${snapshot_sleep}"
+  done
+}
+
+start_children() {
+  local vf
+  vf="crop=${TREED_CAM_ROI_W}:${TREED_CAM_ROI_H}:${TREED_CAM_ROI_X}:${TREED_CAM_ROI_Y},scale=${TREED_CAM_ZOOM_OUTPUT_WIDTH}:${TREED_CAM_ZOOM_OUTPUT_HEIGHT}:flags=${SCALE_FLAGS}"
 
   log_zoom "start profile=${TREED_CAM_ZOOM_PROFILE_ACTIVE} roi=${TREED_CAM_ROI_X},${TREED_CAM_ROI_Y},${TREED_CAM_ROI_W},${TREED_CAM_ROI_H} out=${TREED_CAM_ZOOM_OUTPUT_WIDTH}x${TREED_CAM_ZOOM_OUTPUT_HEIGHT}"
 
-  ffmpeg -hide_banner -loglevel warning -nostdin \
+  ffmpeg -hide_banner -loglevel "${FFMPEG_LOGLEVEL}" -nostdin \
     -fflags nobuffer -flags low_delay \
     -i "${TREED_CAM_RAW_STREAM_URL}" \
     -an -vf "${vf}" -c:v mjpeg -q:v 7 \
-    -f mpjpeg -listen 1 "${TREED_CAM_ZOOM_STREAM_URL_LOCAL}" &
+    -f mpjpeg -listen 1 "${TREED_CAM_ZOOM_STREAM_URL_LOCAL}" >/dev/null 2>&1 &
   FFMPEG_STREAM_PID="$!"
 
-  ffmpeg -hide_banner -loglevel warning -nostdin \
-    -fflags nobuffer -flags low_delay \
-    -i "${TREED_CAM_RAW_STREAM_URL}" \
-    -an -vf "${snapshot_vf}" -c:v mjpeg -q:v 7 \
-    -f image2 -update 1 "${TREED_CAM_ZOOM_SNAPSHOT_FILE}" &
+  snapshot_loop "${vf}" &
   FFMPEG_SNAPSHOT_PID="$!"
 }
 
@@ -182,4 +215,3 @@ main() {
 }
 
 main "$@"
-
