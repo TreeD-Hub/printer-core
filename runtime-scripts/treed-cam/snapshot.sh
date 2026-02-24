@@ -10,7 +10,19 @@ set -euo pipefail
 
 # Блок 1: Константы marker-файла сессии и URL snapshot endpoint.
 SESSION_FILE="/tmp/treed_cam_session_dir"
-SNAP_URL="http://127.0.0.1:8080/?action=snapshot"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SNAP_URL=""
+
+# Блок 1.1: Подключение общего camera env-helper и получение zoom snapshot URL.
+if [[ -f "${SCRIPT_DIR}/cam_env.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/cam_env.sh" || true
+fi
+if declare -F treed_cam_env_load_zoom >/dev/null 2>&1; then
+  if treed_cam_env_load_zoom >/dev/null 2>&1; then
+    SNAP_URL="${TREED_CAM_ZOOM_SNAPSHOT_URL_LOCAL}"
+  fi
+fi
 
 # Блок 2: Проверка наличия активной сессии.
 [[ -f "${SESSION_FILE}" ]] || exit 0
@@ -24,4 +36,5 @@ ts="$(date +%Y%m%d_%H%M%S)"
 out="${dir}/img_${ts}_$RANDOM.jpg"
 
 # Блок 4: Получение кадра (ошибка камеры не блокирует вызывающий контур).
+[[ -n "${SNAP_URL}" ]] || exit 0
 curl -fsS "${SNAP_URL}" -o "${out}" >/dev/null 2>&1 || exit 0

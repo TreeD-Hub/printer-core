@@ -30,10 +30,14 @@ SRC_DIR="${REPO_DIR}/runtime-scripts/treed-cam"
 DST_ROOT="${PI_HOME}/treed/cam"
 DST_BIN="${DST_ROOT}/bin"
 DST_DATA="${DST_ROOT}/prints"
+DST_CONFIG="${DST_ROOT}/config"
+DST_LOGS="${DST_ROOT}/logs"
 
 # Блок 4: Подготовка директории назначения.
 ensure_dir "${DST_BIN}"
 ensure_dir "${DST_DATA}"
+ensure_dir "${DST_CONFIG}"
+ensure_dir "${DST_LOGS}"
 
 if [[ ! -d "${SRC_DIR}" ]]; then
   log_error "Missing runtime scripts directory: ${SRC_DIR}"
@@ -50,5 +54,13 @@ cp -a "${SRC_DIR}/." "${DST_BIN}/"
 find "${DST_BIN}" -type f -name '*.sh' -exec chmod +x {} \;
 
 chown -R "${PI_USER}:${grp}" "${DST_ROOT}" || true
+
+# Блок 7: Отложенный старт zoom-sidecar после раскладки runtime-скриптов.
+# Шаг crowsnest-webcam выполняется раньше и может задеплоить unit до появления bin/zoom-sidecar.sh.
+if systemctl cat treed-cam-zoom.service >/dev/null 2>&1; then
+  log_info "Restarting treed-cam-zoom after runtime scripts sync"
+  systemctl enable treed-cam-zoom.service >/dev/null 2>&1 || true
+  systemctl restart treed-cam-zoom.service || true
+fi
 
 log_info "treed-cam: DONE (data at ${DST_DATA})"

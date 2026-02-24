@@ -16,6 +16,8 @@
     - `treed_cam_session_start`
     - `treed_cam_snapshot`
     - `treed_cam_session_stop`
+    - `treed_cam_zoom_set`
+    - `treed_cam_zoom_status`
 
 ## Правила для фрагментов
 

@@ -40,6 +40,11 @@
 - `LOAD_FILAMENT`
 - `UNLOAD_FILAMENT`
 - `TREED_SAVE_CONFIG`
+- `TREED_CAM_ZOOM_PROFILE`
+- `TREED_CAM_ZOOM_STATUS`
+- `TREED_CAM_ZOOM_WIDE`
+- `TREED_CAM_ZOOM_MEDIUM`
+- `TREED_CAM_ZOOM_CLOSE`
 - `M600` (определен в `gcode_features.cfg`)
 
 ### Служебные системные
@@ -120,6 +125,16 @@
   который был сохранен на `PAUSE_BASE`.
 - `PAUSE` паркует голову в raw `X5 Y5` (fallback: raw `X5 Y30`).
 - purge/wipe в `RESUME` выполняются только в raw сервисной зоне (`Y<=64`).
+
+### Управление zoom-профилем камеры
+
+- `TREED_CAM_ZOOM_PROFILE PROFILE=wide|medium|close`
+  - переключает активный zoom-профиль backend-sidecar через `machine.shell_command`;
+  - не влияет на логику `_TREED_CAM_START/_TREED_CAM_STOP` и таймер снимков.
+- `TREED_CAM_ZOOM_STATUS`
+  - печатает текущий профиль и URL camera-контура (через runtime shell_command).
+- алиасы `TREED_CAM_ZOOM_WIDE|MEDIUM|CLOSE`
+  - удобные команды для UI-кнопок без передачи параметра `PROFILE`.
 
 Ожидаемая настройка слайсера:
 - origin: `X=0`, `Y=0`

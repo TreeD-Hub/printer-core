@@ -16,7 +16,19 @@ PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 
 BASE_DIR="${PI_HOME}/treed/cam/prints"
 SESSION_FILE="/tmp/treed_cam_session_dir"
-SNAP_URL="http://127.0.0.1:8080/?action=snapshot"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SNAP_URL=""
+
+# Блок 1.1: Подключение общего camera env-helper (если zoom-контур развернут).
+if [[ -f "${SCRIPT_DIR}/cam_env.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${SCRIPT_DIR}/cam_env.sh" || true
+fi
+if declare -F treed_cam_env_load_zoom >/dev/null 2>&1; then
+  if treed_cam_env_load_zoom >/dev/null 2>&1; then
+    SNAP_URL="${TREED_CAM_ZOOM_SNAPSHOT_URL_LOCAL}"
+  fi
+fi
 
 # Блок 2: Чтение входного имени задания (arg1 или PARAMS) и нормализация.
 raw="${1:-${PARAMS:-}}"
@@ -43,4 +55,6 @@ mkdir -p "${dir}"
 printf '%s\n' "${dir}" > "${SESSION_FILE}"
 
 # Блок 5: Best-effort стартовый снимок в каталог сессии.
-curl -fsS "${SNAP_URL}" -o "${dir}/img_${ts}_start.jpg" >/dev/null 2>&1 || true
+if [[ -n "${SNAP_URL}" ]]; then
+  curl -fsS "${SNAP_URL}" -o "${dir}/img_${ts}_start.jpg" >/dev/null 2>&1 || true
+fi
