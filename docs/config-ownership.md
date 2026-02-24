@@ -55,7 +55,6 @@ Runtime:
 
 - `/home/pi/printer_data/config` (раскладка `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
-- `/home/pi/treed/cam/config` (camera zoom runtime-конфиг)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
 
 ## 3. Ownership map (runtime)
@@ -72,12 +71,6 @@ Runtime:
 
 - `/home/pi/printer_data/config/moonraker/generated/50-webcam-treed.conf`
   владелец: `loader/steps/crowsnest-webcam.sh`
-- `/home/pi/treed/cam/config/zoom_profiles.env`
-  владелец: `loader/steps/crowsnest-webcam.sh`
-- `/etc/systemd/system/treed-cam-zoom.service`
-  владелец: `loader/steps/crowsnest-webcam.sh`
-- managed-block `TREED-CAM-ZOOM` в nginx server-файле с маршрутом `/webcam`
-  владелец: `loader/steps/crowsnest-webcam.sh`
 
 Loader очищает старые `*.conf` в `moonraker/generated` (кроме `00-placeholder.conf`) и затем создает актуальные фрагменты.
 
@@ -86,9 +79,6 @@ Runtime-скрипты камеры:
 - source: `runtime-scripts/treed-cam/*`
 - deploy: `/home/pi/treed/cam/bin/*`
 - владелец: `loader/steps/treed-cam.sh`
-- runtime active-profile state: `/home/pi/treed/cam/config/zoom_active.env`
-  - первичное создание: `loader/steps/crowsnest-webcam.sh`
-  - runtime-владелец (изменение active profile): `runtime-scripts/treed-cam/zoom_profile_set.sh`
 
 Тема KlipperScreen:
 
@@ -139,9 +129,9 @@ Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
 Оставлено как есть (управляемые runtime-артефакты, не preserve):
 
 - `loader/steps/klipper-sync.sh` — пересборка staging.
-- `loader/steps/treed-cam.sh` — очистка `cam/bin` перед копированием (каталоги `cam/config` и `cam/logs` не очищаются).
+- `loader/steps/treed-cam.sh` — очистка `cam/bin` перед копированием.
 - `loader/steps/klipper-mainsail-theme.sh` — `rsync --delete` для `.theme`.
-- `loader/steps/crowsnest-webcam.sh` — перегенерация webcam-фрагмента, raw crowsnest-конфига и zoom-sidecar/nginx/systemd camera-контура.
+- `loader/steps/crowsnest-webcam.sh` — prune `moonraker/generated/*.conf` и перегенерация webcam-фрагмента.
 - `loader/steps/moonraker-config.sh` — очистка `moonraker/base` и `moonraker/generated` (кроме placeholder).
 
 Системные шаги (не зависят от deploy-mode):

@@ -40,23 +40,6 @@ is_true() {
   esac
 }
 
-read_env_assignment_value() {
-  local file="$1"
-  local key="$2"
-  awk -F= -v k="${key}" '
-    $1 == k {
-      v = substr($0, index($0, "=") + 1)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-      if (v ~ /^".*"$/) {
-        sub(/^"/, "", v)
-        sub(/"$/, "", v)
-      }
-      print v
-      exit
-    }
-  ' "${file}" 2>/dev/null
-}
-
 read_klipperscreen_main_theme() {
   local cfg="$1"
   awk '
@@ -225,8 +208,7 @@ moonraker_webcams_check() {
     if [ "${code}" = "200" ] \
       && grep -qE '"name"[[:space:]]*:[[:space:]]*"treed"' "${tmp}" \
       && grep -qE '"service"[[:space:]]*:[[:space:]]*"mjpegstreamer"' "${tmp}" \
-      && grep -qE '"stream_url"[[:space:]]*:[[:space:]]*"/webcam-treed/stream[.]mjpg"' "${tmp}" \
-      && grep -qE '"snapshot_url"[[:space:]]*:[[:space:]]*"/webcam-treed/snapshot[.]jpg"' "${tmp}"; then
+      && grep -qE '"stream_url"[[:space:]]*:[[:space:]]*"/webcam/\?action=stream"' "${tmp}"; then
       pass "${check_name}"
       rm -f "${tmp}"
       return 0
@@ -665,16 +647,10 @@ fi
 
 # Блок 16: Подготовка и переключение режима camera-проверок.
 CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
-CAM_CONFIG_DIR="${PI_HOME}/treed/cam/config"
 CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
 MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"
 MOONRAKER_WEBCAM_FRAGMENT="${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf"
 WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
-ZOOM_PROFILES_ENV="${CAM_CONFIG_DIR}/zoom_profiles.env"
-ZOOM_ACTIVE_ENV="${CAM_CONFIG_DIR}/zoom_active.env"
-ZOOM_SIDE_SERVICE="treed-cam-zoom.service"
-ZOOM_PUBLIC_SNAPSHOT_URL="http://127.0.0.1/webcam-treed/snapshot.jpg"
-RAW_DIRECT_SNAPSHOT_URL="http://127.0.0.1:8080/?action=snapshot"
 
 TREED_VERIFY_CAMERA="${TREED_VERIFY_CAMERA:-auto}"
 camera_checks_enabled=0
@@ -717,7 +693,7 @@ if [ "${camera_checks_enabled}" = "1" ]; then
     byid_index0_available=1
   fi
 
-  for f in session_start.sh snapshot.sh session_stop.sh cam_env.sh zoom-sidecar.sh zoom_profile_set.sh zoom_profile_status.sh; do
+  for f in session_start.sh snapshot.sh session_stop.sh; do
     if [ -x "${CAM_BIN_DIR}/${f}" ]; then
       pass "cam script executable ${CAM_BIN_DIR}/${f}"
     else
@@ -727,12 +703,10 @@ if [ "${camera_checks_enabled}" = "1" ]; then
 
   if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ] \
     && grep -qE '^\[webcam treed\]\s*$' "${MOONRAKER_WEBCAM_FRAGMENT}" \
-    && grep -qE '^[[:space:]]*service[[:space:]]*[:=][[:space:]]*mjpegstreamer[[:space:]]*$' "${MOONRAKER_WEBCAM_FRAGMENT}" \
-    && grep -qE '^[[:space:]]*stream_url[[:space:]]*:[[:space:]]*/webcam-treed/stream[.]mjpg[[:space:]]*$' "${MOONRAKER_WEBCAM_FRAGMENT}" \
-    && grep -qE '^[[:space:]]*snapshot_url[[:space:]]*:[[:space:]]*/webcam-treed/snapshot[.]jpg[[:space:]]*$' "${MOONRAKER_WEBCAM_FRAGMENT}"; then
-    pass "moonraker webcam treed fragment urls=/webcam-treed/* (${MOONRAKER_WEBCAM_FRAGMENT})"
+    && grep -qE '^[[:space:]]*service[[:space:]]*[:=][[:space:]]*mjpegstreamer[[:space:]]*$' "${MOONRAKER_WEBCAM_FRAGMENT}"; then
+    pass "moonraker webcam treed service=mjpegstreamer (${MOONRAKER_WEBCAM_FRAGMENT})"
   else
-    failf "moonraker webcam treed fragment urls=/webcam-treed/* (${MOONRAKER_WEBCAM_FRAGMENT})"
+    failf "moonraker webcam treed service=mjpegstreamer (${MOONRAKER_WEBCAM_FRAGMENT})"
   fi
 
   if [ -f "${MOONRAKER_CFG}" ]; then
@@ -787,48 +761,9 @@ if [ "${camera_checks_enabled}" = "1" ]; then
     failf "crowsnest config present (${CROWSNEST_CFG})"
   fi
 
-  if [ -f "${ZOOM_PROFILES_ENV}" ]; then
-    pass "camera zoom profiles env present (${ZOOM_PROFILES_ENV})"
-    zoom_profiles_list="$(read_env_assignment_value "${ZOOM_PROFILES_ENV}" "TREED_CAM_ZOOM_PROFILES" | tr -d '\r\n' || true)"
-    if [ "${zoom_profiles_list}" = "wide medium close" ]; then
-      pass "camera zoom profiles list (wide medium close)"
-    else
-      failf "camera zoom profiles list (current=${zoom_profiles_list:-missing})"
-    fi
-  else
-    failf "camera zoom profiles env present (${ZOOM_PROFILES_ENV})"
-  fi
-
-  if [ -f "${ZOOM_ACTIVE_ENV}" ]; then
-    pass "camera zoom active env present (${ZOOM_ACTIVE_ENV})"
-    zoom_active_profile="$(read_env_assignment_value "${ZOOM_ACTIVE_ENV}" "TREED_CAM_ZOOM_PROFILE" | tr -d '\r\n' || true)"
-    case "${zoom_active_profile}" in
-      wide|medium|close)
-        pass "camera zoom active profile valid (${zoom_active_profile})"
-        ;;
-      *)
-        failf "camera zoom active profile valid (current=${zoom_active_profile:-missing})"
-        ;;
-    esac
-  else
-    failf "camera zoom active env present (${ZOOM_ACTIVE_ENV})"
-  fi
-
-  if systemctl cat "${ZOOM_SIDE_SERVICE}" >/dev/null 2>&1; then
-    pass "${ZOOM_SIDE_SERVICE} present"
-    if systemctl is-active --quiet "${ZOOM_SIDE_SERVICE}"; then
-      pass "${ZOOM_SIDE_SERVICE} active"
-    else
-      zoom_state="$(systemctl is-active "${ZOOM_SIDE_SERVICE}" 2>/dev/null || true)"
-      failf "${ZOOM_SIDE_SERVICE} active (state=${zoom_state:-unknown})"
-    fi
-  else
-    failf "${ZOOM_SIDE_SERVICE} present"
-  fi
-
   if command -v curl >/dev/null 2>&1; then
-    http_snapshot_check "camera raw snapshot :8080" "${RAW_DIRECT_SNAPSHOT_URL}"
-    http_snapshot_check "camera zoom public snapshot /webcam-treed" "${ZOOM_PUBLIC_SNAPSHOT_URL}"
+    http_snapshot_check "camera direct snapshot :8080" "http://127.0.0.1:8080/?action=snapshot"
+    http_snapshot_check "camera proxied snapshot /webcam" "http://127.0.0.1/webcam/?action=snapshot"
     moonraker_webcams_check "moonraker webcams api treed entry" "${WEBCAM_API_URL}"
   else
     failf "curl installed for camera checks"

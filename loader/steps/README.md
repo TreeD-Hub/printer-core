@@ -23,8 +23,8 @@
 | 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 16 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
 | 17 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
-| 18 | `crowsnest-webcam.sh` | optional | Настройка raw камеры (crowsnest), zoom-sidecar, nginx webcam-proxy и Moonraker webcam-фрагмента. |
-| 19 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD (включая zoom-sidecar helpers) и отложенный рестарт zoom-сервиса. |
+| 18 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
+| 19 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
 | 20 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
 | 21 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
 | 22 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
@@ -68,11 +68,8 @@
 - `CAM_DEVICE`
 - `CAM_ALLOW_VIDEO0_FALLBACK` (`1` разрешает fallback на `/dev/video0`)
 - `TREED_CAMERA_REQUIRED` (`1` переводит шаг камеры в fail-fast)
-- `TREED_CAM_RESOLUTION` (default `1920x1080`, zoom-профили рассчитаны на этот raw capture)
+- `TREED_CAM_RESOLUTION` (default `1024x768`)
 - `TREED_CAM_FPS` (default `10`)
-- `TREED_CAM_ZOOM_DEFAULT_PROFILE` (default `medium`, `wide|medium|close`)
-- `TREED_CAM_ZOOM_PORT` (default `8081`, локальный port zoom-sidecar stream backend)
-- `TREED_CAM_ZOOM_OUTPUT_WIDTH` / `TREED_CAM_ZOOM_OUTPUT_HEIGHT` (default `1280x720`, выход zoom-sidecar)
 - `MOONRAKER_READY_RETRIES` (default `30`)
 
 ### KlipperScreen
@@ -117,14 +114,6 @@
 ## Практические замечания
 
 - `crowsnest-webcam.sh` optional на уровне оркестратора; для строгого режима используйте `TREED_CAMERA_REQUIRED=1`.
-- `crowsnest-webcam.sh` владеет единым camera zoom-контуром:
-  - raw `crowsnest.conf` (`ustreamer`, обычно `:8080`);
-  - `~/treed/cam/config/zoom_profiles.env` (single source of truth URL/ROI/output);
-  - `~/treed/cam/config/zoom_active.env` (default profile, затем runtime-владелец — `zoom_profile_set.sh`);
-  - `treed-cam-zoom.service`;
-  - marker-блоком nginx routes в server-файле с существующим `/webcam` (`/webcam-treed/*`);
-  - Moonraker webcam fragment `50-webcam-treed.conf`.
-- `treed-cam.sh` раскладывает runtime scripts в `~/treed/cam/bin`, готовит `~/treed/cam/{config,logs,prints}` и выполняет отложенный `restart treed-cam-zoom.service`, если unit уже задеплоен предыдущим шагом.
 - `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` optional на уровне оркестратора.
 - `klipperscreen-theme.sh` для `treed-oled` проверяет наличие `images/*` из `style.css`, при необходимости копирует fallback icon-pack.
 - `klipperscreen-theme.sh` устанавливает шрифт `WebPlus IBM MDA` в `/usr/local/share/fonts/treed` и обновляет fontconfig (`fc-cache`).

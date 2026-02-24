@@ -16,7 +16,7 @@ ensure_root
 # Блок 2: Установка базового пакета зависимостей.
 log_info "Step packages-core: installing core packages"
 apt-get update
-apt-get -y install plymouth plymouth-themes plymouth-label rsync curl v4l-utils python3 ffmpeg
+apt-get -y install plymouth plymouth-themes plymouth-label rsync curl v4l-utils python3
 
 # Блок 3: Санитарная проверка socat (битый бинарник удаляем).
 # TreeD работает через python3 и Unix-сокеты, поэтому битый socat удаляем.
@@ -32,14 +32,7 @@ else
   log_info "packages-core: socat not installed (expected)"
 fi
 
-# Блок 4: Проверка наличия ffmpeg для camera zoom-sidecar.
-if command -v ffmpeg >/dev/null 2>&1; then
-  log_info "packages-core: ffmpeg present"
-else
-  log_warn "packages-core: ffmpeg missing after install"
-fi
-
-# Блок 5: Проверка наличия script-плагина Plymouth.
+# Блок 4: Проверка наличия script-плагина Plymouth.
 if ls /usr/lib/*/plymouth/script.so >/dev/null 2>&1; then
   log_info "packages-core: plymouth script engine present"
 else
