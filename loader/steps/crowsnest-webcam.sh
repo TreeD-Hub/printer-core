@@ -16,7 +16,7 @@ LIB_DIR="${REPO_DIR}/loader/lib"
 source "${LIB_DIR}/common.sh"
 
 # Блок 2: Старт шага и расчет пользовательских путей.
-log_info "Step crowsnest-webcam: fixed 1024x768@10 for single USB cam"
+log_info "Step crowsnest-webcam: fixed 1920x1080@10 for single USB cam"
 
 PI_USER="${PI_USER:-pi}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
@@ -39,7 +39,7 @@ CAM_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
 # Дефолтный режим камеры:
 # - после перевода MCU на UART USB-шина разгружена, можно поднять качество потока.
 # - при признаках нестабильности верните 640x480@10 через env без правки кода.
-CAM_RESOLUTION="${TREED_CAM_RESOLUTION:-1024x768}"
+CAM_RESOLUTION="${TREED_CAM_RESOLUTION:-1920x1080}"
 CAM_FPS="${TREED_CAM_FPS:-10}"
 CAM_PORT="8080"
 
@@ -167,7 +167,7 @@ write_crowsnest_conf() {
   log_info "Writing crowsnest.conf -> ${CROWSNEST_CONF}"
   cat > "${CROWSNEST_CONF}" <<EOF
 #### treed-managed: crowsnest-webcam
-#### одиночная USB-камера, 1024x768@10 (override: TREED_CAM_RESOLUTION/TREED_CAM_FPS)
+#### одиночная USB-камера, 1920x1080@10 (override: TREED_CAM_RESOLUTION/TREED_CAM_FPS)
 
 [crowsnest]
 log_path: ${PI_HOME}/printer_data/logs/crowsnest.log

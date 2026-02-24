@@ -68,7 +68,7 @@
 - `CAM_DEVICE`
 - `CAM_ALLOW_VIDEO0_FALLBACK` (`1` разрешает fallback на `/dev/video0`)
 - `TREED_CAMERA_REQUIRED` (`1` переводит шаг камеры в fail-fast)
-- `TREED_CAM_RESOLUTION` (default `1024x768`)
+- `TREED_CAM_RESOLUTION` (default `1920x1080`)
 - `TREED_CAM_FPS` (default `10`)
 - `MOONRAKER_READY_RETRIES` (default `30`)
 
