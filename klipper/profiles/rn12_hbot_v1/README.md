@@ -131,6 +131,35 @@
 - Runtime-файл на устройстве: `local_overrides.cfg`
 - `local_overrides.cfg` не коммитится и считается локальным source-of-truth для конкретного экземпляра принтера
 
+## ADXL345 / Input Shaper (опционально, через Pi)
+
+Для измерения резонансов через ADXL345 на Raspberry Pi:
+
+0. Рекомендуемый путь (через loader, без ручной правки runtime-файлов):
+- запустить loader с `TREED_ADXL_RPI_ENABLE=1`
+- при необходимости указать `TREED_ADXL_RPI_SPI_BUS=spidev0.1` (если датчик сидит на CE1)
+- опционально `TREED_ADXL_RPI_ENABLE_INPUT_SHAPER=1`, чтобы loader сразу включил `optional_input_shaper.cfg`
+
+1. Включить в `printer.cfg` (runtime на Pi) include-файлы:
+- `profiles/rn12_hbot_v1/optional_adxl345_rpi.cfg`
+- `profiles/rn12_hbot_v1/optional_resonance_tester.cfg`
+- `profiles/rn12_hbot_v1/optional_input_shaper.cfg` (для последующего применения результатов)
+
+2. Убедиться, что на Pi включен SPI и запущен `klipper_mcu` (host MCU).
+
+3. После `RESTART` проверить связь:
+- `ACCELEROMETER_QUERY`
+- `MEASURE_AXES_NOISE`
+
+4. Калибровка:
+- `TEST_RESONANCES AXIS=X`
+- `TEST_RESONANCES AXIS=Y`
+- или `SHAPER_CALIBRATE`
+
+Примечание:
+- `optional_adxl345_rpi.cfg` по умолчанию настроен на SPI0 CE0 (`spidev0.0`).
+- Для CE1 замените `spi_bus` на `spidev0.1`.
+
 ## Как это раскладывает loader
 
 1. `loader/steps/klipper-sync.sh` синхронизирует дерево `klipper/` в staging (`/home/pi/treed/klipper`)

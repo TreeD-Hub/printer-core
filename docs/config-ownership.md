@@ -56,6 +56,7 @@ Runtime:
 - `/home/pi/printer_data/config` (раскладка `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
+- `/usr/local/bin/klipper_mcu` и `/etc/systemd/system/klipper-mcu.service` (при opt-in `klipper-adxl-rpi`)
 
 ## 3. Ownership map (runtime)
 
@@ -73,6 +74,13 @@ Runtime:
   владелец: `loader/steps/crowsnest-webcam.sh`
 
 Loader очищает старые `*.conf` в `moonraker/generated` (кроме `00-placeholder.conf`) и затем создает актуальные фрагменты.
+
+Локальные runtime-overrides (владелец — локальный хост / loader managed-block):
+
+- `/home/pi/printer_data/config/local_overrides.cfg`
+  - пользовательские ручные override — локальный source-of-truth;
+  - при `TREED_ADXL_RPI_ENABLE=1` шаг `loader/steps/klipper-adxl-rpi.sh` управляет только marker-блоком
+    `# --- TREED ADXL345 (Pi SPI) BEGIN/END ---`.
 
 Runtime-скрипты камеры:
 
@@ -125,6 +133,7 @@ Allowlist runtime-preserve:
 Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
 
 - `loader/steps/klipper-core.sh` — wipe runtime + restore `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg` в `preserve`.
+- `loader/steps/klipper-adxl-rpi.sh` — opt-in: host MCU на Pi (`klipper-mcu.service`) + managed ADXL block в `local_overrides.cfg`.
 - `loader/steps/moonraker-config.sh` — `backup_file_once` для `moonraker.conf` только в `preserve`.
 - `loader/steps/klipperscreen-theme.sh` — `backup_file_once` для `KlipperScreen.conf` только в `preserve`.
 

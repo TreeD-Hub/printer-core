@@ -21,16 +21,17 @@
 | 13 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
 | 14 | `klipper-profiles.sh` | required | Профиль RN12 и serial-path MCU. |
 | 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 16 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
-| 17 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
-| 18 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
-| 19 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
-| 20 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 21 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
-| 22 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
-| 23 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
-| 24 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 25 | `verify.sh` | required | Финальная валидация результата. |
+| 16 | `klipper-adxl-rpi.sh` | optional | Opt-in интеграция ADXL345 через SPI Raspberry Pi (`klipper-mcu` + managed-block в `local_overrides.cfg`). |
+| 17 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
+| 18 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
+| 19 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
+| 20 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
+| 21 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
+| 22 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
+| 23 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
+| 24 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
+| 25 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
+| 26 | `verify.sh` | required | Финальная валидация результата. |
 
 ## Контракт для step-скриптов
 
@@ -62,6 +63,10 @@
 - `MCU_SERIAL_BY_ID` (`/dev/serial/by-id/*`, для USB-режима)
 - `KLIPPER_SERVICE` (default `klipper`)
 - `TREED_ANTI_SHUTDOWN_INFO_TIMEOUT` (default `2`)
+- `TREED_ADXL_RPI_ENABLE` (`1` — включить opt-in шаг `klipper-adxl-rpi.sh`)
+- `TREED_ADXL_RPI_SPI_BUS` (default `spidev0.0`, для CE1 обычно `spidev0.1`)
+- `TREED_ADXL_RPI_ENABLE_INPUT_SHAPER` (`1` — включить include `optional_input_shaper.cfg` в managed ADXL block)
+- `TREED_ADXL_RPI_REBUILD_HOST_MCU` (`1` — принудительно пересобрать `/usr/local/bin/klipper_mcu`)
 
 ### Moonraker / Camera
 
@@ -90,6 +95,7 @@
 - `TREED_ENABLE_NTP` (default `1`)
 - `TREED_MASK_TTY1` (default `1`)
 - `TREED_VERIFY_CAMERA` (`auto|0|1`, default `auto`)
+- `TREED_VERIFY_ADXL_RPI` (`auto|0|1`, default `auto`, авто по include `optional_adxl345_rpi.cfg` в `local_overrides.cfg`)
 - `TREED_CAM_HTTP_RETRIES` (default `3`)
 - `TREED_CAM_HTTP_TIMEOUT` (default `8`)
 - `TREED_MOONRAKER_HTTP_RETRIES` (default `30`)
@@ -114,6 +120,8 @@
 ## Практические замечания
 
 - `crowsnest-webcam.sh` optional на уровне оркестратора; для строгого режима используйте `TREED_CAMERA_REQUIRED=1`.
+- `klipper-adxl-rpi.sh` optional и opt-in; включается только при `TREED_ADXL_RPI_ENABLE=1`.
+- `verify.sh` проверяет ADXL-контур (`klipper-mcu.service`, SPI, `ACCELEROMETER_QUERY`) только если ADXL include включен в `local_overrides.cfg` или `TREED_VERIFY_ADXL_RPI=1`.
 - `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` optional на уровне оркестратора.
 - `klipperscreen-theme.sh` для `treed-oled` проверяет наличие `images/*` из `style.css`, при необходимости копирует fallback icon-pack.
 - `klipperscreen-theme.sh` устанавливает шрифт `WebPlus IBM MDA` в `/usr/local/share/fonts/treed` и обновляет fontconfig (`fc-cache`).

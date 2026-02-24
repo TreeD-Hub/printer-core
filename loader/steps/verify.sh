@@ -220,6 +220,34 @@ moonraker_webcams_check() {
   rm -f "${tmp}"
 }
 
+moonraker_gcode_ok_check() {
+  local check_name="$1"
+  local script="$2"
+  local url="http://127.0.0.1:7125/printer/gcode/script"
+  local tmp code
+
+  if ! command -v curl >/dev/null 2>&1; then
+    failf "${check_name} (curl missing)"
+    return 0
+  fi
+
+  tmp="$(mktemp "/tmp/treed_verify_gcode_XXXXXX.json")"
+  code="$(
+    curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' \
+      -H 'Content-Type: application/json' \
+      -X POST "${url}" \
+      --data "{\"script\":\"${script}\"}" || true
+  )"
+
+  if [ "${code}" = "200" ] && grep -qE '"result"[[:space:]]*:[[:space:]]*"ok"' "${tmp}"; then
+    pass "${check_name}"
+  else
+    failf "${check_name} (http=${code:-n/a})"
+  fi
+
+  rm -f "${tmp}"
+}
+
 # Блок 4: Подготовка boot-путей при ручном запуске verify.
 # Гарантируем BOOT_DIR / CMDLINE_FILE / CONFIG_FILE даже при ручном запуске
 if [ -z "${BOOT_DIR:-}" ]; then
@@ -308,6 +336,11 @@ KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
 KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
 KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
 KS_SERVICE_PRESENT=0
+LOCAL_OVERRIDES_CFG="${PI_HOME}/printer_data/config/local_overrides.cfg"
+ADXL_PROFILE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/optional_adxl345_rpi.cfg"
+ADXL_RESONANCE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/optional_resonance_tester.cfg"
+ADXL_SPI_BUS_EXPECTED="${TREED_ADXL_RPI_SPI_BUS:-spidev0.0}"
+ADXL_SPI_DEV_EXPECTED="/dev/${ADXL_SPI_BUS_EXPECTED}"
 
 case "${TREED_MCU_TRANSPORT_RAW}" in
   usb|USB) TREED_MCU_TRANSPORT="usb" ;;
@@ -686,6 +719,43 @@ case "${TREED_VERIFY_CAMERA}" in
     ;;
 esac
 
+# Блок 16a: Подготовка и переключение режима ADXL-проверок (host MCU + SPI на Pi).
+TREED_VERIFY_ADXL_RPI="${TREED_VERIFY_ADXL_RPI:-auto}"
+adxl_checks_enabled=0
+adxl_checks_reason=""
+
+case "${TREED_VERIFY_ADXL_RPI}" in
+  1|true|TRUE|yes|YES)
+    adxl_checks_enabled=1
+    adxl_checks_reason="forced"
+    ;;
+  0|false|FALSE|no|NO)
+    adxl_checks_enabled=0
+    adxl_checks_reason="disabled by TREED_VERIFY_ADXL_RPI"
+    ;;
+  auto|AUTO|'')
+    if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
+      && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_hbot_v1/optional_adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
+      adxl_checks_enabled=1
+      adxl_checks_reason="auto: ADXL include enabled in local_overrides.cfg"
+    else
+      adxl_checks_enabled=0
+      adxl_checks_reason="auto: ADXL include not enabled"
+    fi
+    ;;
+  *)
+    if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
+      && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_hbot_v1/optional_adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
+      adxl_checks_enabled=1
+      adxl_checks_reason="auto fallback: ADXL include enabled"
+    else
+      adxl_checks_enabled=0
+      adxl_checks_reason="auto fallback: ADXL include disabled"
+    fi
+    log_warn "VERIFY invalid TREED_VERIFY_ADXL_RPI='${TREED_VERIFY_ADXL_RPI}', using ${adxl_checks_reason}"
+    ;;
+esac
+
 # Блок 17: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
 if [ "${camera_checks_enabled}" = "1" ]; then
   byid_index0_available=0
@@ -770,6 +840,53 @@ if [ "${camera_checks_enabled}" = "1" ]; then
   fi
 else
   log_info "VERIFY camera checks skipped (${camera_checks_reason})"
+fi
+
+# Блок 17a: Проверки ADXL345 через Pi (или skip в auto).
+if [ "${adxl_checks_enabled}" = "1" ]; then
+  if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
+    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_hbot_v1/optional_adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
+    pass "ADXL include enabled in local_overrides.cfg"
+  else
+    failf "ADXL include enabled in local_overrides.cfg"
+  fi
+
+  if [ -f "${ADXL_PROFILE_CFG}" ]; then
+    pass "ADXL profile config present (${ADXL_PROFILE_CFG})"
+  else
+    failf "ADXL profile config present (${ADXL_PROFILE_CFG})"
+  fi
+
+  if [ -f "${ADXL_RESONANCE_CFG}" ]; then
+    pass "ADXL resonance config present (${ADXL_RESONANCE_CFG})"
+  else
+    failf "ADXL resonance config present (${ADXL_RESONANCE_CFG})"
+  fi
+
+  if [ -e "${ADXL_SPI_DEV_EXPECTED}" ]; then
+    pass "ADXL SPI device present (${ADXL_SPI_DEV_EXPECTED})"
+  else
+    failf "ADXL SPI device present (${ADXL_SPI_DEV_EXPECTED})"
+  fi
+
+  if [ -f "${CONFIG_FILE}" ] && grep -qE '^[[:space:]]*dtparam[[:space:]]*=[[:space:]]*spi=on([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
+    pass "config.txt dtparam=spi=on"
+  else
+    failf "config.txt dtparam=spi=on"
+  fi
+
+  check_required_service_active "klipper-mcu.service"
+
+  if [ -f "${ADXL_PROFILE_CFG}" ] \
+    && grep -qE "^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*${ADXL_SPI_BUS_EXPECTED}[[:space:]]*$" "${ADXL_PROFILE_CFG}"; then
+    pass "ADXL spi_bus configured (${ADXL_SPI_BUS_EXPECTED})"
+  else
+    failf "ADXL spi_bus configured (${ADXL_SPI_BUS_EXPECTED})"
+  fi
+
+  moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
+else
+  log_info "VERIFY ADXL checks skipped (${adxl_checks_reason})"
 fi
 
 # Блок 18: Итог verify (pass/fail счетчики).
