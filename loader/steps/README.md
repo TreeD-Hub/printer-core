@@ -103,7 +103,7 @@
 
 - `klipper-core.sh`
   - `clean`: полная пересборка runtime без возврата локальных файлов.
-  - `preserve`: сохраняется `local_overrides.cfg`.
+  - `preserve`: сохраняются `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент из `printer.cfg`.
 - `moonraker-config.sh`
   - `clean`: `moonraker.conf` без `.bak`.
   - `preserve`: `backup_file_once` перед перезаписью.

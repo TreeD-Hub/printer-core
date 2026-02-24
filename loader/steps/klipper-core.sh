@@ -28,6 +28,7 @@ log_info "Step klipper-core: install full Klipper tree into /home/${PI_USER}/pri
 STAGE_DIR="${PI_HOME}/treed/klipper"
 CONFIG_DIR="${PI_HOME}/printer_data/config"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
+SAVE_CONFIG_MARKER="#*# <---------------------- SAVE_CONFIG ---------------------->"
 
 case "${DEPLOY_MODE}" in
   clean|preserve)
@@ -56,12 +57,33 @@ fi
 
 ensure_dir "${CONFIG_DIR}"
 
-# Блок 4: Preserve-режим — временно сохраняем local_overrides.cfg.
+# Блок 4: Preserve-режим — временно сохраняем локальные runtime-overrides.
 TMP_KEEP=""
-if [ "${DEPLOY_MODE}" = "preserve" ] && [ -e "${CONFIG_DIR}/local_overrides.cfg" ]; then
+if [ "${DEPLOY_MODE}" = "preserve" ]; then
   TMP_KEEP="$(mktemp -d)"
-  cp -a "${CONFIG_DIR}/local_overrides.cfg" "${TMP_KEEP}/" || true
-  log_info "klipper-core: preserve mode, saving local_overrides.cfg"
+
+  if [ -e "${CONFIG_DIR}/local_overrides.cfg" ]; then
+    cp -a "${CONFIG_DIR}/local_overrides.cfg" "${TMP_KEEP}/" || true
+    log_info "klipper-core: preserve mode, saving local_overrides.cfg"
+  fi
+
+  if [ -f "${CONFIG_DIR}/printer.cfg" ] && grep -Fq "${SAVE_CONFIG_MARKER}" "${CONFIG_DIR}/printer.cfg"; then
+    awk -v marker="${SAVE_CONFIG_MARKER}" '
+      index($0, marker) { keep = 1 }
+      keep { print }
+    ' "${CONFIG_DIR}/printer.cfg" > "${TMP_KEEP}/printer_save_config.block" || true
+
+    if [ -s "${TMP_KEEP}/printer_save_config.block" ]; then
+      log_info "klipper-core: preserve mode, saving printer.cfg SAVE_CONFIG segment"
+    else
+      rm -f "${TMP_KEEP}/printer_save_config.block"
+      log_warn "klipper-core: preserve mode, SAVE_CONFIG marker found but segment extraction is empty"
+    fi
+  fi
+
+  if [ ! -e "${TMP_KEEP}/local_overrides.cfg" ] && [ ! -e "${TMP_KEEP}/printer_save_config.block" ]; then
+    log_info "klipper-core: preserve mode, no local runtime overrides found"
+  fi
 else
   log_info "klipper-core: deploy mode ${DEPLOY_MODE}, runtime config will be rebuilt from staging"
 fi
@@ -74,9 +96,23 @@ find "${CONFIG_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 cp -a "${STAGE_DIR}/." "${CONFIG_DIR}/"
 
 # Блок 6: Возврат preserve-override и финальная нормализация runtime.
-# Возврат локального override только в режиме preserve.
+# Возврат локальных runtime-overrides только в режиме preserve.
 if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
-  cp -a "${TMP_KEEP}/." "${CONFIG_DIR}/" || true
+  if [ -f "${TMP_KEEP}/local_overrides.cfg" ]; then
+    cp -a "${TMP_KEEP}/local_overrides.cfg" "${CONFIG_DIR}/" || true
+  fi
+
+  if [ -f "${TMP_KEEP}/printer_save_config.block" ] && [ -f "${CONFIG_DIR}/printer.cfg" ]; then
+    TMP_PRINTER="$(mktemp)"
+    awk -v marker="${SAVE_CONFIG_MARKER}" '
+      index($0, marker) { exit }
+      { print }
+    ' "${CONFIG_DIR}/printer.cfg" > "${TMP_PRINTER}"
+    cat "${TMP_KEEP}/printer_save_config.block" >> "${TMP_PRINTER}"
+    mv "${TMP_PRINTER}" "${CONFIG_DIR}/printer.cfg"
+    log_info "klipper-core: restored printer.cfg SAVE_CONFIG segment"
+  fi
+
   rm -rf "${TMP_KEEP}"
 fi
 

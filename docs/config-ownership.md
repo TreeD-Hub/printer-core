@@ -61,7 +61,7 @@ Runtime:
 
 Управляется репозиторием и шагами loader:
 
-- `/home/pi/printer_data/config/printer.cfg`
+- `/home/pi/printer_data/config/printer.cfg` (repo-managed часть файла; stock `SAVE_CONFIG`-сегмент в `preserve` восстанавливается из runtime)
 - `/home/pi/printer_data/config/profiles/*`
 - `/home/pi/printer_data/config/moonraker.conf`
 - `/home/pi/printer_data/config/moonraker/base/*.conf`
@@ -95,16 +95,18 @@ Runtime-скрипты камеры:
 `TREED_DEPLOY_MODE` применяется только к runtime-конфиг шагам (`klipper-core`, `moonraker-config`, `klipperscreen-theme`):
 
 - `clean`: локальные runtime-overrides не восстанавливаются, `.bak` для runtime-конфигов не создаются.
-- `preserve`: сохраняется только `local_overrides.cfg`; для `moonraker.conf` и `KlipperScreen.conf` разрешен `backup_file_once`.
+- `preserve`: сохраняются `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg`; для `moonraker.conf` и `KlipperScreen.conf` разрешен `backup_file_once`.
 - `auto` (по умолчанию): `dev -> clean`, не-`dev` ветки -> `preserve`, неопределенная ветка (`HEAD`) -> `clean`.
 
 Allowlist runtime-preserve:
 
 - `local_overrides.cfg`
+- `printer.cfg` (только stock `SAVE_CONFIG`-сегмент от маркера `#*# <---------------------- SAVE_CONFIG ---------------------->` до конца файла)
 
 Важно:
 
 - `local_overrides.cfg` гарантированно присутствует после `klipper-core` в любом режиме.
+- stock `SAVE_CONFIG`-сегмент `printer.cfg` не является repo-source-of-truth и может меняться штатными командами Klipper (`PID_CALIBRATE`, `Z_OFFSET_APPLY_*`, `SAVE_CONFIG`).
 - `mainsail.cfg`, `timelapse.cfg`, `crowsnest.conf`, `KlipperScreen.conf`, `sonar.conf` больше не восстанавливаются через `klipper-core`.
 - `moonraker.conf` в любом режиме деплоится канонической версией из репозитория.
 
@@ -122,7 +124,7 @@ Allowlist runtime-preserve:
 
 Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
 
-- `loader/steps/klipper-core.sh` — wipe runtime + restore only `local_overrides.cfg` в `preserve`.
+- `loader/steps/klipper-core.sh` — wipe runtime + restore `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg` в `preserve`.
 - `loader/steps/moonraker-config.sh` — `backup_file_once` для `moonraker.conf` только в `preserve`.
 - `loader/steps/klipperscreen-theme.sh` — `backup_file_once` для `KlipperScreen.conf` только в `preserve`.
 
