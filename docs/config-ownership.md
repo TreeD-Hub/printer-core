@@ -76,12 +76,15 @@ Runtime:
 
 Loader очищает старые `*.conf` в `moonraker/generated` (кроме `00-placeholder.conf`) и затем создает актуальные фрагменты.
 
-Локальные runtime-overrides (владелец — локальный хост / loader managed-block):
+Локальные runtime-overrides (владелец — локальный хост):
 
 - `/home/pi/printer_data/config/local_overrides.cfg`
-  - пользовательские ручные override — локальный source-of-truth;
-  - шаг `loader/steps/klipper-adxl-rpi.sh` управляет marker-блоком ADXL/Input Shaper
-    `# --- TREED ADXL345 (Pi SPI) BEGIN/END ---`.
+  - пользовательские ручные override — локальный source-of-truth.
+
+- `/home/pi/printer_data/config/printer.cfg`
+  - repo-managed include `profiles/rn12_corexy_v1/adxl345_rpi.cfg`;
+  - repo-managed include `profiles/rn12_corexy_v1/input_shaper.cfg`;
+  - шаг `loader/steps/klipper-adxl-rpi.sh` проверяет эти include fail-fast.
 
 Runtime-скрипты камеры:
 
@@ -134,7 +137,7 @@ Allowlist runtime-preserve:
 Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
 
 - `loader/steps/klipper-core.sh` — wipe runtime + restore `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg` в `preserve`.
-- `loader/steps/klipper-adxl-rpi.sh` — required: host MCU на Pi (`klipper-mcu.service`) + managed ADXL/Input Shaper block в `local_overrides.cfg`.
+- `loader/steps/klipper-adxl-rpi.sh` — required: host MCU на Pi (`klipper-mcu.service`) + fail-fast проверка include ADXL/Input Shaper в `printer.cfg` + очистка legacy marker-блока в `local_overrides.cfg`.
 - `loader/steps/moonraker-config.sh` — `backup_file_once` для `moonraker.conf` только в `preserve`.
 - `loader/steps/klipperscreen-theme.sh` — `backup_file_once` для `KlipperScreen.conf` только в `preserve`.
 

@@ -6,7 +6,8 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Поднимает host MCU (`klipper-mcu.service`) на Raspberry Pi для ADXL345 по SPI.
-# - Включает managed-блок ADXL/Input Shaper include в `local_overrides.cfg`.
+# - Проверяет, что ADXL/Input Shaper включены напрямую в `printer.cfg`.
+# - Удаляет legacy marker-блок ADXL из `local_overrides.cfg`, если он остался от старой схемы.
 # - Подготавливает runtime к проверке ADXL в `verify.sh`.
 # Контур:
 # - required (fail-fast): ADXL и Input Shaper являются базовым контуром.
@@ -48,6 +49,7 @@ if ! grp="$(pi_primary_group "${PI_USER}")"; then
 fi
 
 CONFIG_DIR="${PI_HOME}/printer_data/config"
+PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 LOCAL_OVERRIDES_CFG="${CONFIG_DIR}/local_overrides.cfg"
 PROFILE_DIR="${CONFIG_DIR}/profiles/rn12_corexy_v1"
 ADXL_CFG="${PROFILE_DIR}/adxl345_rpi.cfg"
@@ -65,7 +67,11 @@ if [ -z "${SPI_CONFIG_FILE}" ] || [ ! -f "${SPI_CONFIG_FILE}" ]; then
   SPI_CONFIG_FILE="$(detect_config_file "${boot_dir}" 2>/dev/null || true)"
 fi
 
-# Блок 3: Проверка runtime-конфига профиля перед включением managed-блока.
+# Блок 3: Проверка runtime-конфига профиля и обязательной include-цепочки ADXL/Input Shaper.
+if [ ! -f "${PRINTER_CFG}" ]; then
+  log_error "klipper-adxl-rpi: runtime printer.cfg not found: ${PRINTER_CFG}"
+  exit 1
+fi
 if [ ! -d "${PROFILE_DIR}" ]; then
   log_error "klipper-adxl-rpi: profile dir not found: ${PROFILE_DIR}"
   exit 1
@@ -76,6 +82,14 @@ if [ ! -f "${ADXL_CFG}" ]; then
 fi
 if [ ! -f "${INPUT_SHAPER_CFG}" ]; then
   log_error "klipper-adxl-rpi: missing runtime Input Shaper config: ${INPUT_SHAPER_CFG}"
+  exit 1
+fi
+if ! grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
+  log_error "klipper-adxl-rpi: printer.cfg must include profiles/rn12_corexy_v1/adxl345_rpi.cfg"
+  exit 1
+fi
+if ! grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
+  log_error "klipper-adxl-rpi: printer.cfg must include profiles/rn12_corexy_v1/input_shaper.cfg"
   exit 1
 fi
 
@@ -187,14 +201,20 @@ ensure_runtime_adxl_spi_bus() {
 
 ensure_runtime_adxl_spi_bus "${TREED_ADXL_RPI_SPI_BUS}"
 
-# Блок 7: Managed-блок в local_overrides.cfg для включения ADXL/Input Shaper include.
-ensure_adxl_local_overrides_block() {
+# Блок 7: Очистка legacy managed-блока ADXL в local_overrides.cfg.
+cleanup_legacy_adxl_local_overrides_block() {
   local marker_begin="# --- TREED ADXL345 (Pi SPI) BEGIN ---"
   local marker_end="# --- TREED ADXL345 (Pi SPI) END ---"
-  local input_shaper_line="[include profiles/rn12_corexy_v1/input_shaper.cfg]"
   local tmp=""
 
-  touch "${LOCAL_OVERRIDES_CFG}"
+  if [ ! -f "${LOCAL_OVERRIDES_CFG}" ]; then
+    return 0
+  fi
+
+  if ! grep -qF "${marker_begin}" "${LOCAL_OVERRIDES_CFG}"; then
+    return 0
+  fi
+
   tmp="$(mktemp)"
   awk -v b="${marker_begin}" -v e="${marker_end}" '
     $0 == b { skip = 1; next }
@@ -202,22 +222,18 @@ ensure_adxl_local_overrides_block() {
     !skip { print }
   ' "${LOCAL_OVERRIDES_CFG}" > "${tmp}"
 
-  cat >> "${tmp}" <<EOF
-${marker_begin}
-[include profiles/rn12_corexy_v1/adxl345_rpi.cfg]
-${input_shaper_line}
-${marker_end}
-EOF
-
   cp "${tmp}" "${LOCAL_OVERRIDES_CFG}"
   rm -f "${tmp}"
-  log_info "klipper-adxl-rpi: updated managed ADXL block in ${LOCAL_OVERRIDES_CFG}"
+  log_info "klipper-adxl-rpi: removed legacy ADXL marker-block from ${LOCAL_OVERRIDES_CFG}"
 }
 
-ensure_adxl_local_overrides_block
+cleanup_legacy_adxl_local_overrides_block
 
 # Блок 8: Права и завершение шага (перезапуск Klipper делается следующим шагом/verify).
-chown "${PI_USER}:${grp}" "${LOCAL_OVERRIDES_CFG}" "${ADXL_CFG}" "${INPUT_SHAPER_CFG}" || true
+chown "${PI_USER}:${grp}" "${ADXL_CFG}" "${INPUT_SHAPER_CFG}" || true
+if [ -f "${LOCAL_OVERRIDES_CFG}" ]; then
+  chown "${PI_USER}:${grp}" "${LOCAL_OVERRIDES_CFG}" || true
+fi
 if [ -d "${KLIPPER_DIR}/${KLIPPER_HOST_MCU_OUTDIR}" ]; then
   chown -R "${PI_USER}:${grp}" "${KLIPPER_DIR}/${KLIPPER_HOST_MCU_OUTDIR}" || true
 fi

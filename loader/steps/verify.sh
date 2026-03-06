@@ -330,13 +330,13 @@ else
   log_info "VERIFY KlipperScreen home resolved as ${TREED_KLIPPERSCREEN_HOME}"
 fi
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/mcu_rn12.cfg"
+PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
 KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
 KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
 KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
 KS_SERVICE_PRESENT=0
-LOCAL_OVERRIDES_CFG="${PI_HOME}/printer_data/config/local_overrides.cfg"
 ADXL_PROFILE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/adxl345_rpi.cfg"
 INPUT_SHAPER_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/input_shaper.cfg"
 ADXL_SPI_BUS_EXPECTED="${TREED_ADXL_RPI_SPI_BUS:-spidev0.0}"
@@ -829,18 +829,18 @@ fi
 
 # Блок 17a: Проверки ADXL345 через Pi (или skip в auto).
 if [ "${adxl_checks_enabled}" = "1" ]; then
-  if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
-    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
-    pass "ADXL include enabled in local_overrides.cfg"
+  if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
+    pass "ADXL include enabled in printer.cfg"
   else
-    failf "ADXL include enabled in local_overrides.cfg"
+    failf "ADXL include enabled in printer.cfg"
   fi
 
-  if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
-    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
-    pass "Input Shaper include enabled in local_overrides.cfg"
+  if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
+    pass "Input Shaper include enabled in printer.cfg"
   else
-    failf "Input Shaper include enabled in local_overrides.cfg"
+    failf "Input Shaper include enabled in printer.cfg"
   fi
 
   if [ -f "${ADXL_PROFILE_CFG}" ]; then

@@ -21,7 +21,7 @@
 | 13 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
 | 14 | `klipper-profiles.sh` | required | Профиль RN12 и serial-path MCU. |
 | 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 16 | `klipper-adxl-rpi.sh` | required | Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi (`klipper-mcu` + managed-block в `local_overrides.cfg`). |
+| 16 | `klipper-adxl-rpi.sh` | required | Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi (`klipper-mcu` + fail-fast-проверка include в `printer.cfg`). |
 | 17 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
 | 18 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
 | 19 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
@@ -120,8 +120,8 @@
 ## Практические замечания
 
 - `crowsnest-webcam.sh` optional на уровне оркестратора; для строгого режима используйте `TREED_CAMERA_REQUIRED=1`.
-- `klipper-adxl-rpi.sh` required: поднимает host MCU, включает `adxl345_rpi.cfg` и `input_shaper.cfg` через managed-блок.
-- `verify.sh` всегда проверяет ADXL-контур (`klipper-mcu.service`, SPI, include-блоки, `ACCELEROMETER_QUERY`).
+- `klipper-adxl-rpi.sh` required: поднимает host MCU, валидирует include `adxl345_rpi.cfg`/`input_shaper.cfg` в `printer.cfg` и чистит legacy ADXL marker-блок в `local_overrides.cfg`.
+- `verify.sh` всегда проверяет ADXL-контур (`klipper-mcu.service`, SPI, include в `printer.cfg`, `ACCELEROMETER_QUERY`).
 - `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` optional на уровне оркестратора.
 - `klipperscreen-theme.sh` для `treed-oled` проверяет наличие `images/*` из `style.css`, при необходимости копирует fallback icon-pack.
 - `klipperscreen-theme.sh` устанавливает шрифт `WebPlus IBM MDA` в `/usr/local/share/fonts/treed` и обновляет fontconfig (`fc-cache`).

@@ -14,9 +14,11 @@
 5. `profiles/rn12_corexy_v1/extruder.cfg`
 6. `profiles/rn12_corexy_v1/bed_heater_dc.cfg`
 7. `profiles/rn12_corexy_v1/fans.cfg`
-8. `profiles/rn12_corexy_v1/macros.cfg`
-9. `profiles/rn12_corexy_v1/ui.cfg`
-10. `local_overrides.cfg` (локальный runtime-файл на Pi)
+8. `profiles/rn12_corexy_v1/adxl345_rpi.cfg`
+9. `profiles/rn12_corexy_v1/input_shaper.cfg`
+10. `profiles/rn12_corexy_v1/macros.cfg`
+11. `profiles/rn12_corexy_v1/ui.cfg`
+12. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
 ## Аппаратный контракт (текущая сборка)
 
@@ -75,6 +77,7 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 - `_TREED_START_PREP_STATE`
 - `_TREED_START_MACHINE_PREP`
 - `_TREED_START_PREHEAT`
+- `_TREED_START_WAIT_PREHEAT_NOZZLE`
 - `_TREED_START_POSITION_AND_FINAL_HEAT`
 - `_TREED_START_PRIME`
 - `_TREED_START_POST_HOOKS`
@@ -84,6 +87,7 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 - `_TREED_RESUME_HEAT_PURGE_WIPE`
 - `_TREED_RESUME_FINALIZE`
 - `_TREED_RESUME_POST_HOOKS`
+- `_TREED_FILAMENT_MOVE`
 
 `START_PRINT`, `PAUSE`, `RESUME` работают как тонкие оркестраторы и вызывают фазовые private-хелперы в фиксированном порядке.
 
@@ -149,12 +153,12 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 Для измерения резонансов через ADXL345 на Raspberry Pi:
 
 0. Базовый путь (через loader, без ручной правки runtime-файлов):
-- ADXL и `input_shaper.cfg` включаются loader по умолчанию;
+- ADXL и `input_shaper.cfg` включены напрямую в `klipper/printer.cfg`;
 - при необходимости указать `TREED_ADXL_RPI_SPI_BUS=spidev0.1` (если датчик сидит на CE1).
 
-1. Loader управляет include-цепочкой через managed-блок в `local_overrides.cfg`:
-- `profiles/rn12_corexy_v1/adxl345_rpi.cfg` (внутри уже содержит `[resonance_tester]`)
-- `profiles/rn12_corexy_v1/input_shaper.cfg` (обязательный include)
+1. Loader не добавляет ADXL/Input Shaper include в `local_overrides.cfg`.
+- `local_overrides.cfg` используется только для локальных пользовательских override;
+- если в runtime остался legacy marker-блок ADXL, шаг `klipper-adxl-rpi.sh` удаляет его.
 
 2. Убедиться, что на Pi включен SPI и запущен `klipper_mcu` (host MCU).
 
