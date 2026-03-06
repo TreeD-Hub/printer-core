@@ -4,14 +4,19 @@
 
 ## Скрипты и поведение
 
+- `cam_env.sh`
+  - единый helper для runtime-переменных камеры;
+  - читает optional override-файл `${PI_HOME}/treed/cam/config/runtime.env`;
+  - возвращает snapshot endpoint через `TREED_CAM_SNAPSHOT_URL` (или дефолт).
 - `session_start.sh`
   - создает каталог новой сессии в `${PI_HOME}/treed/cam/prints`;
   - записывает путь активной сессии в marker-файл `/tmp/treed_cam_session_dir`;
-  - делает стартовый снимок в best-effort режиме (`curl`-ошибка не блокирует сессию).
+  - делает стартовый снимок в best-effort режиме;
+  - при сбое snapshot пишет ограниченное предупреждение в stderr (throttled).
 - `snapshot.sh`
   - проверяет наличие marker-файла сессии;
   - при активной сессии сохраняет очередной снимок в каталог сессии;
-  - при отсутствии сессии/ошибке камеры завершает работу безопасно (`exit 0`).
+  - при отсутствии сессии/ошибке камеры завершает работу безопасно (`exit 0`) с throttled warning.
 - `session_stop.sh`
   - завершает сессию удалением `/tmp/treed_cam_session_dir`;
   - идемпотентен (повторный вызов безопасен).
@@ -44,6 +49,9 @@
 
 ## Ограничения и замечания
 
-- текущий snapshot endpoint захардкожен: `http://127.0.0.1:8080/?action=snapshot`;
+- snapshot endpoint задается через `TREED_CAM_SNAPSHOT_URL` (optional),
+  fallback: `http://127.0.0.1:8080/?action=snapshot`;
+- optional runtime override-файл: `${PI_HOME}/treed/cam/config/runtime.env`;
+- интервал warning-throttle задается `TREED_CAM_SNAPSHOT_WARN_INTERVAL_SEC` (по умолчанию `300` сек);
 - marker-файл сессии хранится в `/tmp` и сбрасывается после reboot;
 - скрипты рассчитаны на fail-safe поведение: не должны валить основной печатный контур.

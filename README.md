@@ -79,7 +79,7 @@ sudo reboot
 - `moonraker/base/*` -> `loader/steps/moonraker-config.sh`
 - `moonraker/generated/50-webcam-treed.conf` -> `loader/steps/crowsnest-webcam.sh`
 - `runtime-scripts/treed-cam/*` -> `loader/steps/treed-cam.sh`
-- Локальные overrides (`local_overrides.cfg`, `mainsail.cfg` и др.) сохраняются при deploy шагом `klipper-core`.
+- В `preserve` сохраняются только локальный `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg`; остальные runtime-конфиги деплоятся из репозитория.
 
 Подробная карта владения: `docs/config-ownership.md`.
 

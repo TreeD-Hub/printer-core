@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import shlex
 from dataclasses import dataclass
-from typing import Dict, Optional, TYPE_CHECKING, Iterable
+from typing import Dict, Mapping, Optional, TYPE_CHECKING
 from ..utils import ServerError
 
 LOGGER = logging.getLogger(__name__)
@@ -91,10 +91,21 @@ class TreeDShellCommand:
 
         # Блок 8: Безопасная сборка командной строки с quoting параметров.
         full_cmd = entry.command
-        if isinstance(parameters, Iterable) and not isinstance(parameters, (str, bytes)):
+        if isinstance(parameters, (list, tuple)):
             args = [shlex.quote(str(p)) for p in parameters if str(p).strip()]
             if args:
                 full_cmd = f"{full_cmd} " + " ".join(args)
+        elif isinstance(parameters, Mapping):
+            mapping_args = []
+            for key, value in parameters.items():
+                key_text = str(key).strip()
+                if not key_text:
+                    continue
+                value_text = str(value).strip()
+                pair = key_text if not value_text else f"{key_text}={value_text}"
+                mapping_args.append(shlex.quote(pair))
+            if mapping_args:
+                full_cmd = f"{full_cmd} " + " ".join(mapping_args)
         else:
             param_text = str(parameters or "").strip()
             if param_text:

@@ -13,10 +13,15 @@ set -euo pipefail
 # Блок 1: Базовые параметры пользователя и путей.
 PI_USER="${PI_USER:-pi}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=runtime-scripts/treed-cam/cam_env.sh
+source "${SCRIPT_DIR}/cam_env.sh"
+treed_cam_load_runtime_env
 
 BASE_DIR="${PI_HOME}/treed/cam/prints"
 SESSION_FILE="/tmp/treed_cam_session_dir"
-SNAP_URL="http://127.0.0.1:8080/?action=snapshot"
+SNAP_URL="$(treed_cam_snapshot_url)"
 
 # Блок 2: Чтение входного имени задания (arg1 или PARAMS) и нормализация.
 raw="${1:-${PARAMS:-}}"
@@ -43,4 +48,6 @@ mkdir -p "${dir}"
 printf '%s\n' "${dir}" > "${SESSION_FILE}"
 
 # Блок 5: Best-effort стартовый снимок в каталог сессии.
-curl -fsS "${SNAP_URL}" -o "${dir}/img_${ts}_start.jpg" >/dev/null 2>&1 || true
+if ! curl -fsS "${SNAP_URL}" -o "${dir}/img_${ts}_start.jpg" >/dev/null 2>&1; then
+  treed_cam_warn_snapshot_failure "session_start" "${SNAP_URL}"
+fi
