@@ -6,7 +6,7 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Выполняет финальные post-configuration проверки provisioning-контура.
-# - Валидирует сервисы, boot-параметры, Klipper/Moonraker и optional-модули.
+# - Валидирует сервисы, boot-параметры, Klipper/Moonraker и обязательный ADXL-контур.
 # Контур:
 # - required (непрошедшие проверки завершают loader с ошибкой).
 
@@ -329,7 +329,7 @@ else
   TREED_KLIPPERSCREEN_HOME="$(detect_klipperscreen_home "${PI_HOME}/KlipperScreen")"
   log_info "VERIFY KlipperScreen home resolved as ${TREED_KLIPPERSCREEN_HOME}"
 fi
-MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg"
+MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/mcu_rn12.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
 KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
@@ -337,8 +337,8 @@ KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
 KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
 KS_SERVICE_PRESENT=0
 LOCAL_OVERRIDES_CFG="${PI_HOME}/printer_data/config/local_overrides.cfg"
-ADXL_PROFILE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/optional_adxl345_rpi.cfg"
-ADXL_RESONANCE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_hbot_v1/optional_resonance_tester.cfg"
+ADXL_PROFILE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/adxl345_rpi.cfg"
+INPUT_SHAPER_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/input_shaper.cfg"
 ADXL_SPI_BUS_EXPECTED="${TREED_ADXL_RPI_SPI_BUS:-spidev0.0}"
 ADXL_SPI_DEV_EXPECTED="/dev/${ADXL_SPI_BUS_EXPECTED}"
 
@@ -720,39 +720,24 @@ case "${TREED_VERIFY_CAMERA}" in
 esac
 
 # Блок 16a: Подготовка и переключение режима ADXL-проверок (host MCU + SPI на Pi).
-TREED_VERIFY_ADXL_RPI="${TREED_VERIFY_ADXL_RPI:-auto}"
-adxl_checks_enabled=0
-adxl_checks_reason=""
+TREED_VERIFY_ADXL_RPI="${TREED_VERIFY_ADXL_RPI:-1}"
+adxl_checks_enabled=1
+adxl_checks_reason="mandatory baseline"
 
 case "${TREED_VERIFY_ADXL_RPI}" in
-  1|true|TRUE|yes|YES)
+  1|true|TRUE|yes|YES|auto|AUTO|'')
     adxl_checks_enabled=1
-    adxl_checks_reason="forced"
+    adxl_checks_reason="enabled"
     ;;
   0|false|FALSE|no|NO)
-    adxl_checks_enabled=0
-    adxl_checks_reason="disabled by TREED_VERIFY_ADXL_RPI"
-    ;;
-  auto|AUTO|'')
-    if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
-      && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_hbot_v1/optional_adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
-      adxl_checks_enabled=1
-      adxl_checks_reason="auto: ADXL include enabled in local_overrides.cfg"
-    else
-      adxl_checks_enabled=0
-      adxl_checks_reason="auto: ADXL include not enabled"
-    fi
+    failf "TREED_VERIFY_ADXL_RPI=0 is not allowed (ADXL is mandatory)"
+    adxl_checks_enabled=1
+    adxl_checks_reason="forced after invalid disable"
     ;;
   *)
-    if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
-      && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_hbot_v1/optional_adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
-      adxl_checks_enabled=1
-      adxl_checks_reason="auto fallback: ADXL include enabled"
-    else
-      adxl_checks_enabled=0
-      adxl_checks_reason="auto fallback: ADXL include disabled"
-    fi
-    log_warn "VERIFY invalid TREED_VERIFY_ADXL_RPI='${TREED_VERIFY_ADXL_RPI}', using ${adxl_checks_reason}"
+    log_warn "VERIFY invalid TREED_VERIFY_ADXL_RPI='${TREED_VERIFY_ADXL_RPI}', forcing ADXL checks"
+    adxl_checks_enabled=1
+    adxl_checks_reason="forced after invalid value"
     ;;
 esac
 
@@ -845,10 +830,17 @@ fi
 # Блок 17a: Проверки ADXL345 через Pi (или skip в auto).
 if [ "${adxl_checks_enabled}" = "1" ]; then
   if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
-    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_hbot_v1/optional_adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
+    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
     pass "ADXL include enabled in local_overrides.cfg"
   else
     failf "ADXL include enabled in local_overrides.cfg"
+  fi
+
+  if [ -f "${LOCAL_OVERRIDES_CFG}" ] \
+    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${LOCAL_OVERRIDES_CFG}"; then
+    pass "Input Shaper include enabled in local_overrides.cfg"
+  else
+    failf "Input Shaper include enabled in local_overrides.cfg"
   fi
 
   if [ -f "${ADXL_PROFILE_CFG}" ]; then
@@ -857,10 +849,18 @@ if [ "${adxl_checks_enabled}" = "1" ]; then
     failf "ADXL profile config present (${ADXL_PROFILE_CFG})"
   fi
 
-  if [ -f "${ADXL_RESONANCE_CFG}" ]; then
-    pass "ADXL resonance config present (${ADXL_RESONANCE_CFG})"
+  if [ -f "${INPUT_SHAPER_CFG}" ] && grep -qE '^[[:space:]]*\[input_shaper\][[:space:]]*$' "${INPUT_SHAPER_CFG}"; then
+    pass "Input Shaper config present (${INPUT_SHAPER_CFG})"
   else
-    failf "ADXL resonance config present (${ADXL_RESONANCE_CFG})"
+    failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
+  fi
+
+  if [ -f "${ADXL_PROFILE_CFG}" ] \
+    && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_PROFILE_CFG}" \
+    && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_PROFILE_CFG}"; then
+    pass "ADXL profile includes resonance_tester section"
+  else
+    failf "ADXL profile includes resonance_tester section"
   fi
 
   if [ -e "${ADXL_SPI_DEV_EXPECTED}" ]; then

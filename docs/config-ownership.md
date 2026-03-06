@@ -26,16 +26,17 @@ Entrypoint:
 13. `klipper-sync`
 14. `klipper-profiles`
 15. `klipper-core`
-16. `klipper-anti-shutdown`
-17. `moonraker-config`
-18. `crowsnest-webcam`
-19. `treed-cam`
-20. `klipper-mainsail-theme`
-21. `klipperscreen-install`
-22. `klipperscreen-theme`
-23. `klipperscreen-integr`
-24. `maintenance-start`
-25. `verify`
+16. `klipper-adxl-rpi`
+17. `klipper-anti-shutdown`
+18. `moonraker-config`
+19. `crowsnest-webcam`
+20. `treed-cam`
+21. `klipper-mainsail-theme`
+22. `klipperscreen-install`
+23. `klipperscreen-theme`
+24. `klipperscreen-integr`
+25. `maintenance-start`
+26. `verify`
 
 ## 2. Слои и source of truth
 
@@ -56,7 +57,7 @@ Runtime:
 - `/home/pi/printer_data/config` (раскладка `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
-- `/usr/local/bin/klipper_mcu` и `/etc/systemd/system/klipper-mcu.service` (при opt-in `klipper-adxl-rpi`)
+- `/usr/local/bin/klipper_mcu` и `/etc/systemd/system/klipper-mcu.service` (обязательный контур `klipper-adxl-rpi`)
 
 ## 3. Ownership map (runtime)
 
@@ -79,7 +80,7 @@ Loader очищает старые `*.conf` в `moonraker/generated` (кроме
 
 - `/home/pi/printer_data/config/local_overrides.cfg`
   - пользовательские ручные override — локальный source-of-truth;
-  - при `TREED_ADXL_RPI_ENABLE=1` шаг `loader/steps/klipper-adxl-rpi.sh` управляет только marker-блоком
+  - шаг `loader/steps/klipper-adxl-rpi.sh` управляет marker-блоком ADXL/Input Shaper
     `# --- TREED ADXL345 (Pi SPI) BEGIN/END ---`.
 
 Runtime-скрипты камеры:
@@ -133,7 +134,7 @@ Allowlist runtime-preserve:
 Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
 
 - `loader/steps/klipper-core.sh` — wipe runtime + restore `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg` в `preserve`.
-- `loader/steps/klipper-adxl-rpi.sh` — opt-in: host MCU на Pi (`klipper-mcu.service`) + managed ADXL block в `local_overrides.cfg`.
+- `loader/steps/klipper-adxl-rpi.sh` — required: host MCU на Pi (`klipper-mcu.service`) + managed ADXL/Input Shaper block в `local_overrides.cfg`.
 - `loader/steps/moonraker-config.sh` — `backup_file_once` для `moonraker.conf` только в `preserve`.
 - `loader/steps/klipperscreen-theme.sh` — `backup_file_once` для `KlipperScreen.conf` только в `preserve`.
 

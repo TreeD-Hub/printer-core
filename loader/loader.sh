@@ -167,7 +167,7 @@ STEPS=(
   "klipper-sync"             # Репозиторные конфиги -> staging: ~/treed/klipper.
   "klipper-profiles"         # Применение профиля RN12 и serial-path MCU в staging.
   "klipper-core"             # Раскладка staging -> runtime: ~/printer_data/config.
-  "klipper-adxl-rpi"         # Опциональная интеграция ADXL345 через SPI Raspberry Pi (host MCU + local_overrides block).
+  "klipper-adxl-rpi"         # Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi.
   "klipper-anti-shutdown"    # Сброс MCU shutdown при обнаружении после раскладки.
   "moonraker-config"         # Деплой moonraker.conf/base/generated и shell-компонента.
   "crowsnest-webcam"         # Деплой камеры (crowsnest + moonraker webcam fragment).
@@ -185,7 +185,6 @@ STEPS=(
 # Блок 14: Явный список optional-шагов (не прерывают provisioning при ошибке).
 OPTIONAL_STEPS=(
   "crowsnest-webcam"         # Камера может быть недоступна на конкретном хосте.
-  "klipper-adxl-rpi"         # ADXL345 по SPI на Pi подключается не на каждом принтере.
   "klipperscreen-install"    # UI-слой допускается как best-effort.
   "klipperscreen-theme"      # Темизация UI не блокирует базовый запуск принтера.
   "klipperscreen-integr"     # Integr override применяется по возможности.

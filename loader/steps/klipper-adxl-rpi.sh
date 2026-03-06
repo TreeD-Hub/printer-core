@@ -6,10 +6,10 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Поднимает host MCU (`klipper-mcu.service`) на Raspberry Pi для ADXL345 по SPI.
-# - Включает managed-блок ADXL include в `local_overrides.cfg` (opt-in через env).
+# - Включает managed-блок ADXL/Input Shaper include в `local_overrides.cfg`.
 # - Подготавливает runtime к проверке ADXL в `verify.sh`.
 # Контур:
-# - optional (best-effort); реальная обязательность задается через verify/ENV.
+# - required (fail-fast): ADXL и Input Shaper являются базовым контуром.
 
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 . "${REPO_DIR}/loader/lib/common.sh"
@@ -17,7 +17,7 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 # Блок 1: Базовая инициализация шага и helper-предикаты.
 ensure_root
-log_info "Step klipper-adxl-rpi: optional ADXL345 via Raspberry Pi SPI"
+log_info "Step klipper-adxl-rpi: required ADXL345/Input Shaper via Raspberry Pi SPI"
 
 is_true_local() {
   case "${1:-}" in
@@ -26,15 +26,19 @@ is_true_local() {
   esac
 }
 
-# Блок 2: Параметры управления шагом (opt-in).
-TREED_ADXL_RPI_ENABLE="${TREED_ADXL_RPI_ENABLE:-0}"
+# Блок 2: Параметры управления шагом (mandatory ADXL/Input Shaper).
+TREED_ADXL_RPI_ENABLE="${TREED_ADXL_RPI_ENABLE:-1}"
 TREED_ADXL_RPI_SPI_BUS="${TREED_ADXL_RPI_SPI_BUS:-spidev0.0}"
-TREED_ADXL_RPI_ENABLE_INPUT_SHAPER="${TREED_ADXL_RPI_ENABLE_INPUT_SHAPER:-0}"
+TREED_ADXL_RPI_ENABLE_INPUT_SHAPER="${TREED_ADXL_RPI_ENABLE_INPUT_SHAPER:-1}"
 TREED_ADXL_RPI_REBUILD_HOST_MCU="${TREED_ADXL_RPI_REBUILD_HOST_MCU:-0}"
 
 if ! is_true_local "${TREED_ADXL_RPI_ENABLE}"; then
-  log_info "klipper-adxl-rpi: disabled (set TREED_ADXL_RPI_ENABLE=1 to enable)"
-  exit 0
+  log_error "klipper-adxl-rpi: TREED_ADXL_RPI_ENABLE=0 is not allowed (ADXL is mandatory)"
+  exit 1
+fi
+if ! is_true_local "${TREED_ADXL_RPI_ENABLE_INPUT_SHAPER}"; then
+  log_error "klipper-adxl-rpi: TREED_ADXL_RPI_ENABLE_INPUT_SHAPER=0 is not allowed (Input Shaper is mandatory)"
+  exit 1
 fi
 
 PI_USER="${PI_USER:-pi}"
@@ -45,9 +49,9 @@ fi
 
 CONFIG_DIR="${PI_HOME}/printer_data/config"
 LOCAL_OVERRIDES_CFG="${CONFIG_DIR}/local_overrides.cfg"
-PROFILE_DIR="${CONFIG_DIR}/profiles/rn12_hbot_v1"
-ADXL_CFG="${PROFILE_DIR}/optional_adxl345_rpi.cfg"
-RESONANCE_CFG="${PROFILE_DIR}/optional_resonance_tester.cfg"
+PROFILE_DIR="${CONFIG_DIR}/profiles/rn12_corexy_v1"
+ADXL_CFG="${PROFILE_DIR}/adxl345_rpi.cfg"
+INPUT_SHAPER_CFG="${PROFILE_DIR}/input_shaper.cfg"
 KLIPPER_DIR="${PI_HOME}/klipper"
 KLIPPER_HOST_MCU_BIN="/usr/local/bin/klipper_mcu"
 KLIPPER_HOST_MCU_UNIT_SRC="${KLIPPER_DIR}/scripts/klipper-mcu.service"
@@ -70,8 +74,8 @@ if [ ! -f "${ADXL_CFG}" ]; then
   log_error "klipper-adxl-rpi: missing runtime ADXL config: ${ADXL_CFG}"
   exit 1
 fi
-if [ ! -f "${RESONANCE_CFG}" ]; then
-  log_error "klipper-adxl-rpi: missing runtime resonance config: ${RESONANCE_CFG}"
+if [ ! -f "${INPUT_SHAPER_CFG}" ]; then
+  log_error "klipper-adxl-rpi: missing runtime Input Shaper config: ${INPUT_SHAPER_CFG}"
   exit 1
 fi
 
@@ -183,16 +187,12 @@ ensure_runtime_adxl_spi_bus() {
 
 ensure_runtime_adxl_spi_bus "${TREED_ADXL_RPI_SPI_BUS}"
 
-# Блок 7: Managed-блок в local_overrides.cfg для включения ADXL optional include.
+# Блок 7: Managed-блок в local_overrides.cfg для включения ADXL/Input Shaper include.
 ensure_adxl_local_overrides_block() {
   local marker_begin="# --- TREED ADXL345 (Pi SPI) BEGIN ---"
   local marker_end="# --- TREED ADXL345 (Pi SPI) END ---"
-  local input_shaper_line="# [include profiles/rn12_hbot_v1/optional_input_shaper.cfg]"
+  local input_shaper_line="[include profiles/rn12_corexy_v1/input_shaper.cfg]"
   local tmp=""
-
-  if is_true_local "${TREED_ADXL_RPI_ENABLE_INPUT_SHAPER}"; then
-    input_shaper_line="[include profiles/rn12_hbot_v1/optional_input_shaper.cfg]"
-  fi
 
   touch "${LOCAL_OVERRIDES_CFG}"
   tmp="$(mktemp)"
@@ -204,8 +204,7 @@ ensure_adxl_local_overrides_block() {
 
   cat >> "${tmp}" <<EOF
 ${marker_begin}
-[include profiles/rn12_hbot_v1/optional_adxl345_rpi.cfg]
-[include profiles/rn12_hbot_v1/optional_resonance_tester.cfg]
+[include profiles/rn12_corexy_v1/adxl345_rpi.cfg]
 ${input_shaper_line}
 ${marker_end}
 EOF
@@ -218,7 +217,7 @@ EOF
 ensure_adxl_local_overrides_block
 
 # Блок 8: Права и завершение шага (перезапуск Klipper делается следующим шагом/verify).
-chown "${PI_USER}:${grp}" "${LOCAL_OVERRIDES_CFG}" "${ADXL_CFG}" "${RESONANCE_CFG}" || true
+chown "${PI_USER}:${grp}" "${LOCAL_OVERRIDES_CFG}" "${ADXL_CFG}" "${INPUT_SHAPER_CFG}" || true
 if [ -d "${KLIPPER_DIR}/${KLIPPER_HOST_MCU_OUTDIR}" ]; then
   chown -R "${PI_USER}:${grp}" "${KLIPPER_DIR}/${KLIPPER_HOST_MCU_OUTDIR}" || true
 fi
@@ -230,4 +229,4 @@ else
   log_info "klipper-adxl-rpi: klipper.service restart deferred (service not active)"
 fi
 
-log_info "klipper-adxl-rpi: DONE (spi_bus=${TREED_ADXL_RPI_SPI_BUS}, input_shaper=$(is_true_local "${TREED_ADXL_RPI_ENABLE_INPUT_SHAPER}" && echo 1 || echo 0))"
+log_info "klipper-adxl-rpi: DONE (spi_bus=${TREED_ADXL_RPI_SPI_BUS}, input_shaper=1 mandatory)"

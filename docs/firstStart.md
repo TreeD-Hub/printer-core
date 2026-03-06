@@ -267,7 +267,7 @@ sudo reboot
 - ставит и настраивает Plymouth-тему `treed`;
 - поднимает тему Mainsail (`mainsail/.theme` → `/home/pi/printer_data/config/.theme`);
 - копирует `klipper/` → `/home/pi/treed/klipper`;
-- прописывает `/home/pi/printer_data/config/printer.cfg` на `[include profiles/rn12_hbot_v1/mcu_rn12.cfg]` (если `klipper/printer.cfg` есть);
+- прописывает `/home/pi/printer_data/config/printer.cfg` на `[include profiles/rn12_corexy_v1/mcu_rn12.cfg]` (если `klipper/printer.cfg` есть);
 
 ---
 
@@ -298,11 +298,11 @@ sudo reboot
   - рантайм-конфиг в `/home/pi/printer_data/config/printer.cfg` содержит:
 
     ```ini
-    [include profiles/rn12_hbot_v1/mcu_rn12.cfg]
+    [include profiles/rn12_corexy_v1/mcu_rn12.cfg]
     ```
 
-  - актуальный include-chain описан в `klipper/printer.cfg` (модули профиля `profiles/rn12_hbot_v1/*.cfg`).
-  - для релиза `v1.2.0` в репо есть минимальный профиль `rn12_hbot_v1` под MKS Robin Nano 1.2.
+  - актуальный include-chain описан в `klipper/printer.cfg` (модули профиля `profiles/rn12_corexy_v1/*.cfg`).
+  - для релиза `v1.2.0` в репо есть минимальный профиль `rn12_corexy_v1` под MKS Robin Nano 1.2.
 
 ---
 
@@ -326,7 +326,7 @@ git pull
 - корректно обновит `printer.cfg` (если это требуется новой версией).
 
 Если нужно поменять `serial` вручную, редактируй
-`/home/pi/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg`
+`/home/pi/printer_data/config/profiles/rn12_corexy_v1/mcu_rn12.cfg`
 и перезапусти `klipper`.
 
 > Карта слоев и ownership: `README.md`

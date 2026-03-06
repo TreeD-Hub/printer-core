@@ -15,7 +15,7 @@ set -euo pipefail
 
 KLIPPER_DIR="${PI_HOME}/treed/klipper"
 PROFILES_DIR="${KLIPPER_DIR}/profiles"
-PROFILE_NAME="rn12_hbot_v1"
+PROFILE_NAME="rn12_corexy_v1"
 PROFILE_DIR="${PROFILES_DIR}/${PROFILE_NAME}"
 MCU_CFG="${PROFILE_DIR}/mcu_rn12.cfg"
 MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"

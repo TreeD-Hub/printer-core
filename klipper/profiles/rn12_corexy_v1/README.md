@@ -1,4 +1,4 @@
-# Профиль `rn12_hbot_v1` (MKS Robin Nano 1.2)
+# Профиль `rn12_corexy_v1` (MKS Robin Nano 1.2)
 
 Профиль описывает рабочую конфигурацию Klipper для RN12 и раскладывается loader-пайплайном в runtime (`/home/pi/printer_data/config`).
 
@@ -7,16 +7,29 @@
 Точка входа: `klipper/printer.cfg`.
 
 Текущий порядок include:
-1. `profiles/rn12_hbot_v1/mcu_rn12.cfg`
-2. `profiles/rn12_hbot_v1/printer_base.cfg`
-3. `profiles/rn12_hbot_v1/gcode_features.cfg`
-4. `profiles/rn12_hbot_v1/steppers.cfg`
-5. `profiles/rn12_hbot_v1/extruder.cfg`
-6. `profiles/rn12_hbot_v1/bed_heater_dc.cfg`
-7. `profiles/rn12_hbot_v1/fans.cfg`
-8. `profiles/rn12_hbot_v1/macros.cfg`
-9. `profiles/rn12_hbot_v1/ui.cfg`
+1. `profiles/rn12_corexy_v1/mcu_rn12.cfg`
+2. `profiles/rn12_corexy_v1/printer_base.cfg`
+3. `profiles/rn12_corexy_v1/gcode_features.cfg`
+4. `profiles/rn12_corexy_v1/steppers.cfg`
+5. `profiles/rn12_corexy_v1/extruder.cfg`
+6. `profiles/rn12_corexy_v1/bed_heater_dc.cfg`
+7. `profiles/rn12_corexy_v1/fans.cfg`
+8. `profiles/rn12_corexy_v1/macros.cfg`
+9. `profiles/rn12_corexy_v1/ui.cfg`
 10. `local_overrides.cfg` (локальный runtime-файл на Pi)
+
+## Аппаратный контракт (текущая сборка)
+
+Экструдер (Vz-Hextrudort-Low Plus, 8T):
+- `full_steps_per_rotation: 200`
+- `gear_ratio: 60:8`
+- `rotation_distance: 35.8`
+
+ADXL345 (монтаж через Raspberry Pi SPI):
+- `axes_map: z, x, y`
+
+Если меняется экструдер, мотор экструдера или ориентация ADXL, эти параметры должны быть
+пересмотрены и обновлены в профиле.
 
 ## Макросы: публичный интерфейс и private-слой
 
@@ -131,19 +144,17 @@
 - Runtime-файл на устройстве: `local_overrides.cfg`
 - `local_overrides.cfg` не коммитится и считается локальным source-of-truth для конкретного экземпляра принтера
 
-## ADXL345 / Input Shaper (опционально, через Pi)
+## ADXL345 / Input Shaper (обязательный контур через Pi)
 
 Для измерения резонансов через ADXL345 на Raspberry Pi:
 
-0. Рекомендуемый путь (через loader, без ручной правки runtime-файлов):
-- запустить loader с `TREED_ADXL_RPI_ENABLE=1`
-- при необходимости указать `TREED_ADXL_RPI_SPI_BUS=spidev0.1` (если датчик сидит на CE1)
-- опционально `TREED_ADXL_RPI_ENABLE_INPUT_SHAPER=1`, чтобы loader сразу включил `optional_input_shaper.cfg`
+0. Базовый путь (через loader, без ручной правки runtime-файлов):
+- ADXL и `input_shaper.cfg` включаются loader по умолчанию;
+- при необходимости указать `TREED_ADXL_RPI_SPI_BUS=spidev0.1` (если датчик сидит на CE1).
 
-1. Включить в `printer.cfg` (runtime на Pi) include-файлы:
-- `profiles/rn12_hbot_v1/optional_adxl345_rpi.cfg`
-- `profiles/rn12_hbot_v1/optional_resonance_tester.cfg`
-- `profiles/rn12_hbot_v1/optional_input_shaper.cfg` (для последующего применения результатов)
+1. Loader управляет include-цепочкой через managed-блок в `local_overrides.cfg`:
+- `profiles/rn12_corexy_v1/adxl345_rpi.cfg` (внутри уже содержит `[resonance_tester]`)
+- `profiles/rn12_corexy_v1/input_shaper.cfg` (обязательный include)
 
 2. Убедиться, что на Pi включен SPI и запущен `klipper_mcu` (host MCU).
 
@@ -151,13 +162,18 @@
 - `ACCELEROMETER_QUERY`
 - `MEASURE_AXES_NOISE`
 
-4. Калибровка:
+4. Короткая проверка после монтажа/поворота ADXL:
+- выполнить `ACCELEROMETER_QUERY` в покое;
+- выполнить малые перемещения `G91`, `G1 X10`, `G1 Y10` (без движения Z);
+- убедиться, что отклик соответствует текущему `axes_map: z, x, y`.
+
+5. Калибровка:
 - `TEST_RESONANCES AXIS=X`
 - `TEST_RESONANCES AXIS=Y`
 - или `SHAPER_CALIBRATE`
 
 Примечание:
-- `optional_adxl345_rpi.cfg` по умолчанию настроен на SPI0 CE0 (`spidev0.0`).
+- `adxl345_rpi.cfg` по умолчанию настроен на SPI0 CE0 (`spidev0.0`).
 - Для CE1 замените `spi_bus` на `spidev0.1`.
 
 ## Как это раскладывает loader

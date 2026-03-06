@@ -44,16 +44,17 @@
 | 13 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
 | 14 | `klipper-profiles` | required | Применение профиля RN12 и serial-path MCU. |
 | 15 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
-| 16 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
-| 17 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
-| 18 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
-| 19 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
-| 20 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
-| 21 | `klipperscreen-install` | optional | Установка/проверка KlipperScreen. |
-| 22 | `klipperscreen-theme` | optional | Деплой темы/шрифта KlipperScreen. |
-| 23 | `klipperscreen-integr` | optional | Systemd override KlipperScreen. |
-| 24 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
-| 25 | `verify` | required | Финальная валидация всего контура. |
+| 16 | `klipper-adxl-rpi` | required | Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi. |
+| 17 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
+| 18 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
+| 19 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
+| 20 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
+| 21 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
+| 22 | `klipperscreen-install` | optional | Установка/проверка KlipperScreen. |
+| 23 | `klipperscreen-theme` | optional | Деплой темы/шрифта KlipperScreen. |
+| 24 | `klipperscreen-integr` | optional | Systemd override KlipperScreen. |
+| 25 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
+| 26 | `verify` | required | Финальная валидация всего контура. |
 
 ## Ключевые переменные оркестратора
 
