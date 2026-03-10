@@ -21,4 +21,4 @@
 
 - порядок применения задается префиксами имен (`00-`, `10-`, ...);
 - фрагменты должны оставаться совместимыми с `moonraker/moonraker.conf`;
-- generated-конфиги в этот каталог не добавляются (они живут в `moonraker/generated` runtime-слое).
+- generated-конфиги в этот каталог не добавляются (они живут в runtime: `${PI_HOME}/printer_data/config/moonraker/generated/*.conf`, не в репозитории).
