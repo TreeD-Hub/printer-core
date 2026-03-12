@@ -1,0 +1,4 @@
+interface:
+  display_name: "Comment Style"
+  short_description: "Universal comment style checks via repo profile"
+  default_prompt: "Apply and validate structured comment style in selected files using .codex/repo-standards.yaml, without changing runtime behavior."

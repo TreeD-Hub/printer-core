@@ -1,11 +1,11 @@
 # `tools`
 
-Вспомогательные утилиты и проектные ресурсы для проверок и поддержки конфигов.
+Вспомогательные утилиты и skills-ресурсы для проверок и поддержки конфигов.
 
 ## Состав
 
 - `tools/validate_klipper_configs.py` — статический валидатор include-цепочки Klipper.
-- `tools/skills/` — локальные project-specific skills для Codex в этом репозитории.
+- `tools/skills/` — локальные skills для Codex, используемые в этом репозитории.
 
 ## `validate_klipper_configs.py`
 
@@ -24,13 +24,13 @@
 
 ## `tools/skills/`
 
-Содержит project-specific навыки Codex для этого репозитория.
+Содержит навыки Codex:
 
-Текущий навык:
+- `treed-mainshellos-audit` — project-specific аудитный skill.
+- `comment-style` — универсальный skill форматирования/проверки комментариев.
+- `readme-coverage` — универсальный skill покрытия README.
 
-- `treed-mainshellos-audit` — read-only аудит по правилам проекта с выводом findings `P0 -> P1 -> P2`.
-
-Общие переиспользуемые навыки вынесены в отдельный репозиторий:
+Для `comment-style` и `readme-coverage` source of truth:
 
 - `C:/Users/Yawllen/Documents/GitHub/codex-shared-skills`
 
