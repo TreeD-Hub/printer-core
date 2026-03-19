@@ -59,6 +59,7 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 
 ### Служебные системные
 - `CLEAR_PAUSE` — override штатной команды Klipper, оставлен публичным для безопасного восстановления pause-state.
+- `SET_IDLE_TIMEOUT` — wrapper штатной команды Klipper, сохраняет runtime timeout для корректного `PAUSE/RESUME/CANCEL_PRINT`.
 
 ### Внутренние private-макросы (не для ручного запуска)
 - `_TREED_PRINT_DEFAULTS`
@@ -66,6 +67,7 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 - `_TREED_PRINT_OFFSET_ENABLE`
 - `_TREED_PRINT_OFFSET_DISABLE`
 - `_TREED_PAUSE_PARK_CFG`
+- `_TREED_IDLE_TIMEOUT_STATE`
 - `_TREED_PAUSE_STATE`
 - `_TREED_START_STATE`
 - `_TREED_PAUSE_EXEC_STATE`
