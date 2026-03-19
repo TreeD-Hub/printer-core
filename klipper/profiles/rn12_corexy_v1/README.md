@@ -41,10 +41,11 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 Порядок модулей внутри `macros.cfg`:
 1. `macros_core.cfg`
 2. `macros_camera.cfg`
-3. `macros_print_flow.cfg`
-4. `macros_pause_resume.cfg`
-5. `macros_filament.cfg`
-6. `macros_utils.cfg`
+3. `macros_kamp.cfg`
+4. `macros_print_flow.cfg`
+5. `macros_pause_resume.cfg`
+6. `macros_filament.cfg`
+7. `macros_utils.cfg`
 
 ### Публичные макросы (для оператора)
 - `START_PRINT`
@@ -76,12 +77,14 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 - `_TREED_CAM_TICK` (`[delayed_gcode]`)
 - `_TREED_CAM_START`
 - `_TREED_CAM_STOP`
+- `_TREED_KAMP_REQUIRE_READY`
 - `_TREED_START_PREP_STATE`
 - `_TREED_START_MACHINE_PREP`
 - `_TREED_START_PREHEAT`
 - `_TREED_START_WAIT_PREHEAT_NOZZLE`
-- `_TREED_START_POSITION_AND_FINAL_HEAT`
-- `_TREED_START_PRIME`
+- `_TREED_START_KAMP_PREP`
+- `_TREED_START_FINAL_HEAT`
+- `_TREED_START_KAMP_PURGE`
 - `_TREED_START_POST_HOOKS`
 - `_TREED_PAUSE_PREP_STATE`
 - `_TREED_PAUSE_EXEC`
@@ -92,6 +95,7 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 - `_TREED_FILAMENT_MOVE`
 
 `START_PRINT`, `PAUSE`, `RESUME` работают как тонкие оркестраторы и вызывают фазовые private-хелперы в фиксированном порядке.
+`START_PRINT` использует KAMP (`SMART_PARK` + `LINE_PURGE`) без fallback на legacy prime/wipe.
 
 Для RN12 действует fail-fast контракт: рабочие фазы `START_PRINT/PAUSE/RESUME` требуют наличие секции `[heater_bed]`.
 Если секция отсутствует (поврежденный/неполный runtime-конфиг), макросы аварийно завершаются с ошибкой.
@@ -143,6 +147,9 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 Ожидаемая настройка слайсера:
 - origin: `X=0`, `Y=0`
 - размер стола: `245 x 180`
+- стартовый G-code: `START_PRINT EXTRUDER_TEMP=<temp> BED_TEMP=<temp>`
+- slicer обязан включать object labels (`exclude_object`) для KAMP
+- legacy-параметры `PRIME_*` больше не поддерживаются
 
 ## Локальные override
 
@@ -187,3 +194,19 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 1. `loader/steps/klipper-sync.sh` синхронизирует дерево `klipper/` в staging (`/home/pi/treed/klipper`)
 2. `loader/steps/klipper-profiles.sh` подставляет актуальный transport/serial в `mcu_rn12.cfg`
 3. `loader/steps/klipper-core.sh` раскладывает staging в runtime (`/home/pi/printer_data/config`)
+
+## KAMP Integration
+
+В профиле используется vendored snapshot KAMP:
+- `profiles/rn12_corexy_v1/kamp/KAMP_Settings.cfg`
+- `profiles/rn12_corexy_v1/kamp/Smart_Park.cfg`
+- `profiles/rn12_corexy_v1/kamp/Line_Purge.cfg`
+
+Интеграционный слой:
+- `profiles/rn12_corexy_v1/macros_kamp.cfg`
+
+Инварианты интеграции:
+- KAMP вызывается только после `_TREED_PRINT_OFFSET_ENABLE`.
+- `START_PRINT` выполняет fail-fast, если нет object-метаданных или KAMP-макросов.
+- fallback на старый координатный prime/wipe отсутствует.
+- Для Moonraker обязателен `enable_object_processing: True`.
