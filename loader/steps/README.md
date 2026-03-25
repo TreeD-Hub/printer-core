@@ -19,7 +19,7 @@
 | 11 | `plymouth-cmdline.sh` | required | Нормализация kernel cmdline. |
 | 12 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 13 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 14 | `klipper-profiles.sh` | required | Профиль RN12 и serial-path MCU. |
+| 14 | `klipper-profiles.sh` | required | Профиль RN12 и serial-path для RN12 + EBB42 USB. |
 | 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 16 | `klipper-adxl-rpi.sh` | required | Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi (`klipper-mcu` + fail-fast-проверка include в `printer.cfg`). |
 | 17 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
@@ -61,6 +61,7 @@
 - `TREED_MCU_UART_DEV` (default `/dev/serial0`)
 - `TREED_UART_DISABLE_BT` (`1|0`, default `1` в `rpi-uart-config`)
 - `MCU_SERIAL_BY_ID` (`/dev/serial/by-id/*`, для USB-режима)
+- `TREED_EBB_SERIAL_BY_ID` (required, `/dev/serial/by-id/*`, USB serial для `EBBCan`)
 - `KLIPPER_SERVICE` (default `klipper`)
 - `TREED_ANTI_SHUTDOWN_INFO_TIMEOUT` (default `2`)
 - `TREED_ADXL_RPI_ENABLE` (default `1`, должен оставаться `1`, ADXL является mandatory)

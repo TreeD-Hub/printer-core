@@ -6,7 +6,7 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Выполняет финальные post-configuration проверки provisioning-контура.
-# - Валидирует сервисы, boot-параметры, Klipper/Moonraker и обязательный ADXL-контур.
+# - Валидирует сервисы, boot-параметры, Klipper/Moonraker, обязательный EBB USB-контур и ADXL.
 # Контур:
 # - required (непрошедшие проверки завершают loader с ошибкой).
 
@@ -165,11 +165,47 @@ klipper_mcu_journal_clean_check() {
     return 0
   fi
 
-  patterns="Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|mcu[.]error|Error configuring printer|Unable to open serial port|mcu 'mcu': Unable to connect"
+  patterns="Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|MCU 'EBBCan' shutdown|mcu[.]error|Error configuring printer|Unable to open serial port|mcu 'mcu': Unable to connect|mcu 'EBBCan': Unable to connect"
   if grep -Eiq "${patterns}" "${tmp}"; then
     failf "${check_name} (mcu errors found since=${since})"
   else
     pass "${check_name}"
+  fi
+
+  rm -f "${tmp}"
+}
+
+klipper_ebb_connected_check() {
+  local check_name="$1"
+  local unit="klipper.service"
+  local since=""
+  local tmp=""
+  local patterns=""
+
+  if ! command -v journalctl >/dev/null 2>&1; then
+    failf "${check_name} (journalctl missing)"
+    return 0
+  fi
+
+  since="$(systemctl show -p ActiveEnterTimestamp --value "${unit}" 2>/dev/null | tr -d '\r\n')"
+  case "${since}" in
+    ""|"n/a") since="-20 min" ;;
+  esac
+
+  tmp="$(mktemp "/tmp/treed_verify_klipper_ebb_XXXXXX.log")"
+  if journalctl -u "${unit}" --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
+    :
+  else
+    failf "${check_name} (cannot read journal since=${since})"
+    rm -f "${tmp}"
+    return 0
+  fi
+
+  patterns="Loaded MCU 'EBBCan'|Configured MCU 'EBBCan'"
+  if grep -Eiq "${patterns}" "${tmp}"; then
+    pass "${check_name}"
+  else
+    failf "${check_name} (no EBBCan startup markers since=${since})"
   fi
 
   rm -f "${tmp}"
@@ -319,6 +355,7 @@ PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
+TREED_EBB_SERIAL_BY_ID="${TREED_EBB_SERIAL_BY_ID:-}"
 TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-0}"
 TREED_KS_THEME_EXPECTED="${TREED_KS_THEME:-treed-oled}"
 TREED_KLIPPERSCREEN_HOME_RAW="${TREED_KLIPPERSCREEN_HOME:-}"
@@ -330,6 +367,7 @@ else
   log_info "VERIFY KlipperScreen home resolved as ${TREED_KLIPPERSCREEN_HOME}"
 fi
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/mcu_rn12.cfg"
+EBB_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg"
 PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
@@ -373,6 +411,52 @@ else
   failf "mcu config present (${MCU_CFG_RUNTIME})"
   runtime_mcu_serial=""
 fi
+
+# Блок 9а: Проверка runtime EBB-конфига и обязательного env TREED_EBB_SERIAL_BY_ID.
+if [ -n "${TREED_EBB_SERIAL_BY_ID}" ]; then
+  case "${TREED_EBB_SERIAL_BY_ID}" in
+    /dev/serial/by-id/*) pass "TREED_EBB_SERIAL_BY_ID format (/dev/serial/by-id/*)" ;;
+    *) failf "TREED_EBB_SERIAL_BY_ID format (/dev/serial/by-id/*)" ;;
+  esac
+
+  if [ -e "${TREED_EBB_SERIAL_BY_ID}" ] && [ -r "${TREED_EBB_SERIAL_BY_ID}" ]; then
+    pass "TREED_EBB_SERIAL_BY_ID exists/readable (${TREED_EBB_SERIAL_BY_ID})"
+  else
+    failf "TREED_EBB_SERIAL_BY_ID exists/readable (${TREED_EBB_SERIAL_BY_ID})"
+  fi
+else
+  failf "TREED_EBB_SERIAL_BY_ID is set"
+fi
+
+if [ -f "${EBB_CFG_RUNTIME}" ]; then
+  pass "ebb config present (${EBB_CFG_RUNTIME})"
+  runtime_ebb_serial="$(
+    sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\1|p' "${EBB_CFG_RUNTIME}" \
+      | head -n 1 || true
+  )"
+  if [ -n "${runtime_ebb_serial}" ]; then
+    pass "ebb serial line present (${runtime_ebb_serial})"
+  else
+    failf "ebb serial line present (${EBB_CFG_RUNTIME})"
+  fi
+else
+  failf "ebb config present (${EBB_CFG_RUNTIME})"
+  runtime_ebb_serial=""
+fi
+
+if [ -n "${TREED_EBB_SERIAL_BY_ID}" ] && [ -n "${runtime_ebb_serial}" ] && [ "${runtime_ebb_serial}" = "${TREED_EBB_SERIAL_BY_ID}" ]; then
+  pass "ebb serial matches TREED_EBB_SERIAL_BY_ID"
+else
+  failf "ebb serial matches TREED_EBB_SERIAL_BY_ID"
+fi
+
+if [ -n "${runtime_ebb_serial}" ] && [ -e "${runtime_ebb_serial}" ] && [ -r "${runtime_ebb_serial}" ]; then
+  pass "ebb usb serial path exists (${runtime_ebb_serial})"
+else
+  failf "ebb usb serial path exists (${runtime_ebb_serial:-missing})"
+fi
+
+klipper_ebb_connected_check "klipper startup connected EBBCan"
 
 # Блок 10: Валидация serial-path для USB-транспорта.
 if [ "${TREED_MCU_TRANSPORT}" = "usb" ]; then

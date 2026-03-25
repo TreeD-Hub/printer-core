@@ -42,7 +42,7 @@
 | 11 | `plymouth-cmdline` | required | Нормализация kernel cmdline. |
 | 12 | `plymouth-systemd` | required | Политика `getty@tty1` и unit Plymouth. |
 | 13 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
-| 14 | `klipper-profiles` | required | Применение профиля RN12 и serial-path MCU. |
+| 14 | `klipper-profiles` | required | Применение профиля RN12 и serial-path для RN12 + EBB42 USB. |
 | 15 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
 | 16 | `klipper-adxl-rpi` | required | Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi. |
 | 17 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
@@ -65,6 +65,7 @@
 - `TREED_DEPLOY_MODE` — `auto|clean|preserve`.
 - `TREED_DEPLOY_MODE_EFFECTIVE` — вычисленное итоговое значение.
 - `TREED_DEPLOY_BRANCH` — обнаруженная git-ветка (пусто в detached `HEAD`).
+- `TREED_EBB_SERIAL_BY_ID` — обязательный USB serial EBB (`/dev/serial/by-id/*`).
 
 Auto-резолв для `TREED_DEPLOY_MODE=auto`:
 
