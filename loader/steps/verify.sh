@@ -463,7 +463,7 @@ else
   runtime_mcu_serial=""
 fi
 
-# Блок 9а: Проверка runtime EBB-конфига и обязательного env TREED_EBB_SERIAL_BY_ID.
+# Блок 9а: Проверка runtime EBB-конфига и опционального override TREED_EBB_SERIAL_BY_ID.
 if [ -d /dev/serial/by-id ]; then
   pass "/dev/serial/by-id directory present"
 else
@@ -496,7 +496,7 @@ if [ -n "${TREED_EBB_SERIAL_BY_ID}" ]; then
     failf "TREED_EBB_SERIAL_BY_ID exists/readable (${TREED_EBB_SERIAL_BY_ID})"
   fi
 else
-  failf "TREED_EBB_SERIAL_BY_ID is set"
+  log_info "VERIFY TREED_EBB_SERIAL_BY_ID not set: using runtime EBB serial checks"
 fi
 
 if [ -f "${EBB_CFG_RUNTIME}" ]; then
@@ -515,16 +515,25 @@ else
   runtime_ebb_serial=""
 fi
 
-if [ -n "${TREED_EBB_SERIAL_BY_ID}" ] && [ -n "${runtime_ebb_serial}" ] && [ "${runtime_ebb_serial}" = "${TREED_EBB_SERIAL_BY_ID}" ]; then
-  pass "ebb serial matches TREED_EBB_SERIAL_BY_ID"
+if [ -n "${runtime_ebb_serial}" ] \
+  && printf '%s' "${runtime_ebb_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
+  pass "ebb serial path format (/dev/serial/by-id/*)"
 else
-  failf "ebb serial matches TREED_EBB_SERIAL_BY_ID"
+  failf "ebb serial path format (/dev/serial/by-id/*)"
 fi
 
 if [ -n "${runtime_ebb_serial}" ] && [ -e "${runtime_ebb_serial}" ] && [ -r "${runtime_ebb_serial}" ]; then
   pass "ebb usb serial path exists (${runtime_ebb_serial})"
 else
   failf "ebb usb serial path exists (${runtime_ebb_serial:-missing})"
+fi
+
+if [ -n "${TREED_EBB_SERIAL_BY_ID}" ]; then
+  if [ -n "${runtime_ebb_serial}" ] && [ "${runtime_ebb_serial}" = "${TREED_EBB_SERIAL_BY_ID}" ]; then
+    pass "ebb serial matches TREED_EBB_SERIAL_BY_ID"
+  else
+    failf "ebb serial matches TREED_EBB_SERIAL_BY_ID"
+  fi
 fi
 
 if [ -n "${runtime_ebb_serial}" ]; then

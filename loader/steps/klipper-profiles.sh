@@ -140,36 +140,69 @@ else
   log_info "Updated MCU serial in ${MCU_CFG} to ${SERIAL_PATH}"
 fi
 
-# Блок 6: Валидация и запись serial: для EBB42 (USB Type-C, required).
-if [ -z "${EBB_SERIAL_BY_ID}" ]; then
-  log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID is required"
-  exit 1
-fi
-
-case "${EBB_SERIAL_BY_ID}" in
-  /dev/serial/by-id/*) ;;
-  *)
-    log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID must be /dev/serial/by-id/*, got: ${EBB_SERIAL_BY_ID}"
-    exit 1
-    ;;
-esac
-
-if [ ! -e "${EBB_SERIAL_BY_ID}" ] || [ ! -r "${EBB_SERIAL_BY_ID}" ]; then
-  log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID is missing/unreadable: ${EBB_SERIAL_BY_ID}"
-  exit 1
-fi
-
+# Блок 6: Резолв serial: для EBB42 (override -> auto).
 ebb_current_serial="$(sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\\1|p' "${EBB_CFG}" | head -n 1 || true)"
 if ! grep -qE '^[[:space:]]*serial:[[:space:]]*' "${EBB_CFG}"; then
   log_error "klipper-profiles: serial line not found in ${EBB_CFG}"
   exit 1
 fi
 
-if [ "${ebb_current_serial}" = "${EBB_SERIAL_BY_ID}" ]; then
-  log_info "EBB serial already correct in ${EBB_CFG}: ${EBB_SERIAL_BY_ID}"
+EBB_SERIAL_PATH=""
+if [ -n "${EBB_SERIAL_BY_ID}" ]; then
+  case "${EBB_SERIAL_BY_ID}" in
+    /dev/serial/by-id/*) ;;
+    *)
+      log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID must be /dev/serial/by-id/*, got: ${EBB_SERIAL_BY_ID}"
+      exit 1
+      ;;
+  esac
+
+  if [ ! -e "${EBB_SERIAL_BY_ID}" ] || [ ! -r "${EBB_SERIAL_BY_ID}" ]; then
+    log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID is missing/unreadable: ${EBB_SERIAL_BY_ID}"
+    exit 1
+  fi
+
+  EBB_SERIAL_PATH="${EBB_SERIAL_BY_ID}"
+elif [ -n "${ebb_current_serial}" ] && [ -e "${ebb_current_serial}" ] && [ -r "${ebb_current_serial}" ]; then
+  case "${ebb_current_serial}" in
+    /dev/serial/by-id/*) EBB_SERIAL_PATH="${ebb_current_serial}" ;;
+  esac
+fi
+
+if [ -z "${EBB_SERIAL_PATH}" ]; then
+  shopt -s nullglob
+  ebb_by_id_paths=(/dev/serial/by-id/*stm32g0b1*)
+  shopt -u nullglob
+
+  case "${#ebb_by_id_paths[@]}" in
+    0)
+      log_error "klipper-profiles: no EBB candidates found in /dev/serial/by-id/*stm32g0b1*"
+      log_error "klipper-profiles: check USB cable/port/power for EBB42 or set TREED_EBB_SERIAL_BY_ID explicitly"
+      exit 1
+      ;;
+    1)
+      EBB_SERIAL_PATH="${ebb_by_id_paths[0]}"
+      ;;
+    *)
+      log_error "klipper-profiles: multiple EBB candidates found; set TREED_EBB_SERIAL_BY_ID explicitly:"
+      for p in "${ebb_by_id_paths[@]}"; do
+        log_error " - ${p}"
+      done
+      exit 1
+      ;;
+  esac
+fi
+
+if [ -z "${EBB_SERIAL_PATH}" ]; then
+  log_error "klipper-profiles: unable to resolve EBB serial path"
+  exit 1
+fi
+
+if [ "${ebb_current_serial}" = "${EBB_SERIAL_PATH}" ]; then
+  log_info "EBB serial already correct in ${EBB_CFG}: ${EBB_SERIAL_PATH}"
 else
-  sed -i -E "s|^([[:space:]]*serial:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${EBB_SERIAL_BY_ID}\\2|" "${EBB_CFG}"
-  log_info "Updated EBB serial in ${EBB_CFG} to ${EBB_SERIAL_BY_ID}"
+  sed -i -E "s|^([[:space:]]*serial:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${EBB_SERIAL_PATH}\\2|" "${EBB_CFG}"
+  log_info "Updated EBB serial in ${EBB_CFG} to ${EBB_SERIAL_PATH}"
 fi
 
 # Блок 7: Финализация прав на staging-каталог.

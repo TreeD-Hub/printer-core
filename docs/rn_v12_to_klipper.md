@@ -102,7 +102,9 @@ Serial обычно ставится автоматически шагом `klip
 Режим задается переменными:
 - `TREED_MCU_TRANSPORT=usb|uart`
 - `TREED_MCU_UART_DEV=/dev/serial0` (для `uart`)
-- `TREED_EBB_SERIAL_BY_ID=/dev/serial/by-id/*` (обязательный serial для `EBBCan`)
+- `TREED_EBB_SERIAL_BY_ID=/dev/serial/by-id/*` (опциональный override для `EBBCan`)
+  Если override не задан, loader автоподхватывает EBB по шаблону `/dev/serial/by-id/*stm32g0b1*`
+  при ровно одном кандидате; при 0/многих шагах — fail-fast.
 
 Полный прогон:
 
@@ -110,7 +112,6 @@ Serial обычно ставится автоматически шагом `klip
 cd /home/pi/treed/treed-mainshellOS
 sudo TREED_MCU_TRANSPORT=uart \
      TREED_MCU_UART_DEV=/dev/serial0 \
-     TREED_EBB_SERIAL_BY_ID="/dev/serial/by-id/usb-...EBB42..." \
      bash loader/loader.sh
 ```
 
@@ -118,7 +119,8 @@ sudo TREED_MCU_TRANSPORT=uart \
 
 ```bash
 cd /home/pi/treed/treed-mainshellOS
-sudo MCU_SERIAL_BY_ID="/dev/serial/by-id/usb-..." bash loader/loader.sh
+sudo TREED_EBB_SERIAL_BY_ID="/dev/serial/by-id/usb-...EBB42..." \
+     bash loader/loader.sh
 ```
 
 Для режима `uart` используйте только двухфазный переход (без смешения шагов):
@@ -151,7 +153,6 @@ cd /home/pi/treed/treed-mainshellOS
 sudo TREED_MCU_TRANSPORT=uart \
      TREED_MCU_UART_DEV=/dev/serial0 \
      TREED_UART_DISABLE_BT=1 \
-     TREED_EBB_SERIAL_BY_ID="/dev/serial/by-id/usb-...EBB42..." \
      bash loader/loader.sh
 ```
 
@@ -159,6 +160,7 @@ sudo TREED_MCU_TRANSPORT=uart \
 - Не пропускайте reboot между фазами.
 - Не запускайте фазу 2 до фактического подключения RN12 по PA9/PA10 (WiFi-UART header).
 - Перед фазой 2 убедитесь, что EBB42 стабильно виден в `/dev/serial/by-id` без флаппинга.
+- Если в `/dev/serial/by-id/*stm32g0b1*` больше одного кандидата, задайте явный `TREED_EBB_SERIAL_BY_ID`.
 
 ### Проверка стабильности EBB USB перед cutover
 
