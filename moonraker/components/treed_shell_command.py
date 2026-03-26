@@ -1,16 +1,21 @@
 """
-TreeD shell command bridge for Moonraker.
-
-Provides legacy-style [shell_command <name>] sections and the
-`machine.shell_command` remote method used by Klipper macros.
+MOONRAKER COMPONENT: TREED SHELL COMMAND
+========================================
+Назначение:
+- Мост между секциями `[shell_command <name>]` в Moonraker-конфиге
+  и remote method `machine.shell_command` для вызовов из Klipper-макросов.
+Контур:
+- компонент не падает на ошибках выполнения shell-команды;
+- ошибки логируются, основной API-контур продолжает работать.
 """
 
 from __future__ import annotations
 
+# Блок 1: Импорты и базовые типы.
 import logging
 import shlex
 from dataclasses import dataclass
-from typing import Dict, Optional, TYPE_CHECKING, Iterable
+from typing import Dict, Mapping, Optional, TYPE_CHECKING
 from ..utils import ServerError
 
 LOGGER = logging.getLogger(__name__)
@@ -20,6 +25,7 @@ if TYPE_CHECKING:
     from .shell_command import ShellCommandFactory
 
 
+# Блок 2: Внутренняя модель зарегистрированной shell-команды.
 @dataclass
 class ManagedCommand:
     command: str
@@ -30,6 +36,7 @@ class ManagedCommand:
 
 class TreeDShellCommand:
     def __init__(self, config: ConfigHelper) -> None:
+        # Блок 3: Инициализация компонента и загрузка shell_command factory.
         self.server = config.get_server()
         self.event_loop = self.server.get_event_loop()
         self.shell_cmd: ShellCommandFactory = self.server.load_component(
@@ -37,6 +44,7 @@ class TreeDShellCommand:
         )
         self.commands: Dict[str, ManagedCommand] = {}
 
+        # Блок 4: Чтение и валидация секций [shell_command <name>].
         for section in config.get_prefix_sections("shell_command "):
             cmd_cfg = config.getsection(section)
             parts = section.split(maxsplit=1)
@@ -50,11 +58,13 @@ class TreeDShellCommand:
                 cwd=cmd_cfg.get("cwd", None),
             )
 
+        # Пустой набор команд не блокирует запуск, но фиксируется предупреждением.
         if not self.commands:
             self.server.add_warning(
                 "[treed_shell_command]: no [shell_command <name>] sections found."
             )
 
+        # Блок 5: Регистрация remote method machine.shell_command.
         try:
             self.server.register_remote_method("machine.shell_command", self._queue_run)
         except ServerError:
@@ -66,9 +76,11 @@ class TreeDShellCommand:
     def _queue_run(
         self, cmd: str = "", parameters: str = "", **_kwargs: object
     ) -> None:
+        # Блок 6: Планирование асинхронного запуска команды в event loop.
         self.event_loop.register_callback(self._run, cmd, parameters)
 
     async def _run(self, cmd: str, parameters: object = "") -> None:
+        # Блок 7: Разрешение команды по имени.
         entry = self.commands.get(cmd)
         if entry is None:
             LOGGER.info(
@@ -77,16 +89,29 @@ class TreeDShellCommand:
             )
             return
 
+        # Блок 8: Безопасная сборка командной строки с quoting параметров.
         full_cmd = entry.command
-        if isinstance(parameters, Iterable) and not isinstance(parameters, (str, bytes)):
+        if isinstance(parameters, (list, tuple)):
             args = [shlex.quote(str(p)) for p in parameters if str(p).strip()]
             if args:
                 full_cmd = f"{full_cmd} " + " ".join(args)
+        elif isinstance(parameters, Mapping):
+            mapping_args = []
+            for key, value in parameters.items():
+                key_text = str(key).strip()
+                if not key_text:
+                    continue
+                value_text = str(value).strip()
+                pair = key_text if not value_text else f"{key_text}={value_text}"
+                mapping_args.append(shlex.quote(pair))
+            if mapping_args:
+                full_cmd = f"{full_cmd} " + " ".join(mapping_args)
         else:
             param_text = str(parameters or "").strip()
             if param_text:
                 full_cmd = f"{full_cmd} {shlex.quote(param_text)}"
 
+        # Блок 9: Выполнение shell-команды с контролем timeout/cwd/verbose.
         try:
             await self.shell_cmd.run_cmd_async(
                 full_cmd,
@@ -107,5 +132,6 @@ class TreeDShellCommand:
             )
 
 
+# Блок 10: Entry-point загрузки компонента Moonraker.
 def load_component(config: ConfigHelper) -> TreeDShellCommand:
     return TreeDShellCommand(config)

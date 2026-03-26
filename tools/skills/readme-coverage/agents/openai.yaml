@@ -1,0 +1,4 @@
+interface:
+  display_name: "README Coverage"
+  short_description: "Universal README coverage checks via repo profile"
+  default_prompt: "Check README.md coverage across directories and optionally generate missing templates using .codex/repo-standards.yaml."

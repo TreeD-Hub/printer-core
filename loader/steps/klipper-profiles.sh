@@ -1,16 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: KLIPPER PROFILES
+# ==========================================
+# Назначение:
+# - Применяет фиксированный профиль RN12 и транспорт MCU.
+# - Обновляет mcu_rn12.cfg с валидацией входных параметров.
+# Контур:
+# - required (без корректного serial-path Klipper не стартует).
+
+# Блок 1: Библиотеки и статические пути профиля.
 . "${REPO_DIR}/loader/lib/common.sh"
 
 KLIPPER_DIR="${PI_HOME}/treed/klipper"
 PROFILES_DIR="${KLIPPER_DIR}/profiles"
-PROFILE_NAME="rn12_hbot_v1"
+PROFILE_NAME="rn12_corexy_v1"
 PROFILE_DIR="${PROFILES_DIR}/${PROFILE_NAME}"
 MCU_CFG="${PROFILE_DIR}/mcu_rn12.cfg"
 MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 
+# Блок 2: Нормализация параметра транспорта MCU.
 case "${MCU_TRANSPORT_RAW}" in
   usb|USB) MCU_TRANSPORT="usb" ;;
   uart|UART) MCU_TRANSPORT="uart" ;;
@@ -20,6 +31,7 @@ case "${MCU_TRANSPORT_RAW}" in
     ;;
 esac
 
+# Блок 3: Старт шага и валидация staging-профиля.
 log_info "Step klipper-profiles: fixed profile ${PROFILE_NAME}, apply MCU transport=${MCU_TRANSPORT}"
 
 if [ ! -d "${KLIPPER_DIR}" ] || [ ! -f "${KLIPPER_DIR}/printer.cfg" ] || [ ! -d "${PROFILES_DIR}" ]; then
@@ -34,10 +46,12 @@ if [ ! -f "${MCU_CFG}" ]; then
   exit 1
 fi
 
+# Блок 4: Разрешение целевого serial-path для выбранного транспорта.
 current_serial="$(sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\\1|p' "${MCU_CFG}" | head -n 1 || true)"
 SERIAL_PATH=""
 
 if [ "${MCU_TRANSPORT}" = "uart" ]; then
+  # В UART-режиме используем фиксированный serial-узел и запрещаем USB by-id override.
   if [ -n "${MCU_SERIAL_BY_ID:-}" ]; then
     log_error "klipper-profiles: MCU_SERIAL_BY_ID cannot be used when TREED_MCU_TRANSPORT=uart"
     exit 1
@@ -79,6 +93,7 @@ else
 fi
 
 if [ "${MCU_TRANSPORT}" = "usb" ] && [ -z "${SERIAL_PATH}" ]; then
+  # Для USB автоподбор допустим только при однозначном /dev/serial/by-id.
   shopt -s nullglob
   by_id_paths=(/dev/serial/by-id/*)
   shopt -u nullglob
@@ -106,6 +121,7 @@ if [ -z "${SERIAL_PATH}" ]; then
   exit 1
 fi
 
+# Блок 5: Идемпотентная запись serial: в mcu_rn12.cfg.
 if ! grep -qE '^[[:space:]]*serial:[[:space:]]*' "${MCU_CFG}"; then
   log_error "klipper-profiles: serial line not found in ${MCU_CFG}"
   exit 1
@@ -118,6 +134,7 @@ else
   log_info "Updated MCU serial in ${MCU_CFG} to ${SERIAL_PATH}"
 fi
 
+# Блок 6: Финализация прав на staging-каталог.
 if [ -z "${PI_USER:-}" ]; then
   log_error "klipper-profiles: PI_USER is not set"
   exit 1
@@ -127,7 +144,7 @@ if ! grp="$(pi_primary_group "${PI_USER}")"; then
   exit 1
 fi
 
-# Keep ownership adjustments inside staging scope only.
+# Корректируем владельца только в staging-контуре.
 chown -R "${PI_USER}:${grp}" "${KLIPPER_DIR}"
 
 log_info "klipper-profiles: OK"

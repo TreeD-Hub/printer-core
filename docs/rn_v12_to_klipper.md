@@ -15,7 +15,7 @@
 
 Репозиторные артефакты:
 - эталонный бинарник: `firmware/rn12/ROBIN_NANO.bin`
-- активный профиль Klipper: `klipper/profiles/rn12_hbot_v1/*`
+- активный профиль Klipper: `klipper/profiles/rn12_corexy_v1/*`
 
 ## 2. Сборка прошивки Klipper
 
@@ -94,7 +94,7 @@ ls -l /dev/serial0
 ## 6. Как попадает serial в профиль TreeD
 
 Актуальная модель:
-- файл профиля: `klipper/profiles/rn12_hbot_v1/mcu_rn12.cfg`
+- файл профиля: `klipper/profiles/rn12_corexy_v1/mcu_rn12.cfg`
 - в файле должен быть только блок `[mcu]` (без `[printer]`)
 
 Serial обычно ставится автоматически шагом `klipper-profiles` при запуске loader.
@@ -190,12 +190,12 @@ grep -aEi "Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|mcu.e
 ## 8. Актуальные пути в runtime
 
 - `printer.cfg`: `/home/pi/printer_data/config/printer.cfg`
-- профиль: `/home/pi/printer_data/config/profiles/rn12_hbot_v1/`
-- mcu-файл: `/home/pi/printer_data/config/profiles/rn12_hbot_v1/mcu_rn12.cfg`
+- профиль: `/home/pi/printer_data/config/profiles/rn12_corexy_v1/`
+- mcu-файл: `/home/pi/printer_data/config/profiles/rn12_corexy_v1/mcu_rn12.cfg`
 
 ---
 
 См. также:
 - `README.md`
 - `docs/config-ownership.md`
-- `klipper/profiles/rn12_hbot_v1/README.md`
+- `klipper/profiles/rn12_corexy_v1/README.md`

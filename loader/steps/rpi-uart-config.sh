@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: RPI UART CONFIG
+# ==========================================
+# Назначение:
+# - Настраивает UART-контур Raspberry Pi под выбранный MCU transport.
+# - Управляет serial-getty, dtoverlay и udev-permissions правилами.
+# Контур:
+# - required для режима TREED_MCU_TRANSPORT=uart.
+
+# Блок 1: Библиотеки, root-права и входные параметры.
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
@@ -11,6 +21,7 @@ MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-1}"
 UART_PERMS_RULE_FILE="/etc/udev/rules.d/99-treed-uart-perms.rules"
 
+# Блок 2: Вспомогательная функция нормализации bool-параметров.
 is_true() {
   case "${1:-}" in
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
@@ -27,6 +38,7 @@ case "${MCU_TRANSPORT_RAW}" in
     ;;
 esac
 
+# Блок 3: Ранний выход, если выбран не UART-транспорт.
 log_info "Step rpi-uart-config: apply MCU transport prerequisites (${MCU_TRANSPORT})"
 
 if [ "${MCU_TRANSPORT}" != "uart" ]; then
@@ -34,6 +46,7 @@ if [ "${MCU_TRANSPORT}" != "uart" ]; then
   exit 0
 fi
 
+# Блок 4: Поиск и проверка config.txt.
 if [ -z "${CONFIG_FILE:-}" ] || [ ! -f "${CONFIG_FILE}" ]; then
   BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
   CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
@@ -47,6 +60,8 @@ fi
 backup_file_once "${CONFIG_FILE}"
 changed=0
 
+# Блок 5: Нормализация enable_uart=1.
+# Нормализуем enable_uart: оставляем единственную строку и фиксируем значение 1.
 tmp="$(mktemp)"
 awk '
   BEGIN { seen=0 }
@@ -74,7 +89,9 @@ else
 fi
 rm -f "${tmp}"
 
+# Блок 6: Нормализация dtoverlay=disable-bt (если включено TREED_UART_DISABLE_BT).
 if is_true "${TREED_UART_DISABLE_BT}"; then
+  # Для UART убираем конфликтный miniuart-bt и оставляем единичный dtoverlay=disable-bt.
   tmp="$(mktemp)"
   awk '
     BEGIN { seen=0 }
@@ -108,6 +125,8 @@ else
   log_info "rpi-uart-config: bluetooth UART keep enabled (set TREED_UART_DISABLE_BT=1 to disable, default in uart mode)"
 fi
 
+# Блок 7: Отключение/mask serial-getty на аппаратных UART.
+# В UART-режиме serial-getty на аппаратных UART должен быть отключен и замаскирован.
 for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do
   if systemctl disable --now "${unit}" >/dev/null 2>&1; then
     log_info "rpi-uart-config: disabled ${unit}"
@@ -121,9 +140,10 @@ for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do
   fi
 done
 
+# Блок 8: Создание udev-правил для ttyAMA0/ttyS0.
 tmp="$(mktemp)"
 cat > "${tmp}" <<'EOF'
-# treed-managed: uart permissions for klipper transport
+# treed-managed: права UART для транспорта Klipper
 KERNEL=="ttyAMA0", MODE="0660", GROUP="dialout"
 KERNEL=="ttyS0", MODE="0660", GROUP="dialout"
 EOF
@@ -137,6 +157,7 @@ else
 fi
 rm -f "${tmp}"
 
+# Блок 9: Перезагрузка udev-правил и триггер устройств.
 if command -v udevadm >/dev/null 2>&1; then
   udevadm control --reload-rules >/dev/null 2>&1 || true
   for dev in /dev/ttyAMA0 /dev/ttyS0; do
@@ -148,7 +169,8 @@ else
   log_warn "rpi-uart-config: udevadm not found, skipping rule reload"
 fi
 
-# Применяем права сразу (до следующего события udev), чтобы убрать race на первом старте.
+# Блок 10: Мгновенное применение прав доступа (до события udev).
+# Применяем права сразу (до следующего события udev), чтобы убрать гонку на первом старте.
 if getent group dialout >/dev/null 2>&1; then
   for dev in /dev/ttyAMA0 /dev/ttyS0; do
     if [ -e "${dev}" ]; then
@@ -161,6 +183,7 @@ else
   log_warn "rpi-uart-config: group dialout not found, skipping runtime permissions apply"
 fi
 
+# Блок 11: Финальная диагностика устройства и необходимости reboot.
 if [ -e "${MCU_UART_DEV}" ] || [ -L "${MCU_UART_DEV}" ]; then
   log_info "rpi-uart-config: UART device path is present: ${MCU_UART_DEV}"
 else

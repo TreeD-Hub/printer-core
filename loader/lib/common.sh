@@ -1,11 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# БИБЛИОТЕКА LOADER: COMMON
+# ==========================================
+# Назначение:
+# - Дает общий набор helper-функций для всех шагов loader.
+# - Централизует логирование, проверки root/путей и базовые операции с файлами.
+
+# Блок 1: Контракт окружения библиотеки (REPO_DIR обязателен).
 if [ -z "${REPO_DIR:-}" ]; then
   echo "[common] ERROR: REPO_DIR is not set" >&2
   exit 1
 fi
 
+# Блок 2: Логирование с единым форматом timestamp/уровней.
 log_ts() {
   date +"%Y-%m-%d %H:%M:%S"
 }
@@ -22,6 +31,7 @@ log_error() {
   echo "$(log_ts) [ERROR] $*" >&2
 }
 
+# Блок 3: Базовые проверки и файловые helper-функции.
 ensure_root() {
   if [ "$(id -u)" -ne 0 ]; then
     log_error "This script must be run as root (use sudo)"
@@ -45,6 +55,7 @@ backup_file_once() {
   fi
 }
 
+# Блок 4: Определение каталога KlipperScreen (systemd -> fallback).
 detect_klipperscreen_home() {
   local fallback_home="${1:-}"
   local workdir=""
@@ -65,6 +76,7 @@ detect_klipperscreen_home() {
   return 1
 }
 
+# Блок 5: Определение primary group пользователя для корректного chown.
 pi_primary_group() {
   local user="${1:-}"
   local grp=""

@@ -1,0 +1,56 @@
+language: ru
+
+comment_style:
+  target_paths:
+    - loader
+    - runtime-scripts
+    - moonraker
+    - plymouth
+    - tools
+  extensions:
+    - .sh
+    - .bash
+    - .py
+    - .cfg
+    - .conf
+    - .service
+    - .ini
+  skip_dirs:
+    - .git
+    - .github
+    - __pycache__
+    - .venv
+    - venv
+    - node_modules
+    - .codex
+  header_line: "# =========================================="
+  header_labels:
+    purpose: "Назначение"
+    contour: "Контур"
+  block_regex: "^\\s*#\\s*Блок\\s+\\d+\\s*:"
+  require_block_markers: true
+  max_header_lines: 40
+
+readme_coverage:
+  skip_dirs:
+    - .git
+    - .github
+    - __pycache__
+    - .venv
+    - venv
+    - node_modules
+    - .codex
+  required_sections:
+    - "Состав"
+    - "Контракт и инварианты"
+    - "Runtime / Deploy"
+    - "Запуск и проверка"
+    - "Смежная документация"
+  orchestrator_rules:
+    require_step_registry: true
+    step_types:
+      - required
+      - optional
+    orchestrator_dirs:
+      - loader
+  create_mode_default: check

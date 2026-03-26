@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# ==========================================
+# ШАГ LOADER: KLIPPER ANTI SHUTDOWN
+# ==========================================
+# Назначение:
+# - Проверяет состояние Klippy и очищает MCU shutdown при необходимости.
+# - Использует fail-fast контроль ошибок и журналирование.
+# Контур:
+# - required, но с безопасными best-effort retry там, где это не ломает provisioning.
+
 # shellcheck disable=SC1091
+# Блок 1: Библиотеки и root-права.
 . "$(dirname "$0")/../lib/common.sh"
 
 ensure_root
 
+# Блок 2: Базовые переменные и пути диагностики.
 STEP="klipper-anti-shutdown"
 log_info "Step ${STEP}: clearing MCU shutdown if present"
 
@@ -21,10 +32,12 @@ KLIPPER_SERVICE="${KLIPPER_SERVICE:-klipper}"
 SOCK="${PI_HOME}/printer_data/comms/klippy.sock"
 LOG="${PI_HOME}/printer_data/logs/klippy.log"
 
+# Блок 3: Вспомогательные функции работы с Klippy Unix-сокетом.
 query_klippy_state() {
   local sock_path="$1"
   local timeout="${2:-2}"
 
+  # Читаем state через Unix-сокет Klippy API (метод info).
   python3 - "${sock_path}" "${timeout}" <<'PY'
 import json
 import socket
@@ -79,6 +92,7 @@ send_klippy_gcode() {
   local timeout="${2:-2}"
   local gcode="$3"
 
+  # Отправляем gcode/script в Klippy через тот же сокет API.
   python3 - "${sock_path}" "${timeout}" "${gcode}" <<'PY'
 import json
 import socket
@@ -127,7 +141,8 @@ if "error" in msg:
 PY
 }
 
-# Ensure Klipper is active; restart is non-fatal but must be logged.
+# Блок 4: Основной сценарий — проверка сокета, state и FIRMWARE_RESTART.
+# Гарантируем, что Klipper запущен; рестарт нефатален, но обязательно логируется.
 if ! systemctl is-active --quiet "${KLIPPER_SERVICE}"; then
   if err="$(systemctl restart "${KLIPPER_SERVICE}" 2>&1)"; then
     log_info "${STEP}: restarted ${KLIPPER_SERVICE}"
@@ -136,7 +151,7 @@ if ! systemctl is-active --quiet "${KLIPPER_SERVICE}"; then
     log_warn "${STEP}: systemctl restart ${KLIPPER_SERVICE} failed rc=${rc}: ${err}"
   fi
 fi
-# Wait up to 30s for klippy.sock to appear.
+# Ждем появление klippy.sock до 30 секунд.
 for _ in $(seq 1 30); do
   [ -S "$SOCK" ] && break
   sleep 1

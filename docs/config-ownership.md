@@ -26,16 +26,17 @@ Entrypoint:
 13. `klipper-sync`
 14. `klipper-profiles`
 15. `klipper-core`
-16. `klipper-anti-shutdown`
-17. `moonraker-config`
-18. `crowsnest-webcam`
-19. `treed-cam`
-20. `klipper-mainsail-theme`
-21. `klipperscreen-install`
-22. `klipperscreen-theme`
-23. `klipperscreen-integr`
-24. `maintenance-start`
-25. `verify`
+16. `klipper-adxl-rpi`
+17. `klipper-anti-shutdown`
+18. `moonraker-config`
+19. `crowsnest-webcam`
+20. `treed-cam`
+21. `klipper-mainsail-theme`
+22. `klipperscreen-install`
+23. `klipperscreen-theme`
+24. `klipperscreen-integr`
+25. `maintenance-start`
+26. `verify`
 
 ## 2. Слои и source of truth
 
@@ -56,12 +57,13 @@ Runtime:
 - `/home/pi/printer_data/config` (раскладка `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
+- `/usr/local/bin/klipper_mcu` и `/etc/systemd/system/klipper-mcu.service` (обязательный контур `klipper-adxl-rpi`)
 
 ## 3. Ownership map (runtime)
 
 Управляется репозиторием и шагами loader:
 
-- `/home/pi/printer_data/config/printer.cfg`
+- `/home/pi/printer_data/config/printer.cfg` (repo-managed часть файла; stock `SAVE_CONFIG`-сегмент в `preserve` восстанавливается из runtime)
 - `/home/pi/printer_data/config/profiles/*`
 - `/home/pi/printer_data/config/moonraker.conf`
 - `/home/pi/printer_data/config/moonraker/base/*.conf`
@@ -74,6 +76,16 @@ Runtime:
 
 Loader очищает старые `*.conf` в `moonraker/generated` (кроме `00-placeholder.conf`) и затем создает актуальные фрагменты.
 
+Локальные runtime-overrides (владелец — локальный хост):
+
+- `/home/pi/printer_data/config/local_overrides.cfg`
+  - пользовательские ручные override — локальный source-of-truth.
+
+- `/home/pi/printer_data/config/printer.cfg`
+  - repo-managed include `profiles/rn12_corexy_v1/adxl345_rpi.cfg`;
+  - repo-managed include `profiles/rn12_corexy_v1/input_shaper.cfg`;
+  - шаг `loader/steps/klipper-adxl-rpi.sh` проверяет эти include fail-fast.
+
 Runtime-скрипты камеры:
 
 - source: `runtime-scripts/treed-cam/*`
@@ -84,6 +96,7 @@ Runtime-скрипты камеры:
 
 - source: `klipperscreen/themes/treed-oled/*`
 - deploy: `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/*`
+- font deploy: `/usr/local/share/fonts/treed/web_ibm_mda.ttf`
 - владелец: `loader/steps/klipperscreen-theme.sh`
 - примечание: если в теме нет `images/`, шаг подбирает fallback icon-pack из доступной стоковой темы KlipperScreen так, чтобы закрыть обязательные `images/*`-ссылки из `style.css`.
 
@@ -94,16 +107,18 @@ Runtime-скрипты камеры:
 `TREED_DEPLOY_MODE` применяется только к runtime-конфиг шагам (`klipper-core`, `moonraker-config`, `klipperscreen-theme`):
 
 - `clean`: локальные runtime-overrides не восстанавливаются, `.bak` для runtime-конфигов не создаются.
-- `preserve`: сохраняется только `local_overrides.cfg`; для `moonraker.conf` и `KlipperScreen.conf` разрешен `backup_file_once`.
+- `preserve`: сохраняются `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg`; для `moonraker.conf` и `KlipperScreen.conf` разрешен `backup_file_once`.
 - `auto` (по умолчанию): `dev -> clean`, не-`dev` ветки -> `preserve`, неопределенная ветка (`HEAD`) -> `clean`.
 
 Allowlist runtime-preserve:
 
 - `local_overrides.cfg`
+- `printer.cfg` (только stock `SAVE_CONFIG`-сегмент от маркера `#*# <---------------------- SAVE_CONFIG ---------------------->` до конца файла)
 
 Важно:
 
 - `local_overrides.cfg` гарантированно присутствует после `klipper-core` в любом режиме.
+- stock `SAVE_CONFIG`-сегмент `printer.cfg` не является repo-source-of-truth и может меняться штатными командами Klipper (`PID_CALIBRATE`, `Z_OFFSET_APPLY_*`, `SAVE_CONFIG`).
 - `mainsail.cfg`, `timelapse.cfg`, `crowsnest.conf`, `KlipperScreen.conf`, `sonar.conf` больше не восстанавливаются через `klipper-core`.
 - `moonraker.conf` в любом режиме деплоится канонической версией из репозитория.
 
@@ -121,7 +136,8 @@ Allowlist runtime-preserve:
 
 Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
 
-- `loader/steps/klipper-core.sh` — wipe runtime + restore only `local_overrides.cfg` в `preserve`.
+- `loader/steps/klipper-core.sh` — wipe runtime + restore `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg` в `preserve`.
+- `loader/steps/klipper-adxl-rpi.sh` — required: host MCU на Pi (`klipper-mcu.service`) + fail-fast проверка include ADXL/Input Shaper в `printer.cfg` + очистка legacy marker-блока в `local_overrides.cfg`.
 - `loader/steps/moonraker-config.sh` — `backup_file_once` для `moonraker.conf` только в `preserve`.
 - `loader/steps/klipperscreen-theme.sh` — `backup_file_once` для `KlipperScreen.conf` только в `preserve`.
 

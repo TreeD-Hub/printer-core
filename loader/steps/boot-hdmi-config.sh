@@ -1,9 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: BOOT HDMI CONFIG
+# ==========================================
+# Назначение:
+# - Настраивает HDMI-параметры и gpu_mem в config.txt.
+# - Применяет изменения идемпотентно с сохранением backup.
+# Контур:
+# - required (формирует boot-конфиг дисплея и проверяемый gpu_mem).
+
+# Блок 1: Библиотеки и функции определения boot-путей.
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
+# Блок 2: Старт шага и определение config.txt.
 log_info "Step boot-hdmi-config: configuring HDMI output for 960x544 display"
 
 BOOT_DIR="$(detect_boot_dir)"
@@ -16,9 +27,10 @@ if [ -z "${CONFIG_FILE}" ] || [ ! -f "${CONFIG_FILE}" ]; then
   exit 1
 fi
 
+# Блок 3: Нормализация gpu_mem и удаление дублей.
 backup_file_once "${CONFIG_FILE}"
 
-# Ensure gpu_mem is sufficient for UI stability and matches verify expectations.
+# Держим gpu_mem не ниже порога для стабильного UI и ожидаемого результата verify.
 GPU_MEM_MIN=96
 gpu_count="$(grep -cE '^[[:space:]]*gpu_mem[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null || true)"
 last_gpu_info="$(grep -nE '^[[:space:]]*gpu_mem[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null | tail -n 1 || true)"
@@ -58,7 +70,8 @@ fi
 BEGIN_TREED_HDMI="# BEGIN TreeD HDMI"
 END_TREED_HDMI="# END TreeD HDMI"
 
-# Conflict detection (WARN only): show HDMI/dtparam lines outside the managed TreeD block that may override settings.
+# Блок 4: Поиск потенциальных конфликтов HDMI/dtparam вне managed-блока.
+# Ищем потенциальные конфликты вне managed-блока TreeD (только предупреждения).
 conflicts="$(awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '
   BEGIN { inblk=0 }
   $0==b { inblk=1; next }
@@ -107,7 +120,8 @@ if [ -n "${conflicts}" ]; then
   done <<< "${conflicts}"
 fi
 
-# Validate marker structure if present to avoid truncating config.txt on a corrupted block.
+# Блок 5: Проверка целостности парных маркеров managed-блока.
+# Проверяем парность маркеров, чтобы не повредить config.txt при битом блоке.
 if grep -qF "${BEGIN_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null || grep -qF "${END_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null; then
   if ! awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '
     BEGIN { inblk=0; ok=1 }
@@ -120,6 +134,7 @@ if grep -qF "${BEGIN_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null || grep -qF "${EN
   fi
 fi
 
+# Блок 6: Обновление или создание managed TreeD HDMI-блока.
 if grep -qF "${BEGIN_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null; then
   tmp="$(mktemp)"
   awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '

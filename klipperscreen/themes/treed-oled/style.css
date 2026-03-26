@@ -14,12 +14,12 @@
                                        Варианты: #0d0d0d (темнее), #1a1a1a (светлее). */
 
 /* [PALETTE] 4 оттенка для цветных нижних полос у button.color1..color4 и dialog-* */
-@define-color color1 #5e2dff;      /* Самый глубокий оттенок.
+@define-color color1 #9163ff;       /* Самый глубокий оттенок.
                                        Вариант слабее: #6c45df. */
-@define-color color2 #7f49ff;      /* Основной фирменный акцент TreeD. */
-@define-color color3 #a36eff;      /* Средне-светлый оттенок.
+@define-color color2 #9163ff;       /* Основной фирменный акцент TreeD. */
+@define-color color3 #9163ff;       /* Средне-светлый оттенок.
                                        Вариант контрастнее: #b08eff. */
-@define-color color4 #cfb0ff;      /* Самый светлый оттенок градиента. */
+@define-color color4 #9163ff;       /* Самый светлый оттенок градиента. */
 
 /* [PALETTE] Системные семантические цвета */
 @define-color echo #006412;        /* Нормальные сервисные уведомления (green). */
@@ -293,6 +293,7 @@ button.active {
 /* [OVERRIDE] Глобальная насыщенность шрифта.
    Варианты: 400 (тоньше), 600 (жирнее). */
 * {
+    font-family: "WebPlus IBM MDA", "Noto Sans", sans-serif; /* Основной шрифт темы + fallback. */
     font-weight: 500; /* Текущая толщина текста для читаемости на OLED. */
 }
 
@@ -347,14 +348,33 @@ button.warning {
 /* [OVERRIDE] Поля ввода и комбобоксы в стиле TreeD */
 entry,
 spinbutton,
-combobox,
-combobox box {
+combobox {
     background-color: rgba(80, 80, 80, 0.38);   /* Фон полей ввода.
                                                     Варианты alpha: 0.30-0.48. */
     border: 1px solid rgba(145, 99, 255, 0.45); /* Контур полей в фирменном акценте. */
     border-radius: 8px;                          /* Скругление полей.
                                                     Варианты: 6-10px. */
     color: #e4e4e4;                              /* Текст в полях. */
+}
+
+/* [OVERRIDE] Combobox: убираем "рамка в рамке".
+   Внешняя рамка остается у combobox, внутренний box/button/entry рисуем без контура. */
+combobox box,
+combobox button,
+combobox entry,
+combobox arrow {
+    background-color: transparent; /* Внутренняя подложка без отдельной плашки. */
+    background-image: none;        /* Без внутренних градиентов GTK. */
+    border: 0;                     /* Ключевой фикс: убираем внутреннюю рамку. */
+    border-radius: 0;              /* Внутренние элементы без скругления. */
+    box-shadow: none;              /* Без теней внутри комбобокса. */
+}
+
+combobox button:hover,
+combobox button:active,
+combobox button:checked {
+    background-color: transparent; /* Hover/active не создают вторую рамку. */
+    border-color: transparent;
 }
 
 /* [OVERRIDE] Подложка и форма прогресс-бара */

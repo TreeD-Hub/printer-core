@@ -1,10 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# ШАГ LOADER: PLYMOUTH CMDLINE
+# ==========================================
+# Назначение:
+# - Нормализует параметры cmdline для splash и UART-совместимости.
+# - Удаляет конфликтующие токены и сохраняет однострочный формат.
+# Контур:
+# - required (влияет на boot-поведение и UART-консоль).
+
+# Блок 1: Библиотеки и старт шага.
 . "${REPO_DIR}/loader/lib/common.sh"
 
 log_info "Step plymouth-cmdline: updating kernel cmdline for plymouth"
 
+# Блок 2: Нормализация входного параметра транспорта MCU.
 MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 case "${MCU_TRANSPORT_RAW}" in
   usb|USB) MCU_TRANSPORT="usb" ;;
@@ -15,6 +26,7 @@ case "${MCU_TRANSPORT_RAW}" in
     ;;
 esac
 
+# Блок 3: Определение и валидация пути cmdline.txt.
 if [ -z "${CMDLINE_FILE:-}" ]; then
   if [ -f /boot/firmware/cmdline.txt ]; then
     CMDLINE_FILE=/boot/firmware/cmdline.txt
@@ -30,6 +42,7 @@ fi
 
 backup_file_once "${CMDLINE_FILE}"
 
+# Блок 4: Чтение текущей cmdline и разбор на токены.
 tmp="$(mktemp)"
 tr -d '\r\n' < "${CMDLINE_FILE}" > "${tmp}"
 current="$(cat "${tmp}")"
@@ -44,6 +57,8 @@ read -r -a tokens <<< "${current}"
 
 new_tokens=()
 serial_console_removed=0
+# Блок 5: Фильтрация конфликтных токенов и serial-console при UART.
+# Сначала убираем конфликтные/дублирующие токены и сериал-консоль для UART-кейса.
 for t in "${tokens[@]}"; do
   case "$t" in
     quiet|splash|plymouth.ignore-serial-consoles|vt.global_cursor_default=*|consoleblank=*|loglevel=*|logo.nologo|plymouth.debug|vt.handoff=*|plymouth.enable=0|usbcore.autosuspend=*)
@@ -61,6 +76,7 @@ for t in "${tokens[@]}"; do
   esac
 done
 
+# Блок 6: Добавление целевого набора токенов в фиксированном порядке.
 new_tokens+=(
   quiet
   splash
@@ -73,6 +89,8 @@ new_tokens+=(
   usbcore.autosuspend=-1
 )
 
+# Блок 7: Запись итоговой cmdline.
+# Затем добавляем целевой набор токенов в фиксированном порядке.
 new_line="${new_tokens[*]}"
 printf '%s\n' "${new_line}" > "${CMDLINE_FILE}"
 

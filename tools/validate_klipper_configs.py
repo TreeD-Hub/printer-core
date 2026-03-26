@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# ==========================================
+# TOOL: VALIDATE KLIPPER CONFIGS
+# ==========================================
+# Назначение:
+# - Выполняет статическую проверку include-цепочки Klipper-конфигов.
+# - Находит проблемы include-файлов, include-циклов и дублей секций.
+# Контур:
+# - read-only анализ (без правок файлов).
+
+# Блок 1: Импорты и базовые паттерны парсинга.
 import argparse
 import re
 import sys
@@ -16,7 +26,7 @@ SECTION_RE = re.compile(
 )
 OPTIONAL_MISSING_INCLUDES = {"local_overrides.cfg"}
 
-
+# Блок 2: Модель диагностического сообщения.
 @dataclass
 class Issue:
     code: str
@@ -38,6 +48,7 @@ class Issue:
         return f"{self.code}: {location}{self.message}"
 
 
+# Блок 3: Вспомогательные функции чтения файла и извлечения include.
 def load_lines(path: Path) -> list[str]:
     try:
         return path.read_text(encoding="utf-8-sig").splitlines()
@@ -55,6 +66,7 @@ def parse_include_specs(path: Path) -> list[tuple[int, str]]:
     return specs
 
 
+# Блок 4: Разрешение include-спецификаций в целевые файлы.
 def resolve_include_targets(
     current_file: Path,
     include_spec: str,
@@ -133,6 +145,7 @@ def resolve_include_targets(
     return [target]
 
 
+# Блок 5: Обход include-графа с детектом циклов.
 def walk_include_graph(
     entry_file: Path, repo_root: Path, issues: list[Issue]
 ) -> list[Path]:
@@ -171,6 +184,7 @@ def walk_include_graph(
     return ordered
 
 
+# Блок 6: Сбор секций для проверки дублей объявлений.
 def collect_sections(files: list[Path]) -> dict[tuple[str, str], list[tuple[Path, int]]]:
     sections: dict[tuple[str, str], list[tuple[Path, int]]] = {}
     for file_path in files:
@@ -189,6 +203,7 @@ def collect_sections(files: list[Path]) -> dict[tuple[str, str], list[tuple[Path
     return sections
 
 
+# Блок 7: Основная валидация entry-конфига и include-цепочки.
 def validate(entry: Path, repo_root: Path) -> list[Issue]:
     issues: list[Issue] = []
 
@@ -244,6 +259,7 @@ def validate(entry: Path, repo_root: Path) -> list[Issue]:
     return issues
 
 
+# Блок 8: CLI-интерфейс утилиты.
 def main() -> int:
     parser = argparse.ArgumentParser(description="Проверка Klipper-конфигов в репозитории.")
     parser.add_argument(
@@ -268,5 +284,6 @@ def main() -> int:
     return 1
 
 
+# Блок 9: Точка входа скрипта.
 if __name__ == "__main__":
     sys.exit(main())

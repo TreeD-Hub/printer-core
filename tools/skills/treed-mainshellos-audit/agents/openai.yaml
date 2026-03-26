@@ -1,0 +1,4 @@
+interface:
+  display_name: "Treed Audit"
+  short_description: "Read-only audit for treed-mainshellOS from AGENTS.md"
+  default_prompt: "Run a read-only audit of treed-mainshellOS per AGENTS.md and return findings ordered P0->P2 with fact, risk, action, and evidence (path:line)."

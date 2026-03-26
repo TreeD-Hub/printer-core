@@ -1,8 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
+# ==========================================
+# БИБЛИОТЕКА LOADER: RPI
+# ==========================================
+# Назначение:
+# - Определяет модель Raspberry Pi и boot-пути (boot/config/cmdline).
+# - Дает helper-функции для безопасного поиска boot-файлов на разных образах.
+
+# Блок 1: Подключение общей библиотеки loader.
 . "${REPO_DIR}/loader/lib/common.sh"
 
+# Блок 2: Определение модели Raspberry Pi.
 detect_rpi_model() {
   local model="unknown"
 
@@ -15,6 +24,7 @@ detect_rpi_model() {
   echo "$model"
 }
 
+# Блок 3: Проверка факта монтирования каталога.
 is_mounted() {
   local dir="$1"
   if [ -r /proc/mounts ]; then
@@ -24,11 +34,12 @@ is_mounted() {
   fi
 }
 
+# Блок 4: Поиск актуального boot-каталога с учетом mounted/наличия файлов.
 detect_boot_dir() {
   local candidates=("/boot/firmware" "/boot")
   local dir
 
-  # 1) Prefer mounted candidate with both files present.
+  # Приоритет 1: смонтированный каталог, где есть и config.txt, и cmdline.txt.
   for dir in "${candidates[@]}"; do
     if [ -d "${dir}" ] && is_mounted "${dir}" \
       && [ -f "${dir}/config.txt" ] && [ -f "${dir}/cmdline.txt" ]; then
@@ -37,7 +48,7 @@ detect_boot_dir() {
     fi
   done
 
-  # 2) Prefer mounted candidate with at least one of the files.
+  # Приоритет 2: смонтированный каталог, где виден хотя бы один boot-файл.
   for dir in "${candidates[@]}"; do
     if [ -d "${dir}" ] && is_mounted "${dir}" \
       && { [ -f "${dir}/config.txt" ] || [ -f "${dir}/cmdline.txt" ]; }; then
@@ -46,7 +57,7 @@ detect_boot_dir() {
     fi
   done
 
-  # 3) Fallback to the first mounted candidate (even if files are not visible yet).
+  # Приоритет 3: первый смонтированный кандидат, даже если файлы пока не видны.
   for dir in "${candidates[@]}"; do
     if [ -d "${dir}" ] && is_mounted "${dir}"; then
       echo "${dir}"
@@ -57,6 +68,7 @@ detect_boot_dir() {
   echo "/boot"
 }
 
+# Блок 5: Поиск cmdline.txt с учетом приоритетного boot_dir.
 detect_cmdline_file() {
   local boot_dir="${1:-}"
   local candidates=()
@@ -77,6 +89,7 @@ detect_cmdline_file() {
   echo ""
 }
 
+# Блок 6: Поиск config.txt с учетом приоритетного boot_dir.
 detect_config_file() {
   local boot_dir="${1:-}"
   local candidates=()
