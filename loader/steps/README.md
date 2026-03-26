@@ -62,6 +62,8 @@
 - `TREED_UART_DISABLE_BT` (`1|0`, default `1` в `rpi-uart-config`)
 - `MCU_SERIAL_BY_ID` (`/dev/serial/by-id/*`, для USB-режима)
 - `TREED_EBB_SERIAL_BY_ID` (required, `/dev/serial/by-id/*`, USB serial для `EBBCan`)
+- `TREED_EBB_STABILITY_WINDOW_SEC` (default `20`, окно проверки стабильности EBB USB serial в `verify`)
+- `TREED_EBB_STABILITY_POLL_SEC` (default `1`, шаг опроса стабильности EBB USB serial в `verify`)
 - `KLIPPER_SERVICE` (default `klipper`)
 - `TREED_ANTI_SHUTDOWN_INFO_TIMEOUT` (default `2`)
 - `TREED_ADXL_RPI_ENABLE` (default `1`, должен оставаться `1`, ADXL является mandatory)
@@ -123,6 +125,7 @@
 - `crowsnest-webcam.sh` optional на уровне оркестратора; для строгого режима используйте `TREED_CAMERA_REQUIRED=1`.
 - `klipper-adxl-rpi.sh` required: поднимает host MCU, валидирует include `adxl345_rpi.cfg`/`input_shaper.cfg` в `printer.cfg` и чистит legacy ADXL marker-блок в `local_overrides.cfg`.
 - `verify.sh` всегда проверяет ADXL-контур (`klipper-mcu.service`, SPI, include в `printer.cfg`, `ACCELEROMETER_QUERY`).
+- `verify.sh` fail-fast проверяет EBB-контур: include `ebb42_v1_2_usb.cfg`, отсутствие legacy include `extruder.cfg`/`fans.cfg`, наличие `/dev/serial/by-id` и стабильность EBB serial в окне `TREED_EBB_STABILITY_WINDOW_SEC`.
 - `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` optional на уровне оркестратора.
 - `klipperscreen-theme.sh` для `treed-oled` проверяет наличие `images/*` из `style.css`, при необходимости копирует fallback icon-pack.
 - `klipperscreen-theme.sh` устанавливает шрифт `WebPlus IBM MDA` в `/usr/local/share/fonts/treed` и обновляет fontconfig (`fc-cache`).

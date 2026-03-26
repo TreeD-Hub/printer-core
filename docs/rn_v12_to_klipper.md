@@ -102,12 +102,16 @@ Serial обычно ставится автоматически шагом `klip
 Режим задается переменными:
 - `TREED_MCU_TRANSPORT=usb|uart`
 - `TREED_MCU_UART_DEV=/dev/serial0` (для `uart`)
+- `TREED_EBB_SERIAL_BY_ID=/dev/serial/by-id/*` (обязательный serial для `EBBCan`)
 
 Полный прогон:
 
 ```bash
 cd /home/pi/treed/treed-mainshellOS
-sudo bash loader/loader.sh
+sudo TREED_MCU_TRANSPORT=uart \
+     TREED_MCU_UART_DEV=/dev/serial0 \
+     TREED_EBB_SERIAL_BY_ID="/dev/serial/by-id/usb-...EBB42..." \
+     bash loader/loader.sh
 ```
 
 Если устройств несколько и нужна явная привязка:
@@ -144,12 +148,32 @@ ls -l /dev/serial0
 
 ```bash
 cd /home/pi/treed/treed-mainshellOS
-sudo TREED_MCU_TRANSPORT=uart TREED_MCU_UART_DEV=/dev/serial0 TREED_UART_DISABLE_BT=1 bash loader/loader.sh
+sudo TREED_MCU_TRANSPORT=uart \
+     TREED_MCU_UART_DEV=/dev/serial0 \
+     TREED_UART_DISABLE_BT=1 \
+     TREED_EBB_SERIAL_BY_ID="/dev/serial/by-id/usb-...EBB42..." \
+     bash loader/loader.sh
 ```
 
 Важно:
 - Не пропускайте reboot между фазами.
 - Не запускайте фазу 2 до фактического подключения RN12 по PA9/PA10 (WiFi-UART header).
+- Перед фазой 2 убедитесь, что EBB42 стабильно виден в `/dev/serial/by-id` без флаппинга.
+
+### Проверка стабильности EBB USB перед cutover
+
+```bash
+ls -l /dev/serial/by-id/
+
+# Наблюдение 30 секунд: путь EBB не должен пропадать.
+for i in $(seq 1 30); do
+  date +%H:%M:%S
+  ls -l /dev/serial/by-id/ | grep -E "Klipper|stm32g0b1" || echo "EBB_MISSING"
+  sleep 1
+done
+```
+
+Если в окне наблюдения есть `EBB_MISSING` или в `dmesg` идут циклы `USB disconnect`/`Cannot enable`, сначала стабилизируйте кабель/порт/питание.
 
 ## 7. Проверка Klipper после привязки MCU
 
@@ -163,6 +187,8 @@ tail -n 120 /home/pi/printer_data/logs/klippy.log
 - `mcu 'mcu': Starting serial connect`
 - `Loaded MCU 'mcu' ...`
 - `Configured MCU 'mcu' ...`
+- `Loaded MCU 'EBBCan' ...`
+- `Configured MCU 'EBBCan' ...`
 
 ### Минимальный smoke-test после установки/миграции
 
@@ -175,7 +201,7 @@ systemctl is-active klipper moonraker
 
 echo "=== klipper journal (today) ==="
 sudo journalctl -u klipper --since "${SINCE}" --no-pager \
-  | grep -Ei "Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|mcu.error|Error configuring printer" \
+  | grep -Ei "Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|MCU 'EBBCan' shutdown|mcu.error|Error configuring printer|Unable to open serial port|Unable to connect" \
   && echo "WARN: найдены ошибки MCU" || echo "OK: свежих MCU-ошибок нет"
 
 echo "=== klippy tail ==="
