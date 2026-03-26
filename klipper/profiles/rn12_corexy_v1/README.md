@@ -8,24 +8,28 @@
 
 Текущий порядок include:
 1. `profiles/rn12_corexy_v1/mcu_rn12.cfg`
-2. `profiles/rn12_corexy_v1/printer_base.cfg`
-3. `profiles/rn12_corexy_v1/gcode_features.cfg`
-4. `profiles/rn12_corexy_v1/steppers.cfg`
-5. `profiles/rn12_corexy_v1/extruder.cfg`
+2. `profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg`
+3. `profiles/rn12_corexy_v1/printer_base.cfg`
+4. `profiles/rn12_corexy_v1/gcode_features.cfg`
+5. `profiles/rn12_corexy_v1/steppers.cfg`
 6. `profiles/rn12_corexy_v1/bed_heater_dc.cfg`
-7. `profiles/rn12_corexy_v1/fans.cfg`
-8. `profiles/rn12_corexy_v1/adxl345_rpi.cfg`
-9. `profiles/rn12_corexy_v1/input_shaper.cfg`
-10. `profiles/rn12_corexy_v1/macros.cfg`
-11. `profiles/rn12_corexy_v1/ui.cfg`
-12. `local_overrides.cfg` (локальный runtime-файл на Pi)
+7. `profiles/rn12_corexy_v1/adxl345_rpi.cfg`
+8. `profiles/rn12_corexy_v1/input_shaper.cfg`
+9. `profiles/rn12_corexy_v1/macros.cfg`
+10. `profiles/rn12_corexy_v1/ui.cfg`
+11. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
 ## Аппаратный контракт (текущая сборка)
 
-Экструдер (Vz-Hextrudort-Low Plus, 8T):
+Экструдер и хотэнд перенесены на EBB42 v1.2 (USB Type-C):
 - `full_steps_per_rotation: 200`
 - `gear_ratio: 60:8`
 - `rotation_distance: 35.8`
+- `heater_pin: EBBCan:PB13` (для v1.2, не `PA2`)
+- `TREED_EBB_SERIAL_BY_ID` обязателен и подставляется loader в `ebb42_v1_2_usb.cfg`
+
+Legacy-файлы `extruder.cfg` и `fans.cfg` сохранены в профиле только для rollback и
+не подключаются в активной include-цепочке.
 
 ADXL345 (монтаж через Raspberry Pi SPI):
 - `axes_map: z, x, y`
@@ -193,6 +197,7 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 
 1. `loader/steps/klipper-sync.sh` синхронизирует дерево `klipper/` в staging (`/home/pi/treed/klipper`)
 2. `loader/steps/klipper-profiles.sh` подставляет актуальный transport/serial в `mcu_rn12.cfg`
+   и обязательный `TREED_EBB_SERIAL_BY_ID` в `ebb42_v1_2_usb.cfg`
 3. `loader/steps/klipper-core.sh` раскладывает staging в runtime (`/home/pi/printer_data/config`)
 
 ## KAMP Integration

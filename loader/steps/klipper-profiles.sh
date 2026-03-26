@@ -6,7 +6,7 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Применяет фиксированный профиль RN12 и транспорт MCU.
-# - Обновляет mcu_rn12.cfg с валидацией входных параметров.
+# - Обновляет mcu_rn12.cfg и EBB toolhead-конфиг с валидацией входных параметров.
 # Контур:
 # - required (без корректного serial-path Klipper не стартует).
 
@@ -18,8 +18,10 @@ PROFILES_DIR="${KLIPPER_DIR}/profiles"
 PROFILE_NAME="rn12_corexy_v1"
 PROFILE_DIR="${PROFILES_DIR}/${PROFILE_NAME}"
 MCU_CFG="${PROFILE_DIR}/mcu_rn12.cfg"
+EBB_CFG="${PROFILE_DIR}/ebb42_v1_2_usb.cfg"
 MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
+EBB_SERIAL_BY_ID="${TREED_EBB_SERIAL_BY_ID:-}"
 
 # Блок 2: Нормализация параметра транспорта MCU.
 case "${MCU_TRANSPORT_RAW}" in
@@ -43,6 +45,10 @@ mkdir -p "${PROFILES_DIR}"
 
 if [ ! -f "${MCU_CFG}" ]; then
   log_error "klipper-profiles: MCU config not found: ${MCU_CFG}"
+  exit 1
+fi
+if [ ! -f "${EBB_CFG}" ]; then
+  log_error "klipper-profiles: EBB config not found: ${EBB_CFG}"
   exit 1
 fi
 
@@ -134,7 +140,39 @@ else
   log_info "Updated MCU serial in ${MCU_CFG} to ${SERIAL_PATH}"
 fi
 
-# Блок 6: Финализация прав на staging-каталог.
+# Блок 6: Валидация и запись serial: для EBB42 (USB Type-C, required).
+if [ -z "${EBB_SERIAL_BY_ID}" ]; then
+  log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID is required"
+  exit 1
+fi
+
+case "${EBB_SERIAL_BY_ID}" in
+  /dev/serial/by-id/*) ;;
+  *)
+    log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID must be /dev/serial/by-id/*, got: ${EBB_SERIAL_BY_ID}"
+    exit 1
+    ;;
+esac
+
+if [ ! -e "${EBB_SERIAL_BY_ID}" ] || [ ! -r "${EBB_SERIAL_BY_ID}" ]; then
+  log_error "klipper-profiles: TREED_EBB_SERIAL_BY_ID is missing/unreadable: ${EBB_SERIAL_BY_ID}"
+  exit 1
+fi
+
+ebb_current_serial="$(sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\\1|p' "${EBB_CFG}" | head -n 1 || true)"
+if ! grep -qE '^[[:space:]]*serial:[[:space:]]*' "${EBB_CFG}"; then
+  log_error "klipper-profiles: serial line not found in ${EBB_CFG}"
+  exit 1
+fi
+
+if [ "${ebb_current_serial}" = "${EBB_SERIAL_BY_ID}" ]; then
+  log_info "EBB serial already correct in ${EBB_CFG}: ${EBB_SERIAL_BY_ID}"
+else
+  sed -i -E "s|^([[:space:]]*serial:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${EBB_SERIAL_BY_ID}\\2|" "${EBB_CFG}"
+  log_info "Updated EBB serial in ${EBB_CFG} to ${EBB_SERIAL_BY_ID}"
+fi
+
+# Блок 7: Финализация прав на staging-каталог.
 if [ -z "${PI_USER:-}" ]; then
   log_error "klipper-profiles: PI_USER is not set"
   exit 1
