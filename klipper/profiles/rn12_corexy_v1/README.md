@@ -33,7 +33,8 @@ Legacy-файлы `extruder.cfg` и `fans.cfg` сохранены в профи�
 ADXL345 (onboard на EBB42 v1.2):
 - `cs_pin: EBBCan:PB12`
 - `spi_bus: spi2_PB2_PB11_PB10`
-- базовый `axes_map: x, y, z` (дальше калибруется по фактическому монтажу)
+- базовый `axes_map: x,y,z` (дальше калибруется по фактическому монтажу)
+- значения сверены с `sample-bigtreetech-ebb-canbus-v1.2.cfg` из репозитория BIGTREETECH/EBB
 
 Если меняется экструдер, мотор экструдера или ориентация ADXL, эти параметры должны быть
 пересмотрены и обновлены в профиле.
@@ -174,6 +175,8 @@ ADXL345 (onboard на EBB42 v1.2):
 - `local_overrides.cfg` используется только для локальных пользовательских override;
 - legacy-конфиг ADXL через Raspberry Pi перенесен в
   `profiles/rn12_corexy_v1/legacy/adxl345_rpi.cfg` и не подключается.
+- для обратной совместимости оставлен shim-файл
+  `profiles/rn12_corexy_v1/adxl345_rpi.cfg` (redirect в legacy).
 
 2. Проверить связь с акселерометром после `RESTART`:
 - `ACCELEROMETER_QUERY`
