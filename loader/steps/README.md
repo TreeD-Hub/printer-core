@@ -19,7 +19,7 @@
 | 11 | `plymouth-cmdline.sh` | required | Нормализация kernel cmdline. |
 | 12 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 13 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 14 | `klipper-profiles.sh` | required | Профиль RN12 и serial-path для RN12 + EBB42 USB. |
+| 14 | `klipper-profiles.sh` | required | Профиль RN12, serial-path для RN12 + EBB42 USB и canbus UUID для Eddy Duo. |
 | 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 16 | `klipper-adxl-rpi.sh` | required | Обязательная интеграция ADXL345/Input Shaper (только onboard EBB42). |
 | 17 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
@@ -62,6 +62,7 @@
 - `TREED_UART_DISABLE_BT` (`1|0`, default `1` в `rpi-uart-config`)
 - `MCU_SERIAL_BY_ID` (`/dev/serial/by-id/*`, для USB-режима)
 - `TREED_EBB_SERIAL_BY_ID` (optional override, `/dev/serial/by-id/*`, USB serial для `EBBCan`)
+- `TREED_EDDY_CANBUS_UUID` (hex canbus UUID для `Eddy Duo`, обязателен при первом деплое)
 - `TREED_EBB_STABILITY_WINDOW_SEC` (default `20`, окно проверки стабильности EBB USB serial в `verify`)
 - `TREED_EBB_STABILITY_POLL_SEC` (default `1`, шаг опроса стабильности EBB USB serial в `verify`)
 - `KLIPPER_SERVICE` (default `klipper`)
@@ -122,6 +123,8 @@
 - `verify.sh` всегда проверяет ADXL-контур EBB42 и выполняет `ACCELEROMETER_QUERY`.
 - `verify.sh` fail-fast проверяет EBB-контур: include `ebb42_v1_2_usb.cfg`, отсутствие legacy include `extruder.cfg`/`fans.cfg`, наличие `/dev/serial/by-id` и стабильность EBB serial в окне `TREED_EBB_STABILITY_WINDOW_SEC`.
 - `klipper-profiles.sh` для EBB использует `TREED_EBB_SERIAL_BY_ID` как override; при пустом значении автоподхват выполняется по `/dev/serial/by-id/*stm32g0b1*` при одном кандидате, при 0/многих — fail-fast.
+- `klipper-profiles.sh` для Eddy Duo требует `TREED_EDDY_CANBUS_UUID` при первом деплое и подставляет его в `profiles/rn12_corexy_v1/probe_eddy_duo.cfg`.
+- `klipper-core.sh` в `preserve`-режиме сохраняет `SAVE_CONFIG`, но вычищает legacy `position_endstop`, старые `bltouch/probe` и сохранённые `bed_mesh` секции перед возвратом в runtime.
 - `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` optional на уровне оркестратора.
 - `klipperscreen-theme.sh` для `treed-oled` проверяет наличие `images/*` из `style.css`, при необходимости копирует fallback icon-pack.
 - `klipperscreen-theme.sh` устанавливает шрифт `WebPlus IBM MDA` в `/usr/local/share/fonts/treed` и обновляет fontconfig (`fc-cache`).

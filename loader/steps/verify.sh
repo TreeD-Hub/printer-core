@@ -447,6 +447,8 @@ else
 fi
 MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/mcu_rn12.cfg"
 EBB_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg"
+EDDY_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/probe_eddy_duo.cfg"
+STEPPERS_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/steppers.cfg"
 PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
@@ -571,6 +573,99 @@ if [ -n "${runtime_ebb_serial}" ]; then
 fi
 
 klipper_ebb_connected_check "klipper startup connected EBBCan"
+
+# Блок 9b: Валидация Eddy Duo как probe + Z endstop.
+if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/probe_eddy_duo\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
+  pass "runtime printer.cfg includes Eddy Duo profile"
+else
+  failf "runtime printer.cfg includes Eddy Duo profile"
+fi
+
+if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/optional_(bed_mesh|screws_tilt_adjust)\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
+  failf "runtime printer.cfg has no legacy auto-level includes"
+else
+  pass "runtime printer.cfg has no legacy auto-level includes"
+fi
+
+if [ -f "${EDDY_CFG_RUNTIME}" ]; then
+  pass "Eddy Duo config present (${EDDY_CFG_RUNTIME})"
+else
+  failf "Eddy Duo config present (${EDDY_CFG_RUNTIME})"
+fi
+
+if [ -f "${EDDY_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[mcu[[:space:]]+eddy\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*canbus_uuid:[[:space:]]*[0-9A-Fa-f]+[[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*canbus_interface:[[:space:]]*can0[[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
+  pass "Eddy Duo MCU config includes canbus_uuid/can0"
+else
+  failf "Eddy Duo MCU config includes canbus_uuid/can0"
+fi
+
+if [ -f "${EDDY_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[probe_eddy_current[[:space:]]+btt_eddy\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*sensor_type:[[:space:]]*ldc1612[[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*i2c_mcu:[[:space:]]*eddy[[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*i2c_bus:[[:space:]]*i2c0f[[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
+  pass "Eddy Duo probe config present"
+else
+  failf "Eddy Duo probe config present"
+fi
+
+if [ -f "${EDDY_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[bed_mesh\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*\[safe_z_home\][[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
+  pass "Eddy Duo bed_mesh and safe_z_home present"
+else
+  failf "Eddy Duo bed_mesh and safe_z_home present"
+fi
+
+if [ -f "${EDDY_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[gcode_macro[[:space:]]+G28\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*\[gcode_macro[[:space:]]+SET_Z_FROM_PROBE\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*\[gcode_macro[[:space:]]+PROBE_EDDY_CURRENT_CALIBRATE_AUTO\][[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
+  pass "Eddy Duo homing macros present"
+else
+  failf "Eddy Duo homing macros present"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
+    in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+    in_z && /^[[:space:]]*endstop_pin:[[:space:]]*probe:z_virtual_endstop[[:space:]]*$/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "stepper_z uses probe:z_virtual_endstop"
+else
+  failf "stepper_z uses probe:z_virtual_endstop"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
+    in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+    in_z && /^[[:space:]]*position_endstop:[[:space:]]*/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  failf "stepper_z has no physical position_endstop"
+else
+  pass "stepper_z has no physical position_endstop"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[stepper_x\][[:space:]]*$/ { in_x = 1; next }
+    in_x && /^\[[^]]+\][[:space:]]*$/ { in_x = 0 }
+    in_x && /^[[:space:]]*endstop_pin:[[:space:]]*\^EBBCan:PB6[[:space:]]*$/ { found = 1 }
+    END { exit found ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "stepper_x uses EBB PB6 endstop"
+else
+  failf "stepper_x uses EBB PB6 endstop"
+fi
 
 # Блок 10: Валидация serial-path для USB-транспорта.
 if [ "${TREED_MCU_TRANSPORT}" = "usb" ]; then

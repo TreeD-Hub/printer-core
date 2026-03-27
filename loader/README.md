@@ -42,7 +42,7 @@
 | 11 | `plymouth-cmdline` | required | Нормализация kernel cmdline. |
 | 12 | `plymouth-systemd` | required | Политика `getty@tty1` и unit Plymouth. |
 | 13 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
-| 14 | `klipper-profiles` | required | Применение профиля RN12 и serial-path для RN12 + EBB42 USB. |
+| 14 | `klipper-profiles` | required | Применение профиля RN12, serial-path для RN12 + EBB42 USB и canbus_uuid для Eddy Duo. |
 | 15 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
 | 16 | `klipper-adxl-rpi` | required | Обязательная интеграция ADXL345/Input Shaper (только onboard EBB42). |
 | 17 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
@@ -66,6 +66,7 @@
 - `TREED_DEPLOY_MODE_EFFECTIVE` — вычисленное итоговое значение.
 - `TREED_DEPLOY_BRANCH` — обнаруженная git-ветка (пусто в detached `HEAD`).
 - `TREED_EBB_SERIAL_BY_ID` — опциональный override USB serial EBB (`/dev/serial/by-id/*`).
+- `TREED_EDDY_CANBUS_UUID` — обязательный canbus UUID для `profiles/rn12_corexy_v1/probe_eddy_duo.cfg` при первом деплое Eddy Duo.
 - Автоподхват EBB использует vendor-маску `/dev/serial/by-id/*stm32g0b1*`: при одном кандидате путь берется автоматически, при 0/многих — fail-fast.
 
 Auto-резолв для `TREED_DEPLOY_MODE=auto`:

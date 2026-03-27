@@ -6,7 +6,7 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Применяет фиксированный профиль RN12 и транспорт MCU.
-# - Обновляет mcu_rn12.cfg и EBB toolhead-конфиг с валидацией входных параметров.
+# - Обновляет mcu_rn12.cfg, EBB toolhead-конфиг и Eddy Duo probe-конфиг.
 # Контур:
 # - required (без корректного serial-path Klipper не стартует).
 
@@ -19,9 +19,11 @@ PROFILE_NAME="rn12_corexy_v1"
 PROFILE_DIR="${PROFILES_DIR}/${PROFILE_NAME}"
 MCU_CFG="${PROFILE_DIR}/mcu_rn12.cfg"
 EBB_CFG="${PROFILE_DIR}/ebb42_v1_2_usb.cfg"
+EDDY_CFG="${PROFILE_DIR}/probe_eddy_duo.cfg"
 MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
 MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
 EBB_SERIAL_BY_ID="${TREED_EBB_SERIAL_BY_ID:-}"
+EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 
 # Блок 2: Нормализация параметра транспорта MCU.
 case "${MCU_TRANSPORT_RAW}" in
@@ -49,6 +51,10 @@ if [ ! -f "${MCU_CFG}" ]; then
 fi
 if [ ! -f "${EBB_CFG}" ]; then
   log_error "klipper-profiles: EBB config not found: ${EBB_CFG}"
+  exit 1
+fi
+if [ ! -f "${EDDY_CFG}" ]; then
+  log_error "klipper-profiles: Eddy config not found: ${EDDY_CFG}"
   exit 1
 fi
 
@@ -205,7 +211,47 @@ else
   log_info "Updated EBB serial in ${EBB_CFG} to ${EBB_SERIAL_PATH}"
 fi
 
-# Блок 7: Финализация прав на staging-каталог.
+# Блок 7: Подстановка canbus_uuid для Eddy Duo.
+eddy_current_uuid="$(sed -nE 's|^[[:space:]]*canbus_uuid:[[:space:]]*([^[:space:]#]+).*|\1|p' "${EDDY_CFG}" | head -n 1 || true)"
+if ! grep -qE '^[[:space:]]*canbus_uuid:[[:space:]]*' "${EDDY_CFG}"; then
+  log_error "klipper-profiles: canbus_uuid line not found in ${EDDY_CFG}"
+  exit 1
+fi
+
+EDDY_CANBUS_UUID_RESOLVED=""
+if [ -n "${EDDY_CANBUS_UUID}" ]; then
+  case "${EDDY_CANBUS_UUID}" in
+    *[!0-9A-Fa-f]*)
+      log_error "klipper-profiles: TREED_EDDY_CANBUS_UUID must be a hex canbus_uuid, got: ${EDDY_CANBUS_UUID}"
+      exit 1
+      ;;
+    *)
+      EDDY_CANBUS_UUID_RESOLVED="${EDDY_CANBUS_UUID}"
+      ;;
+  esac
+elif [ -n "${eddy_current_uuid}" ] && [ "${eddy_current_uuid}" != "REPLACE_ME" ]; then
+  case "${eddy_current_uuid}" in
+    *[!0-9A-Fa-f]*)
+      log_error "klipper-profiles: Eddy canbus_uuid in ${EDDY_CFG} is invalid; set TREED_EDDY_CANBUS_UUID explicitly"
+      exit 1
+      ;;
+    *)
+      EDDY_CANBUS_UUID_RESOLVED="${eddy_current_uuid}"
+      ;;
+  esac
+else
+  log_error "klipper-profiles: TREED_EDDY_CANBUS_UUID is required for Eddy Duo initial deployment"
+  exit 1
+fi
+
+if [ "${eddy_current_uuid}" = "${EDDY_CANBUS_UUID_RESOLVED}" ]; then
+  log_info "Eddy canbus_uuid already correct in ${EDDY_CFG}: ${EDDY_CANBUS_UUID_RESOLVED}"
+else
+  sed -i -E "s|^([[:space:]]*canbus_uuid:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${EDDY_CANBUS_UUID_RESOLVED}\\2|" "${EDDY_CFG}"
+  log_info "Updated Eddy canbus_uuid in ${EDDY_CFG} to ${EDDY_CANBUS_UUID_RESOLVED}"
+fi
+
+# Блок 8: Финализация прав на staging-каталог.
 if [ -z "${PI_USER:-}" ]; then
   log_error "klipper-profiles: PI_USER is not set"
   exit 1

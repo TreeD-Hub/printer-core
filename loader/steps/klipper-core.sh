@@ -30,6 +30,40 @@ CONFIG_DIR="${PI_HOME}/printer_data/config"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 SAVE_CONFIG_MARKER="#*# <---------------------- SAVE_CONFIG ---------------------->"
 
+sanitize_save_config_block() {
+  local src="$1"
+  local dst="$2"
+
+  awk '
+    function normalize(line, out) {
+      out = line
+      sub(/^#\*#[[:space:]]*/, "", out)
+      return tolower(out)
+    }
+    {
+      normalized = normalize($0)
+      if (normalized ~ /^\[[^]]+\][[:space:]]*$/) {
+        section = normalized
+        drop_section = (
+          section ~ /^\[bltouch\]$/ ||
+          section ~ /^\[probe\]$/ ||
+          section ~ /^\[bed_mesh([[:space:]][^]]+)?\]$/
+        )
+      }
+
+      if (drop_section) {
+        next
+      }
+
+      if (section == "[stepper_z]" && normalized ~ /^position_endstop[[:space:]]*=/) {
+        next
+      }
+
+      print
+    }
+  ' "${src}" > "${dst}"
+}
+
 case "${DEPLOY_MODE}" in
   clean|preserve)
     ;;
@@ -74,7 +108,13 @@ if [ "${DEPLOY_MODE}" = "preserve" ]; then
     ' "${CONFIG_DIR}/printer.cfg" > "${TMP_KEEP}/printer_save_config.block" || true
 
     if [ -s "${TMP_KEEP}/printer_save_config.block" ]; then
-      log_info "klipper-core: preserve mode, saving printer.cfg SAVE_CONFIG segment"
+      TMP_SANITIZED="$(mktemp)"
+      sanitize_save_config_block "${TMP_KEEP}/printer_save_config.block" "${TMP_SANITIZED}"
+      mv "${TMP_SANITIZED}" "${TMP_KEEP}/printer_save_config.block"
+    fi
+
+    if [ -s "${TMP_KEEP}/printer_save_config.block" ]; then
+      log_info "klipper-core: preserve mode, saving sanitized printer.cfg SAVE_CONFIG segment"
     else
       rm -f "${TMP_KEEP}/printer_save_config.block"
       log_warn "klipper-core: preserve mode, SAVE_CONFIG marker found but segment extraction is empty"
