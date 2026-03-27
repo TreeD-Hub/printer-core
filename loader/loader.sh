@@ -167,7 +167,7 @@ STEPS=(
   "klipper-sync"             # Репозиторные конфиги -> staging: ~/treed/klipper.
   "klipper-profiles"         # Применение профиля RN12 и serial-path MCU в staging.
   "klipper-core"             # Раскладка staging -> runtime: ~/printer_data/config.
-  "klipper-adxl-rpi"         # Обязательная интеграция ADXL345/Input Shaper (auto: EBB onboard или RPi SPI).
+  "klipper-adxl-rpi"         # Обязательная интеграция ADXL345/Input Shaper (только onboard EBB42).
   "klipper-anti-shutdown"    # Сброс MCU shutdown при обнаружении после раскладки.
   "moonraker-config"         # Деплой moonraker.conf/base/generated и shell-компонента.
   "crowsnest-webcam"         # Деплой камеры (crowsnest + moonraker webcam fragment).

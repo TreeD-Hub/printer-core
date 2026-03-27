@@ -454,12 +454,8 @@ KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
 KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
 KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
 KS_SERVICE_PRESENT=0
-ADXL_RPI_PROFILE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/adxl345_rpi.cfg"
-ADXL_RPI_LEGACY_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/legacy/adxl345_rpi.cfg"
 ADXL_EBB_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg"
 INPUT_SHAPER_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/input_shaper.cfg"
-ADXL_SPI_BUS_EXPECTED="${TREED_ADXL_RPI_SPI_BUS:-spidev0.0}"
-ADXL_SPI_DEV_EXPECTED="/dev/${ADXL_SPI_BUS_EXPECTED}"
 
 case "${TREED_MCU_TRANSPORT_RAW}" in
   usb|USB) TREED_MCU_TRANSPORT="usb" ;;
@@ -921,71 +917,6 @@ case "${TREED_VERIFY_CAMERA}" in
     ;;
 esac
 
-# Блок 16a: Подготовка и переключение режима ADXL-проверок (rpi/ebb).
-TREED_VERIFY_ADXL_RPI="${TREED_VERIFY_ADXL_RPI:-1}"
-TREED_ADXL_MODE="${TREED_ADXL_MODE:-auto}" # auto|rpi|ebb
-adxl_checks_enabled=1
-adxl_checks_reason="mandatory baseline"
-adxl_mode_effective=""
-
-case "${TREED_VERIFY_ADXL_RPI}" in
-  1|true|TRUE|yes|YES|auto|AUTO|'')
-    adxl_checks_enabled=1
-    adxl_checks_reason="enabled"
-    ;;
-  0|false|FALSE|no|NO)
-    failf "TREED_VERIFY_ADXL_RPI=0 is not allowed (ADXL is mandatory)"
-    adxl_checks_enabled=1
-    adxl_checks_reason="forced after invalid disable"
-    ;;
-  *)
-    log_warn "VERIFY invalid TREED_VERIFY_ADXL_RPI='${TREED_VERIFY_ADXL_RPI}', forcing ADXL checks"
-    adxl_checks_enabled=1
-    adxl_checks_reason="forced after invalid value"
-    ;;
-esac
-
-if [ "${adxl_checks_enabled}" = "1" ]; then
-  has_rpi_include_verify=0
-  if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-    has_rpi_include_verify=1
-  fi
-
-  has_ebb_adxl_verify=0
-  if [ -f "${ADXL_EBB_CFG}" ] \
-    && grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${ADXL_EBB_CFG}" \
-    && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_EBB_CFG}" \
-    && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_EBB_CFG}"; then
-    has_ebb_adxl_verify=1
-  fi
-
-  case "${TREED_ADXL_MODE}" in
-    rpi|RPI)
-      adxl_mode_effective="rpi"
-      ;;
-    ebb|EBB)
-      adxl_mode_effective="ebb"
-      ;;
-    auto|AUTO|'')
-      if [ "${has_rpi_include_verify}" = "1" ]; then
-        adxl_mode_effective="rpi"
-      elif [ "${has_ebb_adxl_verify}" = "1" ]; then
-        adxl_mode_effective="ebb"
-      fi
-      ;;
-    *)
-      failf "TREED_ADXL_MODE has valid value (auto|rpi|ebb)"
-      ;;
-  esac
-
-  if [ -z "${adxl_mode_effective}" ]; then
-    failf "ADXL mode is resolvable from runtime config"
-  else
-    pass "ADXL mode resolved (${adxl_mode_effective})"
-  fi
-fi
-
 # Блок 17: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
 if [ "${camera_checks_enabled}" = "1" ]; then
   byid_index0_available=0
@@ -1072,93 +1003,45 @@ else
   log_info "VERIFY camera checks skipped (${camera_checks_reason})"
 fi
 
-# Блок 17a: Проверки ADXL345 (rpi/ebb, mandatory).
-if [ "${adxl_checks_enabled}" = "1" ]; then
-  if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-    && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-    pass "Input Shaper include enabled in printer.cfg"
-  else
-    failf "Input Shaper include enabled in printer.cfg"
-  fi
-
-  if [ -f "${INPUT_SHAPER_CFG}" ] && grep -qE '^[[:space:]]*\[input_shaper\][[:space:]]*$' "${INPUT_SHAPER_CFG}"; then
-    pass "Input Shaper config present (${INPUT_SHAPER_CFG})"
-  else
-    failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
-  fi
-
-  if [ "${adxl_mode_effective}" = "rpi" ]; then
-    if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-      && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-      pass "ADXL include enabled in printer.cfg (rpi mode)"
-    else
-      failf "ADXL include enabled in printer.cfg (rpi mode)"
-    fi
-
-    if [ -f "${ADXL_RPI_PROFILE_CFG}" ]; then
-      pass "ADXL profile config present (${ADXL_RPI_PROFILE_CFG})"
-    else
-      failf "ADXL profile config present (${ADXL_RPI_PROFILE_CFG})"
-    fi
-
-    if [ -f "${ADXL_RPI_LEGACY_CFG}" ] \
-      && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_RPI_LEGACY_CFG}" \
-      && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_RPI_LEGACY_CFG}"; then
-      pass "ADXL legacy config includes resonance_tester section (rpi mode)"
-    else
-      failf "ADXL legacy config includes resonance_tester section (rpi mode)"
-    fi
-
-    if [ -e "${ADXL_SPI_DEV_EXPECTED}" ]; then
-      pass "ADXL SPI device present (${ADXL_SPI_DEV_EXPECTED})"
-    else
-      failf "ADXL SPI device present (${ADXL_SPI_DEV_EXPECTED})"
-    fi
-
-    if [ -f "${CONFIG_FILE}" ] && grep -qE '^[[:space:]]*dtparam[[:space:]]*=[[:space:]]*spi=on([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
-      pass "config.txt dtparam=spi=on"
-    else
-      failf "config.txt dtparam=spi=on"
-    fi
-
-    check_required_service_active "klipper-mcu.service"
-
-    if [ -f "${ADXL_RPI_LEGACY_CFG}" ] \
-      && grep -qE "^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*${ADXL_SPI_BUS_EXPECTED}[[:space:]]*$" "${ADXL_RPI_LEGACY_CFG}"; then
-      pass "ADXL spi_bus configured in legacy config (${ADXL_SPI_BUS_EXPECTED})"
-    else
-      failf "ADXL spi_bus configured in legacy config (${ADXL_SPI_BUS_EXPECTED})"
-    fi
-  else
-    if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-      && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-      failf "printer.cfg should not include adxl345_rpi.cfg in ebb mode"
-    else
-      pass "printer.cfg has no adxl345_rpi include in ebb mode"
-    fi
-
-    if [ -f "${ADXL_EBB_CFG}" ] \
-      && grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${ADXL_EBB_CFG}" \
-      && grep -qE '^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*EBBCan:PB12[[:space:]]*$' "${ADXL_EBB_CFG}" \
-      && grep -qE '^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*spi2_PB2_PB11_PB10[[:space:]]*$' "${ADXL_EBB_CFG}"; then
-      pass "EBB config includes onboard ADXL345 pins"
-    else
-      failf "EBB config includes onboard ADXL345 pins"
-    fi
-
-    if [ -f "${ADXL_EBB_CFG}" ] \
-      && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_EBB_CFG}" \
-      && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_EBB_CFG}"; then
-      pass "EBB config includes resonance_tester section"
-    else
-      failf "EBB config includes resonance_tester section"
-    fi
-  fi
-
-  moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
+# Блок 17a: Проверки ADXL345 (ebb-only, mandatory).
+if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
+  pass "Input Shaper include enabled in printer.cfg"
 else
-  log_info "VERIFY ADXL checks skipped (${adxl_checks_reason})"
+  failf "Input Shaper include enabled in printer.cfg"
 fi
+
+if [ -f "${INPUT_SHAPER_CFG}" ] && grep -qE '^[[:space:]]*\[input_shaper\][[:space:]]*$' "${INPUT_SHAPER_CFG}"; then
+  pass "Input Shaper config present (${INPUT_SHAPER_CFG})"
+else
+  failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
+fi
+
+if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
+  failf "printer.cfg has no legacy adxl345_rpi include"
+else
+  pass "printer.cfg has no legacy adxl345_rpi include"
+fi
+
+if [ -f "${ADXL_EBB_CFG}" ] \
+  && grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${ADXL_EBB_CFG}" \
+  && grep -qE '^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*EBBCan:PB12[[:space:]]*$' "${ADXL_EBB_CFG}" \
+  && grep -qE '^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*spi2_PB2_PB11_PB10[[:space:]]*$' "${ADXL_EBB_CFG}"; then
+  pass "EBB config includes onboard ADXL345 pins"
+else
+  failf "EBB config includes onboard ADXL345 pins"
+fi
+
+if [ -f "${ADXL_EBB_CFG}" ] \
+  && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_EBB_CFG}" \
+  && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_EBB_CFG}"; then
+  pass "EBB config includes resonance_tester section"
+else
+  failf "EBB config includes resonance_tester section"
+fi
+
+moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
 
 # Блок 18: Итог verify (pass/fail счетчики).
 if [ "${fail}" -eq 0 ]; then

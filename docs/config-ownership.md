@@ -57,7 +57,6 @@ Runtime:
 - `/home/pi/printer_data/config` (раскладка `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
-- `/usr/local/bin/klipper_mcu` и `/etc/systemd/system/klipper-mcu.service` (обязательный контур `klipper-adxl-rpi`)
 
 ## 3. Ownership map (runtime)
 
@@ -82,7 +81,6 @@ Loader очищает старые `*.conf` в `moonraker/generated` (кроме
   - пользовательские ручные override — локальный source-of-truth.
 
 - `/home/pi/printer_data/config/printer.cfg`
-  - repo-managed include `profiles/rn12_corexy_v1/adxl345_rpi.cfg`;
   - repo-managed include `profiles/rn12_corexy_v1/input_shaper.cfg`;
   - шаг `loader/steps/klipper-adxl-rpi.sh` проверяет эти include fail-fast.
 
@@ -137,7 +135,7 @@ Allowlist runtime-preserve:
 Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
 
 - `loader/steps/klipper-core.sh` — wipe runtime + restore `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg` в `preserve`.
-- `loader/steps/klipper-adxl-rpi.sh` — required: host MCU на Pi (`klipper-mcu.service`) + fail-fast проверка include ADXL/Input Shaper в `printer.cfg` + очистка legacy marker-блока в `local_overrides.cfg`.
+- `loader/steps/klipper-adxl-rpi.sh` — required: fail-fast проверка mandatory ADXL/Input Shaper через onboard EBB42 + очистка legacy marker-блока в `local_overrides.cfg`.
 - `loader/steps/moonraker-config.sh` — `backup_file_once` для `moonraker.conf` только в `preserve`.
 - `loader/steps/klipperscreen-theme.sh` — `backup_file_once` для `KlipperScreen.conf` только в `preserve`.
 

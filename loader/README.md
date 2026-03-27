@@ -44,7 +44,7 @@
 | 13 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
 | 14 | `klipper-profiles` | required | Применение профиля RN12 и serial-path для RN12 + EBB42 USB. |
 | 15 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
-| 16 | `klipper-adxl-rpi` | required | Обязательная интеграция ADXL345/Input Shaper (auto: onboard EBB42 или Raspberry Pi SPI). |
+| 16 | `klipper-adxl-rpi` | required | Обязательная интеграция ADXL345/Input Shaper (только onboard EBB42). |
 | 17 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
 | 18 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
 | 19 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
@@ -65,7 +65,8 @@
 - `TREED_DEPLOY_MODE` — `auto|clean|preserve`.
 - `TREED_DEPLOY_MODE_EFFECTIVE` — вычисленное итоговое значение.
 - `TREED_DEPLOY_BRANCH` — обнаруженная git-ветка (пусто в detached `HEAD`).
-- `TREED_EBB_SERIAL_BY_ID` — обязательный USB serial EBB (`/dev/serial/by-id/*`).
+- `TREED_EBB_SERIAL_BY_ID` — опциональный override USB serial EBB (`/dev/serial/by-id/*`).
+- Автоподхват EBB использует vendor-маску `/dev/serial/by-id/*stm32g0b1*`: при одном кандидате путь берется автоматически, при 0/многих — fail-fast.
 
 Auto-резолв для `TREED_DEPLOY_MODE=auto`:
 

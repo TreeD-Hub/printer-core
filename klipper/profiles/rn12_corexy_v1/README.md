@@ -25,10 +25,7 @@
 - `gear_ratio: 60:8`
 - `rotation_distance: 35.8`
 - `heater_pin: EBBCan:PB13` (для v1.2, не `PA2`)
-- `TREED_EBB_SERIAL_BY_ID` обязателен и подставляется loader в `ebb42_v1_2_usb.cfg`
-
-Legacy-файлы `extruder.cfg` и `fans.cfg` сохранены в профиле только для rollback и
-не подключаются в активной include-цепочке.
+- `TREED_EBB_SERIAL_BY_ID` — опциональный override; при пустом значении loader берет единственный путь из `/dev/serial/by-id/*stm32g0b1*` (иначе fail-fast).
 
 ADXL345 (onboard на EBB42 v1.2):
 - `cs_pin: EBBCan:PB12`
@@ -173,11 +170,7 @@ ADXL345 (onboard на EBB42 v1.2):
 
 1. Loader не добавляет ADXL/Input Shaper include в `local_overrides.cfg`.
 - `local_overrides.cfg` используется только для локальных пользовательских override;
-- legacy-конфиг ADXL через Raspberry Pi перенесен в
-  `profiles/rn12_corexy_v1/legacy/adxl345_rpi.cfg` и не подключается.
-- для обратной совместимости оставлен shim-файл
-  `profiles/rn12_corexy_v1/adxl345_rpi.cfg` (redirect в legacy).
-
+- ADXL-контур обслуживается только через onboard-конфиг EBB42.
 2. Проверить связь с акселерометром после `RESTART`:
 - `ACCELEROMETER_QUERY`
 - `MEASURE_AXES_NOISE`
@@ -196,7 +189,7 @@ ADXL345 (onboard на EBB42 v1.2):
 
 1. `loader/steps/klipper-sync.sh` синхронизирует дерево `klipper/` в staging (`/home/pi/treed/klipper`)
 2. `loader/steps/klipper-profiles.sh` подставляет актуальный transport/serial в `mcu_rn12.cfg`
-   и обязательный `TREED_EBB_SERIAL_BY_ID` в `ebb42_v1_2_usb.cfg`
+   и опциональный override `TREED_EBB_SERIAL_BY_ID` в `ebb42_v1_2_usb.cfg`
 3. `loader/steps/klipper-core.sh` раскладывает staging в runtime (`/home/pi/printer_data/config`)
 
 ## KAMP Integration
