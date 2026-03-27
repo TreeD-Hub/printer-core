@@ -13,11 +13,10 @@
 4. `profiles/rn12_corexy_v1/gcode_features.cfg`
 5. `profiles/rn12_corexy_v1/steppers.cfg`
 6. `profiles/rn12_corexy_v1/bed_heater_dc.cfg`
-7. `profiles/rn12_corexy_v1/adxl345_rpi.cfg`
-8. `profiles/rn12_corexy_v1/input_shaper.cfg`
-9. `profiles/rn12_corexy_v1/macros.cfg`
-10. `profiles/rn12_corexy_v1/ui.cfg`
-11. `local_overrides.cfg` (локальный runtime-файл на Pi)
+7. `profiles/rn12_corexy_v1/input_shaper.cfg`
+8. `profiles/rn12_corexy_v1/macros.cfg`
+9. `profiles/rn12_corexy_v1/ui.cfg`
+10. `local_overrides.cfg` (локальный runtime-файл на Pi)
 
 ## Аппаратный контракт (текущая сборка)
 
@@ -31,8 +30,10 @@
 Legacy-файлы `extruder.cfg` и `fans.cfg` сохранены в профиле только для rollback и
 не подключаются в активной include-цепочке.
 
-ADXL345 (монтаж через Raspberry Pi SPI):
-- `axes_map: z, x, y`
+ADXL345 (onboard на EBB42 v1.2):
+- `cs_pin: EBBCan:PB12`
+- `spi_bus: spi2_PB2_PB11_PB10`
+- базовый `axes_map: x, y, z` (дальше калибруется по фактическому монтажу)
 
 Если меняется экструдер, мотор экструдера или ориентация ADXL, эти параметры должны быть
 пересмотрены и обновлены в профиле.
@@ -161,37 +162,32 @@ ADXL345 (монтаж через Raspberry Pi SPI):
 - Runtime-файл на устройстве: `local_overrides.cfg`
 - `local_overrides.cfg` не коммитится и считается локальным source-of-truth для конкретного экземпляра принтера
 
-## ADXL345 / Input Shaper (обязательный контур через Pi)
+## ADXL345 / Input Shaper (обязательный контур через EBB42)
 
-Для измерения резонансов через ADXL345 на Raspberry Pi:
+Для измерения резонансов через onboard ADXL345 на EBB42:
 
 0. Базовый путь (через loader, без ручной правки runtime-файлов):
-- ADXL и `input_shaper.cfg` включены напрямую в `klipper/printer.cfg`;
-- при необходимости указать `TREED_ADXL_RPI_SPI_BUS=spidev0.1` (если датчик сидит на CE1).
+- ADXL (EBB) описан в `profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg`;
+- `input_shaper.cfg` включен напрямую в `klipper/printer.cfg`.
 
 1. Loader не добавляет ADXL/Input Shaper include в `local_overrides.cfg`.
 - `local_overrides.cfg` используется только для локальных пользовательских override;
-- если в runtime остался legacy marker-блок ADXL, шаг `klipper-adxl-rpi.sh` удаляет его.
+- legacy-конфиг ADXL через Raspberry Pi перенесен в
+  `profiles/rn12_corexy_v1/legacy/adxl345_rpi.cfg` и не подключается.
 
-2. Убедиться, что на Pi включен SPI и запущен `klipper_mcu` (host MCU).
-
-3. После `RESTART` проверить связь:
+2. Проверить связь с акселерометром после `RESTART`:
 - `ACCELEROMETER_QUERY`
 - `MEASURE_AXES_NOISE`
 
-4. Короткая проверка после монтажа/поворота ADXL:
+3. Короткая проверка после монтажа/поворота ADXL:
 - выполнить `ACCELEROMETER_QUERY` в покое;
 - выполнить малые перемещения `G91`, `G1 X10`, `G1 Y10` (без движения Z);
-- убедиться, что отклик соответствует текущему `axes_map: z, x, y`.
+- убедиться, что отклик соответствует текущему `axes_map`.
 
-5. Калибровка:
+4. Калибровка:
 - `TEST_RESONANCES AXIS=X`
 - `TEST_RESONANCES AXIS=Y`
 - или `SHAPER_CALIBRATE`
-
-Примечание:
-- `adxl345_rpi.cfg` по умолчанию настроен на SPI0 CE0 (`spidev0.0`).
-- Для CE1 замените `spi_bus` на `spidev0.1`.
 
 ## Как это раскладывает loader
 
