@@ -44,7 +44,7 @@
 | 13 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
 | 14 | `klipper-profiles` | required | Применение профиля RN12 и serial-path для RN12 + EBB42 USB. |
 | 15 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
-| 16 | `klipper-adxl-rpi` | required | Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi. |
+| 16 | `klipper-adxl-rpi` | required | Обязательная интеграция ADXL345/Input Shaper (auto: onboard EBB42 или Raspberry Pi SPI). |
 | 17 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
 | 18 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
 | 19 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
