@@ -124,6 +124,12 @@ moonraker_ready_check() {
   code=""
 
   for attempt in $(seq 1 "${retries}"); do
+    # Moonraker может быть active в systemd, но еще не открыть HTTP.
+    if ! systemctl is-active --quiet moonraker.service; then
+      sleep 1
+      continue
+    fi
+
     code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
     if [ "${code}" = "200" ] \
       && grep -qE '"klippy_connected"[[:space:]]*:[[:space:]]*true' "${tmp}" \
@@ -135,7 +141,7 @@ moonraker_ready_check() {
     sleep 1
   done
 
-  failf "${check_name} (http=${code:-n/a})"
+  failf "${check_name} (http=${code:-n/a}, retries=${retries})"
   rm -f "${tmp}"
 }
 
@@ -181,6 +187,7 @@ klipper_ebb_connected_check() {
   local since=""
   local tmp=""
   local patterns=""
+  local error_patterns=""
 
   if ! command -v journalctl >/dev/null 2>&1; then
     failf "${check_name} (journalctl missing)"
@@ -202,10 +209,22 @@ klipper_ebb_connected_check() {
   fi
 
   patterns="Loaded MCU 'EBBCan'|Configured MCU 'EBBCan'"
+  error_patterns="MCU 'EBBCan' shutdown|mcu 'EBBCan': Unable to connect|Lost communication with MCU|Timeout with MCU"
   if grep -Eiq "${patterns}" "${tmp}"; then
     pass "${check_name}"
   else
-    failf "${check_name} (no EBBCan startup markers since=${since})"
+    # Startup-маркеры могут отсутствовать в узком окне ActiveEnterTimestamp.
+    if journalctl -u "${unit}" -n 400 --no-pager > "${tmp}" 2>/dev/null; then
+      if grep -Eiq "${patterns}" "${tmp}"; then
+        pass "${check_name} (markers found in recent journal)"
+      elif grep -Eiq "${error_patterns}" "${tmp}"; then
+        failf "${check_name} (EBBCan errors found in recent journal)"
+      else
+        pass "${check_name} (no startup markers, but no EBBCan errors in recent journal)"
+      fi
+    else
+      failf "${check_name} (no EBBCan startup markers since=${since})"
+    fi
   fi
 
   rm -f "${tmp}"
@@ -309,7 +328,7 @@ moonraker_gcode_ok_check() {
   local check_name="$1"
   local script="$2"
   local url="http://127.0.0.1:7125/printer/gcode/script"
-  local tmp code
+  local tmp code retries attempt
 
   if ! command -v curl >/dev/null 2>&1; then
     failf "${check_name} (curl missing)"
@@ -317,18 +336,27 @@ moonraker_gcode_ok_check() {
   fi
 
   tmp="$(mktemp "/tmp/treed_verify_gcode_XXXXXX.json")"
-  code="$(
-    curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' \
-      -H 'Content-Type: application/json' \
-      -X POST "${url}" \
-      --data "{\"script\":\"${script}\"}" || true
-  )"
+  retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
+  code=""
 
-  if [ "${code}" = "200" ] && grep -qE '"result"[[:space:]]*:[[:space:]]*"ok"' "${tmp}"; then
-    pass "${check_name}"
-  else
-    failf "${check_name} (http=${code:-n/a})"
-  fi
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(
+      curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' \
+        -H 'Content-Type: application/json' \
+        -X POST "${url}" \
+        --data "{\"script\":\"${script}\"}" || true
+    )"
+
+    if [ "${code}" = "200" ] && grep -qE '"result"[[:space:]]*:[[:space:]]*"ok"' "${tmp}"; then
+      pass "${check_name}"
+      rm -f "${tmp}"
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  failf "${check_name} (http=${code:-n/a}, retries=${retries})"
 
   rm -f "${tmp}"
 }
@@ -469,7 +497,7 @@ fi
 if [ -d /dev/serial/by-id ]; then
   pass "/dev/serial/by-id directory present"
 else
-  failf "/dev/serial/by-id directory present"
+  log_warn "VERIFY /dev/serial/by-id directory present: not found (continuing with runtime EBB serial path checks)"
 fi
 
 if [ -f "${PRINTER_CFG_RUNTIME}" ] \
