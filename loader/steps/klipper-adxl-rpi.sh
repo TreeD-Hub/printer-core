@@ -50,7 +50,8 @@ CONFIG_DIR="${PI_HOME}/printer_data/config"
 PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 LOCAL_OVERRIDES_CFG="${CONFIG_DIR}/local_overrides.cfg"
 PROFILE_DIR="${CONFIG_DIR}/profiles/rn12_corexy_v1"
-ADXL_CFG="${PROFILE_DIR}/adxl345_rpi.cfg"
+ADXL_SHIM_CFG="${PROFILE_DIR}/adxl345_rpi.cfg"
+ADXL_RPI_CFG="${PROFILE_DIR}/legacy/adxl345_rpi.cfg"
 EBB_CFG="${PROFILE_DIR}/ebb42_v1_2_usb.cfg"
 INPUT_SHAPER_CFG="${PROFILE_DIR}/input_shaper.cfg"
 KLIPPER_DIR="${PI_HOME}/klipper"
@@ -161,8 +162,12 @@ EOF
 }
 
 if [ "${ADXL_MODE_EFFECTIVE}" = "rpi" ]; then
-  if [ ! -f "${ADXL_CFG}" ]; then
-    log_error "klipper-adxl-rpi: missing runtime ADXL config in rpi mode: ${ADXL_CFG}"
+  if [ ! -f "${ADXL_SHIM_CFG}" ]; then
+    log_error "klipper-adxl-rpi: missing runtime ADXL shim in rpi mode: ${ADXL_SHIM_CFG}"
+    exit 1
+  fi
+  if [ ! -f "${ADXL_RPI_CFG}" ]; then
+    log_error "klipper-adxl-rpi: missing runtime ADXL config in rpi mode: ${ADXL_RPI_CFG}"
     exit 1
   fi
   if [ "${has_rpi_include}" != "1" ]; then
@@ -247,10 +252,10 @@ ensure_runtime_adxl_spi_bus() {
       next
     }
     { print }
-  ' "${ADXL_CFG}" > "${tmp}"
-  cp "${tmp}" "${ADXL_CFG}"
+  ' "${ADXL_RPI_CFG}" > "${tmp}"
+  cp "${tmp}" "${ADXL_RPI_CFG}"
   rm -f "${tmp}"
-  log_info "klipper-adxl-rpi: set ADXL spi_bus=${target_bus} in ${ADXL_CFG}"
+  log_info "klipper-adxl-rpi: set ADXL spi_bus=${target_bus} in ${ADXL_RPI_CFG}"
 }
 
 if [ "${ADXL_MODE_EFFECTIVE}" = "rpi" ]; then
@@ -287,7 +292,7 @@ cleanup_legacy_adxl_local_overrides_block
 
 # Блок 8: Права и завершение шага (перезапуск Klipper делается следующим шагом/verify).
 if [ "${ADXL_MODE_EFFECTIVE}" = "rpi" ]; then
-  chown "${PI_USER}:${grp}" "${ADXL_CFG}" "${INPUT_SHAPER_CFG}" || true
+  chown "${PI_USER}:${grp}" "${ADXL_SHIM_CFG}" "${ADXL_RPI_CFG}" "${INPUT_SHAPER_CFG}" || true
 else
   chown "${PI_USER}:${grp}" "${EBB_CFG}" "${INPUT_SHAPER_CFG}" || true
 fi

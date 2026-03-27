@@ -427,6 +427,7 @@ KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
 KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
 KS_SERVICE_PRESENT=0
 ADXL_RPI_PROFILE_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/adxl345_rpi.cfg"
+ADXL_RPI_LEGACY_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/legacy/adxl345_rpi.cfg"
 ADXL_EBB_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg"
 INPUT_SHAPER_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/input_shaper.cfg"
 ADXL_SPI_BUS_EXPECTED="${TREED_ADXL_RPI_SPI_BUS:-spidev0.0}"
@@ -1072,12 +1073,12 @@ if [ "${adxl_checks_enabled}" = "1" ]; then
       failf "ADXL profile config present (${ADXL_RPI_PROFILE_CFG})"
     fi
 
-    if [ -f "${ADXL_RPI_PROFILE_CFG}" ] \
-      && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_RPI_PROFILE_CFG}" \
-      && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_RPI_PROFILE_CFG}"; then
-      pass "ADXL profile includes resonance_tester section (rpi mode)"
+    if [ -f "${ADXL_RPI_LEGACY_CFG}" ] \
+      && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_RPI_LEGACY_CFG}" \
+      && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_RPI_LEGACY_CFG}"; then
+      pass "ADXL legacy config includes resonance_tester section (rpi mode)"
     else
-      failf "ADXL profile includes resonance_tester section (rpi mode)"
+      failf "ADXL legacy config includes resonance_tester section (rpi mode)"
     fi
 
     if [ -e "${ADXL_SPI_DEV_EXPECTED}" ]; then
@@ -1094,11 +1095,11 @@ if [ "${adxl_checks_enabled}" = "1" ]; then
 
     check_required_service_active "klipper-mcu.service"
 
-    if [ -f "${ADXL_RPI_PROFILE_CFG}" ] \
-      && grep -qE "^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*${ADXL_SPI_BUS_EXPECTED}[[:space:]]*$" "${ADXL_RPI_PROFILE_CFG}"; then
-      pass "ADXL spi_bus configured (${ADXL_SPI_BUS_EXPECTED})"
+    if [ -f "${ADXL_RPI_LEGACY_CFG}" ] \
+      && grep -qE "^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*${ADXL_SPI_BUS_EXPECTED}[[:space:]]*$" "${ADXL_RPI_LEGACY_CFG}"; then
+      pass "ADXL spi_bus configured in legacy config (${ADXL_SPI_BUS_EXPECTED})"
     else
-      failf "ADXL spi_bus configured (${ADXL_SPI_BUS_EXPECTED})"
+      failf "ADXL spi_bus configured in legacy config (${ADXL_SPI_BUS_EXPECTED})"
     fi
   else
     if [ -f "${PRINTER_CFG_RUNTIME}" ] \
