@@ -21,7 +21,7 @@
 | 13 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
 | 14 | `klipper-profiles.sh` | required | Профиль RN12 и serial-path для RN12 + EBB42 USB. |
 | 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 16 | `klipper-adxl-rpi.sh` | required | Обязательная интеграция ADXL345/Input Shaper через SPI Raspberry Pi (`klipper-mcu` + fail-fast-проверка include в `printer.cfg`). |
+| 16 | `klipper-adxl-rpi.sh` | required | Обязательная интеграция ADXL345/Input Shaper (auto-режим: onboard EBB42 или Raspberry Pi SPI; для RPi поднимает `klipper-mcu`). |
 | 17 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
 | 18 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
 | 19 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
@@ -66,7 +66,8 @@
 - `TREED_EBB_STABILITY_POLL_SEC` (default `1`, шаг опроса стабильности EBB USB serial в `verify`)
 - `KLIPPER_SERVICE` (default `klipper`)
 - `TREED_ANTI_SHUTDOWN_INFO_TIMEOUT` (default `2`)
-- `TREED_ADXL_RPI_ENABLE` (default `1`, должен оставаться `1`, ADXL является mandatory)
+- `TREED_ADXL_RPI_ENABLE` (default `1`, legacy-флаг для `rpi`-режима; ADXL остается mandatory)
+- `TREED_ADXL_MODE` (`auto|ebb|rpi`, default `auto`; авто-детект по runtime-конфигу профиля)
 - `TREED_ADXL_RPI_SPI_BUS` (default `spidev0.0`, для CE1 обычно `spidev0.1`)
 - `TREED_ADXL_RPI_ENABLE_INPUT_SHAPER` (default `1`, должен оставаться `1`, include `input_shaper.cfg` обязательный)
 - `TREED_ADXL_RPI_REBUILD_HOST_MCU` (`1` — принудительно пересобрать `/usr/local/bin/klipper_mcu`)
@@ -123,8 +124,8 @@
 ## Практические замечания
 
 - `crowsnest-webcam.sh` optional на уровне оркестратора; для строгого режима используйте `TREED_CAMERA_REQUIRED=1`.
-- `klipper-adxl-rpi.sh` required: поднимает host MCU, валидирует include `adxl345_rpi.cfg`/`input_shaper.cfg` в `printer.cfg` и чистит legacy ADXL marker-блок в `local_overrides.cfg`.
-- `verify.sh` всегда проверяет ADXL-контур (`klipper-mcu.service`, SPI, include в `printer.cfg`, `ACCELEROMETER_QUERY`).
+- `klipper-adxl-rpi.sh` required: валидирует ADXL-контур в режиме `auto|ebb|rpi`; в `rpi`-режиме поднимает host MCU и нормализует `spi_bus`, в `ebb`-режиме проверяет onboard-блоки `[adxl345]`/`[resonance_tester]`.
+- `verify.sh` всегда проверяет ADXL-контур и выполняет `ACCELEROMETER_QUERY`; набор инфраструктурных проверок зависит от режима (`rpi`/`ebb`).
 - `verify.sh` fail-fast проверяет EBB-контур: include `ebb42_v1_2_usb.cfg`, отсутствие legacy include `extruder.cfg`/`fans.cfg`, наличие `/dev/serial/by-id` и стабильность EBB serial в окне `TREED_EBB_STABILITY_WINDOW_SEC`.
 - `klipper-profiles.sh` для EBB использует режим "как RN USB": `TREED_EBB_SERIAL_BY_ID` как override, иначе автоподхват по `/dev/serial/by-id/*stm32g0b1*` при одном кандидате, при 0/многих — fail-fast.
 - `klipperscreen-install.sh`, `klipperscreen-theme.sh`, `klipperscreen-integr.sh` optional на уровне оркестратора.
