@@ -21,7 +21,7 @@
 | 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID. |
+| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID, контур X/Y sensorless (tmc2209 virtual endstop). |
 | 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 18 | `klipper-adxl-rpi.sh` | required | Проверка mandatory ADXL/Input Shaper через EBB42. |
 | 19 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
@@ -33,7 +33,7 @@
 | 25 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
 | 26 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
 | 27 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью. |
+| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью, включая проверки sensorless X/Y. |
 
 ## Контракт для step-скриптов
 
@@ -66,6 +66,7 @@
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
+- `TREED_CAN_RESTART_MS` (default `100`; значение `restart-ms` для auto-recovery CAN controller)
 - `TREED_CAN_AUTOBITRATE` (`0|1`, default `1`; при auto-detect EBB UUID допускает перебор типовых bitrate)
 - `TREED_CAN_AUTOBITRATE_LIST` (default `1000000 500000 250000 125000`)
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
@@ -95,6 +96,8 @@
 - `TREED_MOONRAKER_ENV_DIR` (default `${PI_HOME}/moonraker-env`)
 - `TREED_MOONRAKER_REPO` (default `https://github.com/Arksine/moonraker.git`)
 - `TREED_MOONRAKER_REF` (optional, empty by default)
+- `TREED_MOONRAKER_POLKIT_SETUP` (`0|1`, default `1`; авто-установка PolicyKit правил Moonraker через `set-policykit-rules.sh`)
+- `TREED_MOONRAKER_POLKIT_REQUIRED` (`0|1`, default `0`; при `1` делает неуспех PolicyKit setup блокирующей ошибкой)
 
 ### Moonraker / Camera
 
@@ -104,6 +107,7 @@
 - `TREED_CAM_RESOLUTION` (default `1920x1080`)
 - `TREED_CAM_FPS` (default `10`)
 - `MOONRAKER_READY_RETRIES` (default `30`)
+- `TREED_MAINSAIL_WEB_PATH` (optional override пути к локальному web-клиенту Mainsail с `release_info.json`; если путь не найден, `moonraker-config.sh` отключает `[update_manager mainsail]` для исключения warning)
 
 ### KlipperScreen
 
@@ -153,11 +157,14 @@
 
 ## Практические замечания
 
-- `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`.
+- `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen` и `restart-ms`.
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
 - `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст и auto-detect через `canbus_query` (с авто-перебором bitrate при `TREED_CAN_AUTOBITRATE=1`) не смог однозначно определить UUID.
 - При нахождении UUID на bitrate, отличном от `TREED_CAN_BITRATE`, `klipper-profiles.sh` обновляет `${TREED_CAN_SETUP_ENV_FILE}` и перезапускает `${TREED_CAN_SETUP_UNIT}`.
 - `klipper-profiles.sh` включает Eddy include только при `TREED_EDDY_ENABLED=1`.
-- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0`, main USB serial, EBB CAN UUID, ADXL и optional Eddy.
+- Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc2209_stepper_x/y:virtual_endstop`): перед deploy требуются UART/DIAG джамперы на TMC2209 и отключение X/Y механических endstop из логики.
+- `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
+- `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`), иначе безопасно отключает секцию `[update_manager mainsail]`.
+- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, ADXL и optional Eddy.

@@ -422,14 +422,17 @@ CAN_SETUP_ENV_FILE="${TREED_CAN_SETUP_ENV_FILE:-/etc/default/treed-can-setup}"
 CAN_ENV_IFACE=""
 CAN_ENV_BITRATE=""
 CAN_ENV_TXQUEUE=""
+CAN_ENV_RESTART_MS=""
 if [ -f "${CAN_SETUP_ENV_FILE}" ]; then
   CAN_ENV_IFACE="$(sed -nE 's|^[[:space:]]*TREED_CAN_IFACE=([A-Za-z0-9_.:-]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
   CAN_ENV_BITRATE="$(sed -nE 's|^[[:space:]]*TREED_CAN_BITRATE=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
   CAN_ENV_TXQUEUE="$(sed -nE 's|^[[:space:]]*TREED_CAN_TXQUEUE=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
+  CAN_ENV_RESTART_MS="$(sed -nE 's|^[[:space:]]*TREED_CAN_RESTART_MS=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
 fi
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-${CAN_ENV_IFACE:-can0}}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-1000000}}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-${CAN_ENV_TXQUEUE:-1024}}"
+TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-${CAN_ENV_RESTART_MS:-100}}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
 TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
@@ -762,6 +765,12 @@ else
   failf "CAN txqueuelen ${TREED_CAN_TXQUEUE}"
 fi
 
+if ip -details link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q "restart-ms ${TREED_CAN_RESTART_MS}"; then
+  pass "CAN restart-ms ${TREED_CAN_RESTART_MS}"
+else
+  failf "CAN restart-ms ${TREED_CAN_RESTART_MS}"
+fi
+
 # Блок 8: Проверки runtime-профиля V2 и MCU binding.
 for required_file in "${PRINTER_CFG_RUNTIME}" "${MAIN_CFG_RUNTIME}" "${EBB_CFG_RUNTIME}" "${EDDY_CFG_RUNTIME}" "${STEPPERS_CFG_RUNTIME}" "${INPUT_SHAPER_CFG}"; do
   if [ -f "${required_file}" ]; then
@@ -840,6 +849,85 @@ if [ -f "${INPUT_SHAPER_CFG}" ] && grep -qE '^[[:space:]]*\[input_shaper\][[:spa
   pass "Input Shaper config present (${INPUT_SHAPER_CFG})"
 else
   failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
+fi
+
+# Проверки sensorless X/Y: tmc2209 + virtual endstop + retract=0.
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[tmc2209[[:space:]]+stepper_x\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*\[tmc2209[[:space:]]+stepper_y\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "sensorless X/Y: tmc2209 sections present"
+else
+  failf "sensorless X/Y: tmc2209 sections present"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[stepper_x\][[:space:]]*$/ { in_section = 1; next }
+    in_section && /^\[[^]]+\][[:space:]]*$/ { in_section = 0 }
+    in_section && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
+      value = $0
+      sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]*(#.*)?$/, "", value)
+      found = (value == "tmc2209_stepper_x:virtual_endstop")
+    }
+    END { exit found ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "sensorless X: virtual endstop"
+else
+  failf "sensorless X: virtual endstop"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[stepper_y\][[:space:]]*$/ { in_section = 1; next }
+    in_section && /^\[[^]]+\][[:space:]]*$/ { in_section = 0 }
+    in_section && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
+      value = $0
+      sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]*(#.*)?$/, "", value)
+      found = (value == "tmc2209_stepper_y:virtual_endstop")
+    }
+    END { exit found ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "sensorless Y: virtual endstop"
+else
+  failf "sensorless Y: virtual endstop"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[stepper_x\][[:space:]]*$/ { in_x = 1; next }
+    in_x && /^\[[^]]+\][[:space:]]*$/ { in_x = 0 }
+    in_x && /^[[:space:]]*homing_retract_dist[[:space:]]*:/ {
+      value = $0
+      sub(/^[[:space:]]*homing_retract_dist[[:space:]]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]*(#.*)?$/, "", value)
+      found = 1
+      is_zero = ((value + 0) == 0)
+    }
+    END { exit (found && is_zero) ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "sensorless X: homing_retract_dist=0"
+else
+  failf "sensorless X: homing_retract_dist=0"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[stepper_y\][[:space:]]*$/ { in_y = 1; next }
+    in_y && /^\[[^]]+\][[:space:]]*$/ { in_y = 0 }
+    in_y && /^[[:space:]]*homing_retract_dist[[:space:]]*:/ {
+      value = $0
+      sub(/^[[:space:]]*homing_retract_dist[[:space:]]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]*(#.*)?$/, "", value)
+      found = 1
+      is_zero = ((value + 0) == 0)
+    }
+    END { exit (found && is_zero) ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "sensorless Y: homing_retract_dist=0"
+else
+  failf "sensorless Y: homing_retract_dist=0"
 fi
 
 moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"

@@ -32,6 +32,7 @@ Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
 CAN_AUTOBITRATE="${TREED_CAN_AUTOBITRATE:-1}"
 CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST:-1000000 500000 250000 125000}"
 CAN_SETUP_ENV_FILE="${TREED_CAN_SETUP_ENV_FILE:-/etc/default/treed-can-setup}"
@@ -106,15 +107,15 @@ setup_can_iface_bitrate() {
   if ! ip link set "${CAN_IFACE}" down >/dev/null 2>&1; then
     log_warn "klipper-profiles: cannot set ${CAN_IFACE} down before bitrate switch"
   fi
-  ip link set "${CAN_IFACE}" type can bitrate "${bitrate}"
   ip link set "${CAN_IFACE}" txqueuelen "${CAN_TXQUEUE}"
-  ip link set "${CAN_IFACE}" up
+  ip link set "${CAN_IFACE}" up type can bitrate "${bitrate}" restart-ms "${CAN_RESTART_MS}"
 }
 
 persist_can_setup_env() {
   local iface="$1"
   local bitrate="$2"
   local txqueue="$3"
+  local restart_ms="$4"
 
   if [ ! -f "${CAN_SETUP_ENV_FILE}" ]; then
     log_warn "klipper-profiles: cannot persist detected CAN bitrate, file is missing: ${CAN_SETUP_ENV_FILE}"
@@ -131,6 +132,11 @@ persist_can_setup_env() {
     sed -i -E "s|^TREED_CAN_TXQUEUE=.*$|TREED_CAN_TXQUEUE=${txqueue}|" "${CAN_SETUP_ENV_FILE}"
   else
     printf 'TREED_CAN_TXQUEUE=%s\n' "${txqueue}" >> "${CAN_SETUP_ENV_FILE}"
+  fi
+  if grep -qE '^TREED_CAN_RESTART_MS=' "${CAN_SETUP_ENV_FILE}"; then
+    sed -i -E "s|^TREED_CAN_RESTART_MS=.*$|TREED_CAN_RESTART_MS=${restart_ms}|" "${CAN_SETUP_ENV_FILE}"
+  else
+    printf 'TREED_CAN_RESTART_MS=%s\n' "${restart_ms}" >> "${CAN_SETUP_ENV_FILE}"
   fi
 
   if command -v systemctl >/dev/null 2>&1 && systemctl cat "${CAN_SETUP_UNIT}" >/dev/null 2>&1; then
@@ -249,7 +255,7 @@ resolve_ebb_canbus_uuid_auto() {
   if [ -n "${detected_bitrate}" ] && [ "${detected_bitrate}" != "${CAN_BITRATE}" ]; then
     CAN_BITRATE="${detected_bitrate}"
     log_warn "klipper-profiles: detected active CAN bitrate ${CAN_BITRATE} on ${CAN_IFACE}, persisting to ${CAN_SETUP_ENV_FILE}"
-    persist_can_setup_env "${CAN_IFACE}" "${CAN_BITRATE}" "${CAN_TXQUEUE}"
+    persist_can_setup_env "${CAN_IFACE}" "${CAN_BITRATE}" "${CAN_TXQUEUE}" "${CAN_RESTART_MS}"
   elif [ -z "${detected_bitrate}" ] && [ "${CAN_QUERY_UUID_COUNT}" -eq 0 ] && [ "${last_applied_bitrate}" != "${initial_bitrate}" ]; then
     setup_can_iface_bitrate "${initial_bitrate}" || true
   fi
@@ -412,6 +418,16 @@ case "${CAN_BITRATE}" in
 esac
 if [ "${CAN_BITRATE}" -le 0 ]; then
   log_error "klipper-profiles: TREED_CAN_BITRATE must be > 0"
+  exit 1
+fi
+case "${CAN_RESTART_MS}" in
+  ''|*[!0-9]*)
+    log_error "klipper-profiles: TREED_CAN_RESTART_MS must be a non-negative integer, got: ${CAN_RESTART_MS}"
+    exit 1
+    ;;
+esac
+if [ "${CAN_RESTART_MS}" -lt 0 ]; then
+  log_error "klipper-profiles: TREED_CAN_RESTART_MS must be >= 0"
   exit 1
 fi
 

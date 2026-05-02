@@ -11,6 +11,7 @@
 - `00-core.conf`
   - базовый серверный конфиг Moonraker;
   - секции авторизации и update_manager;
+  - секция `[update_manager mainsail]` пост-обрабатывается loader-ом: включается только при валидном локальном пути клиента Mainsail (с `release_info.json`);
   - подключение компонента `[treed_shell_command]`;
   - runtime shell_command-команды камеры:
     - `treed_cam_session_start`

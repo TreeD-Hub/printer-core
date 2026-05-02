@@ -37,6 +37,8 @@ MOONRAKER_DIR="${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}"
 MOONRAKER_ENV_DIR="${TREED_MOONRAKER_ENV_DIR:-${PI_HOME}/moonraker-env}"
 MOONRAKER_REPO="${TREED_MOONRAKER_REPO:-https://github.com/Arksine/moonraker.git}"
 MOONRAKER_REF="${TREED_MOONRAKER_REF:-}"
+MOONRAKER_POLKIT_SETUP="${TREED_MOONRAKER_POLKIT_SETUP:-1}"
+MOONRAKER_POLKIT_REQUIRED="${TREED_MOONRAKER_POLKIT_REQUIRED:-0}"
 
 PRINTER_DATA_DIR="${PI_HOME}/printer_data"
 PRINTER_CFG_DIR="${PRINTER_DATA_DIR}/config"
@@ -87,6 +89,47 @@ ensure_python_venv() {
     exit 1
   fi
   run_as_pi "set -euo pipefail; '${env_dir}/bin/pip' install -r '${req_file}'"
+}
+
+install_moonraker_policykit_rules() {
+  local script_path="${MOONRAKER_DIR}/scripts/set-policykit-rules.sh"
+
+  if [ "${MOONRAKER_POLKIT_SETUP}" != "1" ]; then
+    log_info "runtime-bootstrap: moonraker policykit setup skipped (TREED_MOONRAKER_POLKIT_SETUP=${MOONRAKER_POLKIT_SETUP})"
+    return 0
+  fi
+
+  if [ ! -f "${script_path}" ]; then
+    if [ "${MOONRAKER_POLKIT_REQUIRED}" = "1" ]; then
+      log_error "runtime-bootstrap: policykit script is missing: ${script_path}"
+      exit 1
+    fi
+    log_warn "runtime-bootstrap: policykit script is missing, skip setup (${script_path})"
+    return 0
+  fi
+
+  if [ ! -x "${script_path}" ]; then
+    chmod 0755 "${script_path}"
+  fi
+
+  if ! command -v pkaction >/dev/null 2>&1; then
+    if [ "${MOONRAKER_POLKIT_REQUIRED}" = "1" ]; then
+      log_error "runtime-bootstrap: pkaction is missing, cannot install policykit rules"
+      exit 1
+    fi
+    log_warn "runtime-bootstrap: pkaction is missing, skip policykit rules install"
+    return 0
+  fi
+
+  if USER="${PI_USER}" "${script_path}" -r -z >/dev/null 2>&1; then
+    log_info "runtime-bootstrap: moonraker policykit rules installed for user ${PI_USER}"
+  else
+    if [ "${MOONRAKER_POLKIT_REQUIRED}" = "1" ]; then
+      log_error "runtime-bootstrap: failed to install moonraker policykit rules (script=${script_path})"
+      exit 1
+    fi
+    log_warn "runtime-bootstrap: failed to install moonraker policykit rules, continuing"
+  fi
 }
 
 # Блок 5: Минимальные runtime-каталоги и права.
@@ -188,6 +231,8 @@ ExecStart=${MOONRAKER_ENV_DIR}/bin/python ${MOONRAKER_ENTRYPOINT} -d ${PRINTER_D
 Restart=always
 RestartSec=5
 EOF
+
+install_moonraker_policykit_rules
 
 # Блок 8: Активация systemd unit-файлов.
 systemctl daemon-reload

@@ -20,6 +20,7 @@ ensure_root
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
 
 if ! printf '%s' "${TREED_CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then
   log_error "can-setup: TREED_CAN_IFACE has invalid format: ${TREED_CAN_IFACE}"
@@ -40,8 +41,20 @@ case "${TREED_CAN_TXQUEUE}" in
     ;;
 esac
 
+case "${TREED_CAN_RESTART_MS}" in
+  ''|*[!0-9]*)
+    log_error "can-setup: TREED_CAN_RESTART_MS must be a non-negative integer, got: ${TREED_CAN_RESTART_MS}"
+    exit 1
+    ;;
+esac
+
 if [ "${TREED_CAN_BITRATE}" -le 0 ] || [ "${TREED_CAN_TXQUEUE}" -le 0 ]; then
   log_error "can-setup: TREED_CAN_BITRATE and TREED_CAN_TXQUEUE must be > 0"
+  exit 1
+fi
+
+if [ "${TREED_CAN_RESTART_MS}" -lt 0 ]; then
+  log_error "can-setup: TREED_CAN_RESTART_MS must be >= 0"
   exit 1
 fi
 
@@ -66,6 +79,7 @@ fi
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
 
 IP_BIN="$(command -v ip || true)"
 if [ -z "${IP_BIN}" ]; then
@@ -79,9 +93,8 @@ if ! "${IP_BIN}" link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
 fi
 
 "${IP_BIN}" link set "${TREED_CAN_IFACE}" down || true
-"${IP_BIN}" link set "${TREED_CAN_IFACE}" type can bitrate "${TREED_CAN_BITRATE}"
 "${IP_BIN}" link set "${TREED_CAN_IFACE}" txqueuelen "${TREED_CAN_TXQUEUE}"
-"${IP_BIN}" link set "${TREED_CAN_IFACE}" up
+"${IP_BIN}" link set "${TREED_CAN_IFACE}" up type can bitrate "${TREED_CAN_BITRATE}" restart-ms "${TREED_CAN_RESTART_MS}"
 EOF
 chmod 0755 "${CAN_SCRIPT}"
 
@@ -91,6 +104,7 @@ cat > "${CAN_ENV_FILE}" <<EOF
 TREED_CAN_IFACE=${TREED_CAN_IFACE}
 TREED_CAN_BITRATE=${TREED_CAN_BITRATE}
 TREED_CAN_TXQUEUE=${TREED_CAN_TXQUEUE}
+TREED_CAN_RESTART_MS=${TREED_CAN_RESTART_MS}
 EOF
 chmod 0644 "${CAN_ENV_FILE}"
 
@@ -127,7 +141,7 @@ else
 fi
 
 if ip link show "${TREED_CAN_IFACE}" | grep -q '<[^>]*UP[^>]*>'; then
-  log_info "can-setup: interface is UP (${TREED_CAN_IFACE}, bitrate=${TREED_CAN_BITRATE}, txqueuelen=${TREED_CAN_TXQUEUE})"
+  log_info "can-setup: interface is UP (${TREED_CAN_IFACE}, bitrate=${TREED_CAN_BITRATE}, txqueuelen=${TREED_CAN_TXQUEUE}, restart-ms=${TREED_CAN_RESTART_MS})"
 else
   log_error "can-setup: interface is not UP (${TREED_CAN_IFACE})"
   exit 1

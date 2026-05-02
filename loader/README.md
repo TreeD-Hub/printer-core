@@ -61,6 +61,7 @@
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
+- `TREED_CAN_RESTART_MS` — default `100` (применяется в `ip link ... restart-ms` при каждом старте `treed-can-setup.service`).
 - `TREED_CAN_AUTOBITRATE` — `0|1`, default `1` (перебор типовых bitrate при auto-detect UUID).
 - `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
 - `TREED_EBB_CANBUS_UUID` — рекомендуется задавать явно; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` (только при единственном UUID на шине).

@@ -25,6 +25,7 @@ DST_GENERATED_DIR="${PI_HOME}/printer_data/config/moonraker/generated"
 SRC_COMPONENT="${REPO_DIR}/moonraker/components/treed_shell_command.py"
 COMPONENT_NAME="treed_shell_command.py"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
+TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-}"
 
 case "${DEPLOY_MODE}" in
   clean|preserve)
@@ -155,6 +156,101 @@ deploy_treed_shell_component() {
   log_info "Deployed Moonraker component to ${dst}"
 }
 
+is_valid_mainsail_web_path() {
+  local candidate="$1"
+
+  if [ -z "${candidate}" ]; then
+    return 1
+  fi
+  if [ ! -d "${candidate}" ]; then
+    return 1
+  fi
+  if [ ! -f "${candidate}/release_info.json" ]; then
+    return 1
+  fi
+  return 0
+}
+
+resolve_mainsail_web_path() {
+  local candidate=""
+  local candidates=()
+
+  if [ -n "${TREED_MAINSAIL_WEB_PATH}" ]; then
+    candidates+=("${TREED_MAINSAIL_WEB_PATH}")
+  fi
+  candidates+=(
+    "${PI_HOME}/mainsail"
+    "${PI_HOME}/printer_data/www/mainsail"
+    "${PI_HOME}/printer_data/www"
+    "/var/www/mainsail"
+    "/var/www/html/mainsail"
+    "/usr/share/mainsail"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if is_valid_mainsail_web_path "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+disable_mainsail_updater_section() {
+  local core_cfg="$1"
+  local tmp=""
+
+  tmp="$(mktemp)"
+  awk '
+    BEGIN { in_section = 0 }
+    /^[[:space:]]*\[update_manager mainsail\][[:space:]]*$/ {
+      in_section = 1
+      print "# [update_manager mainsail]"
+      next
+    }
+    in_section && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+      in_section = 0
+    }
+    in_section {
+      if ($0 ~ /^[[:space:]]*$/) {
+        print
+      } else if ($0 ~ /^[[:space:]]*#/) {
+        print
+      } else {
+        print "# " $0
+      }
+      next
+    }
+    { print }
+  ' "${core_cfg}" > "${tmp}"
+  mv "${tmp}" "${core_cfg}"
+}
+
+configure_mainsail_updater_section() {
+  local core_cfg="${DST_BASE_DIR}/00-core.conf"
+  local mainsail_path=""
+  local mainsail_path_escaped=""
+
+  if [ ! -f "${core_cfg}" ]; then
+    log_warn "moonraker-config: base core fragment not found, skip mainsail updater tuning"
+    return 0
+  fi
+
+  if ! grep -qE '^[[:space:]]*\[update_manager mainsail\][[:space:]]*$' "${core_cfg}"; then
+    log_warn "moonraker-config: [update_manager mainsail] section not found in ${core_cfg}"
+    return 0
+  fi
+
+  if mainsail_path="$(resolve_mainsail_web_path)"; then
+    mainsail_path_escaped="$(printf '%s' "${mainsail_path}" | sed 's|[&|]|\\&|g')"
+    sed -i -E "/^[[:space:]]*\\[update_manager mainsail\\][[:space:]]*$/,/^[[:space:]]*\\[[^]]+\\][[:space:]]*$/ s|^([[:space:]]*path:[[:space:]]*).*$|\\1${mainsail_path_escaped}|" "${core_cfg}"
+    log_info "moonraker-config: mainsail updater enabled (path=${mainsail_path})"
+  else
+    disable_mainsail_updater_section "${core_cfg}"
+    log_warn "moonraker-config: mainsail updater disabled (no valid web path with release_info.json)"
+  fi
+}
+
 render_base_fragment_templates() {
   local file=""
   local pi_home_escaped=""
@@ -176,6 +272,7 @@ deploy_base_fragments() {
   ensure_dir "${DST_BASE_DIR}"
   cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
   render_base_fragment_templates
+  configure_mainsail_updater_section
   chown -R "${PI_USER}:${grp}" "${DST_BASE_DIR}" || true
   BASE_DEPLOYED=1
   log_info "Deployed Moonraker base fragments to ${DST_BASE_DIR}"

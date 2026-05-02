@@ -51,6 +51,7 @@ TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
 TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
 TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-}"
@@ -194,8 +195,18 @@ case "${TREED_CAN_TXQUEUE}" in
     exit 1
     ;;
 esac
+case "${TREED_CAN_RESTART_MS}" in
+  ''|*[!0-9]*)
+    log_error "check-env: TREED_CAN_RESTART_MS must be a non-negative integer, got: ${TREED_CAN_RESTART_MS}"
+    exit 1
+    ;;
+esac
 if [ "${TREED_CAN_BITRATE}" -le 0 ] || [ "${TREED_CAN_TXQUEUE}" -le 0 ]; then
   log_error "check-env: TREED_CAN_BITRATE and TREED_CAN_TXQUEUE must be > 0"
+  exit 1
+fi
+if [ "${TREED_CAN_RESTART_MS}" -lt 0 ]; then
+  log_error "check-env: TREED_CAN_RESTART_MS must be >= 0"
   exit 1
 fi
 

@@ -32,6 +32,32 @@ Optional include:
 - при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `probe:z_virtual_endstop` и убирает `position_endstop`;
 - при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
 
+## X/Y sensorless (TMC2209 UART)
+
+Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc2209_*:virtual_endstop`.
+
+Обязательные аппаратные предпосылки перед запуском loader:
+- на X/Y драйверах включен UART-режим джамперами;
+- на X/Y включены DIAG-джамперы в линии endstop;
+- X/Y механические концевики не участвуют в логике хоуминга;
+- драйверы соответствуют рабочему режиму TMC2209.
+
+База пинов X/Y (Octopus Pro):
+- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `uart_pin=PC4`, `diag_pin=^PG6`;
+- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `uart_pin=PD11`, `diag_pin=^PG9`.
+
+Стартовые параметры sensorless:
+- `homing_speed: 20`, `homing_retract_dist: 0` (второй проход отключен);
+- `run_current: 0.80`, `stealthchop_threshold: 0`, `driver_SGTHRS: 255`;
+- `hold_current` для X/Y не используется.
+
+## Тюн `driver_SGTHRS` (обязательный после внедрения)
+
+1. Проверить UART-связь: `DUMP_TMC STEPPER=stepper_x` и `DUMP_TMC STEPPER=stepper_y`.
+2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD ... FIELD=SGTHRS VALUE=...`.
+3. Зафиксировать финальные `driver_SGTHRS` ближе к нижней рабочей границе.
+4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний.
+
 ## Переменные окружения
 
 - `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override для main MCU (`/dev/serial/by-id/*`).
@@ -41,8 +67,3 @@ Optional include:
 - `TREED_EDDY_CANBUS_UUID` — required только если `TREED_EDDY_ENABLED=1`.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
-
-## Пины и калибровки на этапе шага 1
-
-- В профиле сохранены шаблонные значения из текущей базы.
-- Финальная карта пинов Octopus Pro, термисторы, offsets и калибровки не утверждаются в шаге 1.
