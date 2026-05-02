@@ -29,6 +29,7 @@ STAGE_DIR="${PI_HOME}/treed/klipper"
 CONFIG_DIR="${PI_HOME}/printer_data/config"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 SAVE_CONFIG_MARKER="#*# <---------------------- SAVE_CONFIG ---------------------->"
+LEGACY_PROFILE_REL_PATH="profiles/rn12_corexy_v1"
 
 sanitize_save_config_block() {
   local src="$1"
@@ -135,7 +136,14 @@ find "${CONFIG_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 # Полная раскладка дерева из staging в runtime.
 cp -a "${STAGE_DIR}/." "${CONFIG_DIR}/"
 
-# Блок 6: Возврат preserve-override и финальная нормализация runtime.
+# Блок 6: Очистка legacy-профилей, исключенных из V2 runtime-контура.
+LEGACY_PROFILE_PATH="${CONFIG_DIR}/${LEGACY_PROFILE_REL_PATH}"
+if [ -d "${LEGACY_PROFILE_PATH}" ]; then
+  rm -rf "${LEGACY_PROFILE_PATH}"
+  log_info "klipper-core: removed legacy runtime profile ${LEGACY_PROFILE_REL_PATH}"
+fi
+
+# Блок 7: Возврат preserve-override и финальная нормализация runtime.
 # Возврат локальных runtime-overrides только в режиме preserve.
 if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
   if [ -f "${TMP_KEEP}/local_overrides.cfg" ]; then
@@ -156,6 +164,7 @@ if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
   rm -rf "${TMP_KEEP}"
 fi
 
+# Блок 8: Гарантии пост-деплоя и финальная ownership-нормализация.
 # Гарантируем наличие local_overrides.cfg после деплоя.
 [ -f "${CONFIG_DIR}/local_overrides.cfg" ] || touch "${CONFIG_DIR}/local_overrides.cfg"
 

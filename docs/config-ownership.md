@@ -10,30 +10,32 @@ Entrypoint:
 
 Порядок шагов:
 1. `check-env`
-2. `timezone-sync`
-3. `maintenance-stop`
-4. `packages-core`
-5. `can-setup`
-6. `boot-hdmi-config`
-7. `plymouth-theme-install`
-8. `plymouth-initramfs`
-9. `plymouth-initramfs-config`
-10. `plymouth-cmdline`
-11. `plymouth-systemd`
-12. `klipper-sync`
-13. `klipper-profiles`
-14. `klipper-core`
-15. `klipper-adxl-rpi`
-16. `klipper-anti-shutdown`
-17. `moonraker-config`
-18. `crowsnest-webcam`
-19. `treed-cam`
-20. `klipper-mainsail-theme`
-21. `klipperscreen-install`
-22. `klipperscreen-theme`
-23. `klipperscreen-integr`
-24. `maintenance-start`
-25. `verify`
+2. `detect-rpi`
+3. `timezone-sync`
+4. `maintenance-stop`
+5. `packages-core`
+6. `can-setup`
+7. `firmware-build`
+8. `boot-hdmi-config`
+9. `plymouth-theme-install`
+10. `plymouth-initramfs`
+11. `plymouth-initramfs-config`
+12. `plymouth-cmdline`
+13. `plymouth-systemd`
+14. `klipper-sync`
+15. `klipper-profiles`
+16. `klipper-core`
+17. `klipper-adxl-rpi`
+18. `klipper-anti-shutdown`
+19. `moonraker-config`
+20. `crowsnest-webcam`
+21. `treed-cam`
+22. `klipper-mainsail-theme`
+23. `klipperscreen-install`
+24. `klipperscreen-theme`
+25. `klipperscreen-integr`
+26. `maintenance-start`
+27. `verify`
 
 ## 2. Слои и source of truth
 
