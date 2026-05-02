@@ -5,7 +5,7 @@ set -euo pipefail
 # ШАГ LOADER: KLIPPER ADXL
 # ==========================================
 # Назначение:
-# - Валидирует mandatory-контур ADXL/Input Shaper для профиля RN12.
+# - Валидирует mandatory-контур ADXL/Input Shaper для V2-профиля.
 # - Использует только onboard ADXL345 на EBB42 (без host MCU и SPI на Pi).
 # - Удаляет legacy marker-блок ADXL из `local_overrides.cfg`, если он остался от старой схемы.
 # Контур:
@@ -27,8 +27,8 @@ fi
 CONFIG_DIR="${PI_HOME}/printer_data/config"
 PRINTER_CFG="${CONFIG_DIR}/printer.cfg"
 LOCAL_OVERRIDES_CFG="${CONFIG_DIR}/local_overrides.cfg"
-PROFILE_DIR="${CONFIG_DIR}/profiles/rn12_corexy_v1"
-EBB_CFG="${PROFILE_DIR}/ebb42_v1_2_usb.cfg"
+PROFILE_DIR="${CONFIG_DIR}/profiles/treed_v2_corexy_v1"
+EBB_CFG="${PROFILE_DIR}/ebb42_can.cfg"
 INPUT_SHAPER_CFG="${PROFILE_DIR}/input_shaper.cfg"
 
 # Блок 2: Проверка runtime-конфига профиля.
@@ -49,18 +49,18 @@ if [ ! -f "${INPUT_SHAPER_CFG}" ]; then
   exit 1
 fi
 
-if ! grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
-  log_error "klipper-adxl-rpi: printer.cfg must include profiles/rn12_corexy_v1/input_shaper.cfg"
+if ! grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
+  log_error "klipper-adxl-rpi: printer.cfg must include profiles/treed_v2_corexy_v1/input_shaper.cfg"
   exit 1
 fi
 
-if ! grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/ebb42_v1_2_usb\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
-  log_error "klipper-adxl-rpi: printer.cfg must include profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg"
+if ! grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/ebb42_can\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
+  log_error "klipper-adxl-rpi: printer.cfg must include profiles/treed_v2_corexy_v1/ebb42_can.cfg"
   exit 1
 fi
 
-if grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
-  log_error "klipper-adxl-rpi: legacy include profiles/rn12_corexy_v1/adxl345_rpi.cfg is not supported"
+if grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG}"; then
+  log_error "klipper-adxl-rpi: legacy include profiles/treed_v2_corexy_v1/adxl345_rpi.cfg is not supported"
   exit 1
 fi
 
@@ -69,7 +69,7 @@ if ! grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${EBB_CFG}" \
   || ! grep -qE '^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*spi2_PB2_PB11_PB10[[:space:]]*$' "${EBB_CFG}" \
   || ! grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${EBB_CFG}" \
   || ! grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${EBB_CFG}"; then
-  log_error "klipper-adxl-rpi: ebb42_v1_2_usb.cfg must contain onboard ADXL345 + resonance_tester blocks"
+  log_error "klipper-adxl-rpi: ebb42_can.cfg must contain onboard ADXL345 + resonance_tester blocks"
   exit 1
 fi
 

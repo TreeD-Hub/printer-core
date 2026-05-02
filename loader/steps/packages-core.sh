@@ -16,7 +16,7 @@ ensure_root
 # Блок 2: Установка базового пакета зависимостей.
 log_info "Step packages-core: installing core packages"
 apt-get update
-apt-get -y install plymouth plymouth-themes plymouth-label rsync curl v4l-utils python3
+apt-get -y install plymouth plymouth-themes plymouth-label rsync curl v4l-utils python3 build-essential
 
 # Блок 3: Санитарная проверка socat (битый бинарник удаляем).
 # TreeD работает через python3 и Unix-сокеты, поэтому битый socat удаляем.

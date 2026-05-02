@@ -1,47 +1,43 @@
-# TreeD MainshellOS: модель владения конфигами и слоями
+# TreeD MainshellOS: V2 модель владения конфигами и слоями
 
-Документ фиксирует фактическую модель, реализованную в `loader/loader.sh`.
+Документ фиксирует фактическую модель для ветки `treed-v2`.
 Если поведение в runtime и текст документа расходятся, источником истины считается код шагов loader.
 
 ## 1. Точки входа и порядок шагов
 
 Entrypoint:
-
 - `loader/loader.sh`
 
-Полный порядок шагов:
-
+Порядок шагов:
 1. `check-env`
-2. `detect-rpi`
-3. `timezone-sync`
-4. `maintenance-stop`
-5. `packages-core`
+2. `timezone-sync`
+3. `maintenance-stop`
+4. `packages-core`
+5. `can-setup`
 6. `boot-hdmi-config`
-7. `rpi-uart-config`
-8. `plymouth-theme-install`
-9. `plymouth-initramfs`
-10. `plymouth-initramfs-config`
-11. `plymouth-cmdline`
-12. `plymouth-systemd`
-13. `klipper-sync`
-14. `klipper-profiles`
-15. `klipper-core`
-16. `klipper-adxl-rpi`
-17. `klipper-anti-shutdown`
-18. `moonraker-config`
-19. `crowsnest-webcam`
-20. `treed-cam`
-21. `klipper-mainsail-theme`
-22. `klipperscreen-install`
-23. `klipperscreen-theme`
-24. `klipperscreen-integr`
-25. `maintenance-start`
-26. `verify`
+7. `plymouth-theme-install`
+8. `plymouth-initramfs`
+9. `plymouth-initramfs-config`
+10. `plymouth-cmdline`
+11. `plymouth-systemd`
+12. `klipper-sync`
+13. `klipper-profiles`
+14. `klipper-core`
+15. `klipper-adxl-rpi`
+16. `klipper-anti-shutdown`
+17. `moonraker-config`
+18. `crowsnest-webcam`
+19. `treed-cam`
+20. `klipper-mainsail-theme`
+21. `klipperscreen-install`
+22. `klipperscreen-theme`
+23. `klipperscreen-integr`
+24. `maintenance-start`
+25. `verify`
 
 ## 2. Слои и source of truth
 
 Repo (источник правды):
-
 - `klipper/*`
 - `moonraker/*`
 - `runtime-scripts/*`
@@ -49,11 +45,9 @@ Repo (источник правды):
 - `klipperscreen/themes/*`
 
 Staging:
-
 - `/home/pi/treed/klipper` (результат `klipper-sync`)
 
 Runtime:
-
 - `/home/pi/printer_data/config` (раскладка `klipper-core`)
 - `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
@@ -61,99 +55,46 @@ Runtime:
 ## 3. Ownership map (runtime)
 
 Управляется репозиторием и шагами loader:
-
-- `/home/pi/printer_data/config/printer.cfg` (repo-managed часть файла; stock `SAVE_CONFIG`-сегмент в `preserve` восстанавливается из runtime)
-- `/home/pi/printer_data/config/profiles/*`
+- `/home/pi/printer_data/config/printer.cfg`
+- `/home/pi/printer_data/config/profiles/treed_v2_corexy_v1/*`
 - `/home/pi/printer_data/config/moonraker.conf`
 - `/home/pi/printer_data/config/moonraker/base/*.conf`
 - `/home/pi/printer_data/config/.theme/*`
 
 Генерируется loader-шагами:
-
 - `/home/pi/printer_data/config/moonraker/generated/50-webcam-treed.conf`
   владелец: `loader/steps/crowsnest-webcam.sh`
 
-Loader очищает старые `*.conf` в `moonraker/generated` (кроме `00-placeholder.conf`) и затем создает актуальные фрагменты.
-
-Локальные runtime-overrides (владелец — локальный хост):
-
+Локальные runtime-overrides:
 - `/home/pi/printer_data/config/local_overrides.cfg`
-  - пользовательские ручные override — локальный source-of-truth.
 
-- `/home/pi/printer_data/config/printer.cfg`
-  - repo-managed include `profiles/rn12_corexy_v1/input_shaper.cfg`;
-  - шаг `loader/steps/klipper-adxl-rpi.sh` проверяет эти include fail-fast.
+CAN-host слой:
+- `/etc/default/treed-can-setup`
+- `/usr/local/sbin/treed-can-setup.sh`
+- `/etc/systemd/system/treed-can-setup.service`
+  владелец: `loader/steps/can-setup.sh`
 
-Runtime-скрипты камеры:
+## 4. Контракт V2: main/CAN/Eddy
 
-- source: `runtime-scripts/treed-cam/*`
-- deploy: `/home/pi/treed/cam/bin/*`
-- владелец: `loader/steps/treed-cam.sh`
+Required:
+- `TREED_EBB_CANBUS_UUID`
 
-Тема KlipperScreen:
+Optional:
+- `TREED_MAIN_MCU_SERIAL_BY_ID`
+- `TREED_MAIN_MCU_SERIAL_MASK` (default `/dev/serial/by-id/*stm32*`)
+- `TREED_CAN_IFACE` (default `can0`)
+- `TREED_CAN_BITRATE` (default `500000`)
+- `TREED_CAN_TXQUEUE` (default `1024`)
+- `TREED_EDDY_ENABLED` (`0|1`, default `0`)
+- `TREED_EDDY_CANBUS_UUID` (обязателен только при `TREED_EDDY_ENABLED=1`)
 
-- source: `klipperscreen/themes/treed-oled/*`
-- deploy: `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/*`
-- font deploy: `/usr/local/share/fonts/treed/web_ibm_mda.ttf`
-- владелец: `loader/steps/klipperscreen-theme.sh`
-- примечание: если в теме нет `images/`, шаг подбирает fallback icon-pack из доступной стоковой темы KlipperScreen так, чтобы закрыть обязательные `images/*`-ссылки из `style.css`.
+Fail-fast сценарии:
+- auto-resolve main MCU: `0` кандидатов -> fail;
+- auto-resolve main MCU: `>1` кандидатов -> fail;
+- `TREED_EDDY_ENABLED=1` и пустой `TREED_EDDY_CANBUS_UUID` -> fail.
 
-По умолчанию `TREED_KLIPPERSCREEN_HOME` определяется из `WorkingDirectory` сервиса `KlipperScreen.service`, fallback — `/home/pi/KlipperScreen`.
+## 5. Что не используется в `treed-v2`
 
-## 4. Локальные override и TREED_DEPLOY_MODE
-
-`TREED_DEPLOY_MODE` применяется только к runtime-конфиг шагам (`klipper-core`, `moonraker-config`, `klipperscreen-theme`):
-
-- `clean`: локальные runtime-overrides не восстанавливаются, `.bak` для runtime-конфигов не создаются.
-- `preserve`: сохраняются `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg`; для `moonraker.conf` и `KlipperScreen.conf` разрешен `backup_file_once`.
-- `auto` (по умолчанию): `dev -> clean`, не-`dev` ветки -> `preserve`, неопределенная ветка (`HEAD`) -> `clean`.
-
-Allowlist runtime-preserve:
-
-- `local_overrides.cfg`
-- `printer.cfg` (только stock `SAVE_CONFIG`-сегмент от маркера `#*# <---------------------- SAVE_CONFIG ---------------------->` до конца файла)
-
-Важно:
-
-- `local_overrides.cfg` гарантированно присутствует после `klipper-core` в любом режиме.
-- stock `SAVE_CONFIG`-сегмент `printer.cfg` не является repo-source-of-truth и может меняться штатными командами Klipper (`PID_CALIBRATE`, `Z_OFFSET_APPLY_*`, `SAVE_CONFIG`).
-- `mainsail.cfg`, `timelapse.cfg`, `crowsnest.conf`, `KlipperScreen.conf`, `sonar.conf` больше не восстанавливаются через `klipper-core`.
-- `moonraker.conf` в любом режиме деплоится канонической версией из репозитория.
-
-## 5. Камера и fail policy
-
-- По умолчанию отсутствие камеры не валит базовый provisioning.
-- Строгий режим включается переменной `TREED_CAMERA_REQUIRED=1`.
-
-## 6. Что не используется
-
-- Нет активной цепочки `root.cfg` / `printer_root.cfg`.
-- Не используется dynamic profile-switching через `profiles/current`.
-
-## 7. Аудит delete/backup-политик
-
-Mode-aware (зависит от `TREED_DEPLOY_MODE_EFFECTIVE`):
-
-- `loader/steps/klipper-core.sh` — wipe runtime + restore `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg` в `preserve`.
-- `loader/steps/klipper-adxl-rpi.sh` — required: fail-fast проверка mandatory ADXL/Input Shaper через onboard EBB42 + очистка legacy marker-блока в `local_overrides.cfg`.
-- `loader/steps/moonraker-config.sh` — `backup_file_once` для `moonraker.conf` только в `preserve`.
-- `loader/steps/klipperscreen-theme.sh` — `backup_file_once` для `KlipperScreen.conf` только в `preserve`.
-
-Оставлено как есть (управляемые runtime-артефакты, не preserve):
-
-- `loader/steps/klipper-sync.sh` — пересборка staging.
-- `loader/steps/treed-cam.sh` — очистка `cam/bin` перед копированием.
-- `loader/steps/klipper-mainsail-theme.sh` — `rsync --delete` для `.theme`.
-- `loader/steps/crowsnest-webcam.sh` — prune `moonraker/generated/*.conf` и перегенерация webcam-фрагмента.
-- `loader/steps/moonraker-config.sh` — очистка `moonraker/base` и `moonraker/generated` (кроме placeholder).
-
-Системные шаги (не зависят от deploy-mode):
-
-- `boot-hdmi-config.sh`
-- `rpi-uart-config.sh`
-- `plymouth-theme-install.sh`
-- `plymouth-initramfs.sh`
-- `plymouth-initramfs-config.sh`
-- `plymouth-cmdline.sh`
-- `plymouth-systemd.sh`
-- `klipperscreen-integr.sh`
+- RN12-профиль как active runtime-контур.
+- UART-transport main MCU и связанные проверки.
+- RPi/UART migration сценарии в основном install path.

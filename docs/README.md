@@ -1,21 +1,23 @@
 > Root project map: `README.md`
 > Canonical config ownership model: `docs/config-ownership.md`
 
-## Быстрый install path (актуальный)
+## Быстрый install path (V2)
 
 ```bash
 set -euo pipefail
 REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
-# Каналы:
-# - dev: рабочая ветка для установки и обновления
-# - main: legacy snapshot
-INSTALL_REF="${INSTALL_REF:-dev}"
+INSTALL_REF="${INSTALL_REF:-treed-v2}"
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
-TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT:-uart}"  # uart|usb
-TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
-TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-1}" # для UART обычно 1
-TREED_EBB_SERIAL_BY_ID="${TREED_EBB_SERIAL_BY_ID:-/dev/serial/by-id/REPLACE_EBB42}"
+
+TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
+TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
+TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:?set TREED_EBB_CANBUS_UUID}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
+TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 
 sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
 
@@ -28,21 +30,34 @@ find loader -type f -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'
 chmod +x loader/loader.sh
 find loader/steps -type f -name '*.sh' -exec chmod +x {} +
 
-sudo TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT}" \
-     TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV}" \
-     TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT}" \
-     TREED_EBB_SERIAL_BY_ID="${TREED_EBB_SERIAL_BY_ID}" \
+sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
+     TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK}" \
+     TREED_CAN_IFACE="${TREED_CAN_IFACE}" \
+     TREED_CAN_BITRATE="${TREED_CAN_BITRATE}" \
+     TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE}" \
+     TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID}" \
+     TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED}" \
+     TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID}" \
      bash loader/loader.sh
-sudo reboot
 ```
 
-## Примечания
+## Контракт переменных
 
-- По умолчанию камера не является блокером установки.
-- Для строгого режима камеры используйте вместе: `TREED_CAMERA_REQUIRED=1 TREED_VERIFY_CAMERA=1`.
-- EBB42 v1.2 используется как обязательный второй MCU по USB Type-C (без CAN).
-- Перед запуском loader проверьте USB serial EBB: `ls -l /dev/serial/by-id/`.
-- `TREED_EBB_SERIAL_BY_ID` обязателен и должен указывать на путь вида `/dev/serial/by-id/*`.
-- UART (рекомендуется): `sudo TREED_MCU_TRANSPORT=uart TREED_MCU_UART_DEV=/dev/serial0 TREED_UART_DISABLE_BT=1 bash loader/loader.sh`.
-- Legacy USB: `sudo TREED_MCU_TRANSPORT=usb TREED_UART_DISABLE_BT=0 bash loader/loader.sh`.
-- Полный порядок шагов и ownership: `docs/config-ownership.md`.
+- `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override `/dev/serial/by-id/*`.
+- `TREED_MAIN_MCU_SERIAL_MASK` — маска для auto-resolve main MCU, default `/dev/serial/by-id/*stm32*`.
+- `TREED_CAN_IFACE` — default `can0`.
+- `TREED_CAN_BITRATE` — default `500000`.
+- `TREED_CAN_TXQUEUE` — default `1024`.
+- `TREED_EBB_CANBUS_UUID` — required.
+- `TREED_EDDY_ENABLED` — `0|1`, default `0`.
+- `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
+
+## Контракт железа
+
+- Host SBC: Rock Pi / Rock Pi 4 Plus.
+- Main MCU: Octopus Pro по USB serial.
+- CAN adapter: U2C V2.1 (USB -> CAN).
+- Toolhead MCU: EBB42 по CAN (required).
+- Probe: Eddy / Eddy Duo по CAN (optional).
+
+Ветка `treed-v2` не поддерживает RN12/RPi/UART-миграции.

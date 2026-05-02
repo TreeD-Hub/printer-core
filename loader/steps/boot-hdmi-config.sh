@@ -5,8 +5,9 @@ set -euo pipefail
 # ШАГ LOADER: BOOT HDMI CONFIG
 # ==========================================
 # Назначение:
-# - Настраивает HDMI-параметры и gpu_mem в config.txt.
-# - Применяет изменения идемпотентно с сохранением backup.
+# - Настраивает boot HDMI-параметры backend-aware.
+# - RPi backend: правит HDMI-блок и `gpu_mem` в `config.txt`.
+# - Armbian backend: правит `verbosity/bootlogo/console/extraargs` в `armbianEnv.txt`.
 # Контур:
 # - required (формирует boot-конфиг дисплея и проверяемый gpu_mem).
 
@@ -14,13 +15,80 @@ set -euo pipefail
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
+# Блок 1a: Helper-нормализация токена в extraargs (armbian backend).
+upsert_extraargs_token() {
+  local extraargs="${1:-}"
+  local token_to_set="${2:-}"
+  local token_key=""
+  local token=""
+  local -a tokens=()
+  local -a filtered=()
+  local result=""
+
+  token_key="${token_to_set%%=*}"
+  read -r -a tokens <<< "${extraargs}"
+  for token in "${tokens[@]}"; do
+    [ -z "${token}" ] && continue
+    case "${token}" in
+      "${token_key}"=*)
+        ;;
+      *)
+        filtered+=("${token}")
+        ;;
+    esac
+  done
+  filtered+=("${token_to_set}")
+  result="${filtered[*]}"
+  printf '%s\n' "${result}"
+}
+
 # Блок 2: Старт шага и определение config.txt.
 log_info "Step boot-hdmi-config: configuring HDMI output for 960x544 display"
 
 BOOT_DIR="$(detect_boot_dir)"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
+TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
+ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
 
 ensure_root
+
+# Блок 2a: Armbian backend (без config.txt/gpu_mem).
+if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
+  TREED_ARMBIAN_VERBOSITY="${TREED_ARMBIAN_VERBOSITY:-1}"
+  TREED_ARMBIAN_BOOTLOGO="${TREED_ARMBIAN_BOOTLOGO:-true}"
+  TREED_ARMBIAN_CONSOLE="${TREED_ARMBIAN_CONSOLE:-both}"
+  TREED_ARMBIAN_VIDEO_MODE="${TREED_ARMBIAN_VIDEO_MODE:-HDMI-A-1:960x544@60}"
+
+  if [ -z "${ARMBIAN_ENV_FILE}" ] || [ ! -f "${ARMBIAN_ENV_FILE}" ]; then
+    log_error "boot-hdmi-config: armbianEnv.txt not found for armbian backend"
+    exit 1
+  fi
+
+  case "${TREED_ARMBIAN_VERBOSITY}" in
+    ''|*[!0-9]*)
+      log_error "boot-hdmi-config: TREED_ARMBIAN_VERBOSITY must be numeric, got ${TREED_ARMBIAN_VERBOSITY}"
+      exit 1
+      ;;
+  esac
+
+  backup_file_once "${ARMBIAN_ENV_FILE}"
+
+  set_armbian_env_value "${ARMBIAN_ENV_FILE}" "verbosity" "${TREED_ARMBIAN_VERBOSITY}"
+  set_armbian_env_value "${ARMBIAN_ENV_FILE}" "bootlogo" "${TREED_ARMBIAN_BOOTLOGO}"
+  set_armbian_env_value "${ARMBIAN_ENV_FILE}" "console" "${TREED_ARMBIAN_CONSOLE}"
+
+  armbian_extraargs_raw="$(get_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs")"
+  armbian_extraargs_raw="${armbian_extraargs_raw#\"}"
+  armbian_extraargs_raw="${armbian_extraargs_raw%\"}"
+  armbian_extraargs_new="$(upsert_extraargs_token "${armbian_extraargs_raw}" "video=${TREED_ARMBIAN_VIDEO_MODE}")"
+  set_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs" "${armbian_extraargs_new}"
+
+  log_info "boot-hdmi-config: armbian backend updated ${ARMBIAN_ENV_FILE}"
+  log_info "boot-hdmi-config: verbosity=${TREED_ARMBIAN_VERBOSITY}, bootlogo=${TREED_ARMBIAN_BOOTLOGO}, console=${TREED_ARMBIAN_CONSOLE}"
+  log_info "boot-hdmi-config: extraargs includes video=${TREED_ARMBIAN_VIDEO_MODE}"
+  log_info "boot-hdmi-config: OK"
+  exit 0
+fi
 
 if [ -z "${CONFIG_FILE}" ] || [ ! -f "${CONFIG_FILE}" ]; then
   log_error "boot-hdmi-config: config.txt not found: ${CONFIG_FILE:-<empty>}"

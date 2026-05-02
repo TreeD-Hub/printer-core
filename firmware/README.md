@@ -1,16 +1,29 @@
 # Firmware Artifacts
 
-Папка хранит репозиторные бинарные артефакты прошивок по платам.
+Каталог `firmware/` хранит firmware-слой для сборки и ручной прошивки.
 
-Текущая схема:
-- `firmware/<board>/<ARTIFACT>.bin`
+## Состав
 
-Назначение:
-- иметь в репозитории проверенный эталонный бинарник для конкретной платы;
-- использовать его как источник при ручной прошивке по инструкции в `docs/`.
+- `firmware/configs/` — Kconfig-файлы target-ов для auto build шага `loader/steps/firmware-build.sh`.
+- `firmware/rn12/` — legacy артефакт RN12 (не используется в `treed-v2` pipeline).
 
-Важно:
-- это не runtime-конфиг и не часть loader-пайплайна;
-- имена файлов должны соответствовать требованиям бутлоадера платы;
-- при обновлении бинарника нужно синхронно обновлять соответствующую документацию.
+## Runtime/Deploy контракт (`treed-v2`)
 
+- loader выполняет auto build main+EBB(+Eddy при enabled);
+- результат сборки публикуется в staging-каталог:
+  - `/home/pi/treed/firmware-artifacts/treed-v2/<run-id>/...`
+  - `/home/pi/treed/firmware-artifacts/treed-v2/latest -> <run-id>`
+- в `latest` формируются:
+  - `manifest.tsv`
+  - `checksums.sha256`
+  - `build-report.txt`
+  - `artifacts/*/*.bin`
+
+## Важно
+
+- loader не делает auto-flash;
+- прошивка MCU выполняется отдельной операторской командой/процедурой;
+- при смене ревизии MCU обновляйте target config или задавайте env override:
+  - `TREED_FW_MAIN_CONFIG`
+  - `TREED_FW_EBB_CONFIG`
+  - `TREED_FW_EDDY_CONFIG`

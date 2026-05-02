@@ -1,93 +1,49 @@
-# Первый старт Raspberry Pi для TreeD через Raspberry Pi Imager
+# Первый старт Rock Pi для TreeD V2
 
-Документ описывает быстрый и актуальный путь подготовки Raspberry Pi под TreeD без ручной первичной настройки на самой плате.
+Документ описывает базовый путь подготовки Rock Pi под V2-контур.
 
-Цель:
-- сразу задать hostname, пользователя, пароль, Wi-Fi и SSH ещё на этапе записи microSD;
-- после первой загрузки подключиться по SSH;
-- развернуть актуальную `dev`-ветку `treed-mainshellOS`;
-- дальше работать только через репозиторий и `loader`, без ручного редактирования Pi как основного сценария.
+## 1. Базовая ОС
 
----
+- Рекомендуемая база: **Armbian Debian 12**.
+- Пользователь для runtime-путей проекта: `pi`.
+- SSH должен быть включен.
 
-## 0. Что задать в Raspberry Pi Imager
+## 2. Подготовка репозитория
 
-При записи образа MainsailOS в Raspberry Pi Imager открываем дополнительные настройки и заполняем их сразу.
+```bash
+cd /home/pi
+mkdir -p treed
+cd treed
+git clone --branch treed-v2 https://github.com/TreeD-Hub/treed-mainshellOS.git
+cd treed-mainshellOS
+```
 
-### 0.1. Hostname
-Задай уникальное имя устройства в сети.
+## 3. Минимальные переменные для V2
 
-Пример:
-- `treed-v2`
+```bash
+export TREED_EBB_CANBUS_UUID="<hex_uuid>"
+export TREED_EDDY_ENABLED=0
+```
 
-Правила:
-- только строчные латинские буквы, цифры и дефис;
-- без пробелов и подчёркиваний;
-- hostname должен быть уникальным в твоей локальной сети.
+Опционально:
 
-### 0.2. Пользователь
-Оставляем:
-- username: `pi`
+```bash
+export TREED_MAIN_MCU_SERIAL_BY_ID="/dev/serial/by-id/usb-..."
+export TREED_CAN_IFACE="can0"
+export TREED_CAN_BITRATE="500000"
+export TREED_CAN_TXQUEUE="1024"
+```
 
-Это упрощает совместимость с текущими путями и инструкциями проекта.
+## 4. Запуск loader
 
-### 0.3. Пароль
-Задай свой рабочий пароль для пользователя `pi`.
+```bash
+sudo bash loader/loader.sh
+```
 
-Не хардкодь его в документации. В этом файле используем обозначение:
-- `<PI_PASSWORD>`
+## 5. Что проверить после запуска
 
-### 0.4. Wi-Fi
-Если плата будет подключаться по Wi-Fi, сразу укажи:
-- SSID
-- пароль Wi-Fi
+- `systemctl is-active klipper moonraker treed-can-setup`
+- `ip -details link show can0`
+- `ls -l /dev/serial/by-id/`
 
-Если первичный запуск будет по Ethernet, этот шаг можно пропустить.
-
-### 0.5. Локаль
-Задай:
-- locale: по фактической локации;
-- timezone: по фактической локации;
-- keyboard layout: нужную раскладку.
-
-Пример:
-- timezone: `Europe/Moscow`
-- keyboard layout: `ru`
-
-### 0.6. SSH
-Обязательно включи SSH.
-
-Режим:
-- `Use password authentication`
-
-Это даст возможность сразу подключиться с ПК без локальной клавиатуры и экрана.
-
-### 0.7. Проверка перед записью
-Перед нажатием **Write** проверь, что в summary отмечены:
-- hostname;
-- user account;
-- Wi-Fi;
-- SSH.
-
----
-
-## 1. Первая загрузка платы
-
-1. Запиши образ на microSD.
-2. Вставь microSD в Raspberry Pi.
-3. Подключи питание.
-4. Подожди 1–2 минуты, пока система полностью загрузится и поднимет сеть.
-
-Если используется Ethernet, проверь устройство в списке клиентов роутера.
-
-Если используется Wi-Fi, плата должна подключиться к сети автоматически по данным из Raspberry Pi Imager.
-
----
-
-## 2. Как подключиться по SSH
-
-### 2.1. Предпочтительный вариант
-Пробуем по hostname:
-
-```powershell
-ssh pi@<HOSTNAME>.local
+При `TREED_EDDY_ENABLED=1` также проверьте, что задан `TREED_EDDY_CANBUS_UUID`.

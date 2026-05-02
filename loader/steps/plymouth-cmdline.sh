@@ -5,28 +5,72 @@ set -euo pipefail
 # ШАГ LOADER: PLYMOUTH CMDLINE
 # ==========================================
 # Назначение:
-# - Нормализует параметры cmdline для splash и UART-совместимости.
-# - Удаляет конфликтующие токены и сохраняет однострочный формат.
+# - Нормализует параметры boot cmdline для splash и чистого boot-лога.
+# - RPi backend: правит `cmdline.txt`; Armbian backend: правит `extraargs` в `armbianEnv.txt`.
 # Контур:
-# - required (влияет на boot-поведение и UART-консоль).
+# - required (влияет на boot-поведение и визуальный startup).
 
 # Блок 1: Библиотеки и старт шага.
 . "${REPO_DIR}/loader/lib/common.sh"
+. "${REPO_DIR}/loader/lib/rpi.sh"
 
 log_info "Step plymouth-cmdline: updating kernel cmdline for plymouth"
 
-# Блок 2: Нормализация входного параметра транспорта MCU.
-MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
-case "${MCU_TRANSPORT_RAW}" in
-  usb|USB) MCU_TRANSPORT="usb" ;;
-  uart|UART) MCU_TRANSPORT="uart" ;;
-  *)
-    log_error "plymouth-cmdline: unsupported TREED_MCU_TRANSPORT='${MCU_TRANSPORT_RAW}' (expected: usb|uart)"
-    exit 1
-    ;;
-esac
+# Блок 1a: Определение boot-backend.
+BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
+TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
+ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
 
-# Блок 3: Определение и валидация пути cmdline.txt.
+# Блок 1b: Целевой набор токенов (общий для RPi/Armbian).
+target_tokens=(
+  quiet
+  splash
+  plymouth.ignore-serial-consoles
+  vt.global_cursor_default=0
+  consoleblank=0
+  loglevel=3
+  logo.nologo
+  vt.handoff=7
+  usbcore.autosuspend=-1
+)
+
+# Блок 1c: Armbian backend — нормализуем extraargs в armbianEnv.txt.
+if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
+  if [ -z "${ARMBIAN_ENV_FILE}" ] || [ ! -f "${ARMBIAN_ENV_FILE}" ]; then
+    log_error "plymouth-cmdline: armbian backend requires armbianEnv.txt"
+    exit 1
+  fi
+
+  backup_file_once "${ARMBIAN_ENV_FILE}"
+
+  extraargs_raw="$(get_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs")"
+  extraargs_raw="${extraargs_raw#\"}"
+  extraargs_raw="${extraargs_raw%\"}"
+  read -r -a tokens <<< "${extraargs_raw}"
+
+  new_tokens=()
+  for t in "${tokens[@]}"; do
+    case "$t" in
+      quiet|splash|plymouth.ignore-serial-consoles|vt.global_cursor_default=*|consoleblank=*|loglevel=*|logo.nologo|plymouth.debug|vt.handoff=*|plymouth.enable=0|usbcore.autosuspend=*)
+        ;;
+      console=serial0,*|console=ttyAMA0,*|console=ttyS0,*)
+        ;;
+      *)
+        new_tokens+=("$t")
+        ;;
+    esac
+  done
+
+  for t in "${target_tokens[@]}"; do
+    new_tokens+=("${t}")
+  done
+
+  set_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs" "${new_tokens[*]}"
+  log_info "plymouth-cmdline: OK (armbian backend, updated extraargs in ${ARMBIAN_ENV_FILE})"
+  exit 0
+fi
+
+# Блок 2: Определение и валидация пути cmdline.txt.
 if [ -z "${CMDLINE_FILE:-}" ]; then
   if [ -f /boot/firmware/cmdline.txt ]; then
     CMDLINE_FILE=/boot/firmware/cmdline.txt
@@ -42,7 +86,7 @@ fi
 
 backup_file_once "${CMDLINE_FILE}"
 
-# Блок 4: Чтение текущей cmdline и разбор на токены.
+# Блок 3: Чтение текущей cmdline и разбор на токены.
 tmp="$(mktemp)"
 tr -d '\r\n' < "${CMDLINE_FILE}" > "${tmp}"
 current="$(cat "${tmp}")"
@@ -56,19 +100,13 @@ fi
 read -r -a tokens <<< "${current}"
 
 new_tokens=()
-serial_console_removed=0
-# Блок 5: Фильтрация конфликтных токенов и serial-console при UART.
-# Сначала убираем конфликтные/дублирующие токены и сериал-консоль для UART-кейса.
+# Блок 4: Фильтрация конфликтных токенов и serial-console.
+# Убираем конфликтные/дублирующие токены, включая serial-console.
 for t in "${tokens[@]}"; do
   case "$t" in
     quiet|splash|plymouth.ignore-serial-consoles|vt.global_cursor_default=*|consoleblank=*|loglevel=*|logo.nologo|plymouth.debug|vt.handoff=*|plymouth.enable=0|usbcore.autosuspend=*)
       ;;
     console=serial0,*|console=ttyAMA0,*|console=ttyS0,*)
-      if [ "${MCU_TRANSPORT}" = "uart" ]; then
-        serial_console_removed=1
-      else
-        new_tokens+=("$t")
-      fi
       ;;
     *)
       new_tokens+=("$t")
@@ -76,26 +114,13 @@ for t in "${tokens[@]}"; do
   esac
 done
 
-# Блок 6: Добавление целевого набора токенов в фиксированном порядке.
-new_tokens+=(
-  quiet
-  splash
-  plymouth.ignore-serial-consoles
-  vt.global_cursor_default=0
-  consoleblank=0
-  loglevel=3
-  logo.nologo
-  vt.handoff=7
-  usbcore.autosuspend=-1
-)
+# Блок 5: Добавление целевого набора токенов в фиксированном порядке.
+for t in "${target_tokens[@]}"; do
+  new_tokens+=("${t}")
+done
 
-# Блок 7: Запись итоговой cmdline.
-# Затем добавляем целевой набор токенов в фиксированном порядке.
+# Блок 6: Запись итоговой cmdline.
 new_line="${new_tokens[*]}"
 printf '%s\n' "${new_line}" > "${CMDLINE_FILE}"
-
-if [ "${MCU_TRANSPORT}" = "uart" ] && [ "${serial_console_removed}" -eq 1 ]; then
-  log_info "plymouth-cmdline: removed serial console tokens for UART MCU transport"
-fi
 
 log_info "plymouth-cmdline: OK"

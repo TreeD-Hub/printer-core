@@ -1,27 +1,42 @@
 # TreeD MainshellOS
 
-Единая точка входа по структуре репозитория, слоям разворачивания и ownership.
+Единая точка входа для ветки `treed-v2`.
 
-## RN12: Фаза 1 (перевод Pi на UART)
+## V2 runtime-модель
 
-```bash
-cd /home/pi/treed/treed-mainshellOS
-sudo REPO_DIR="$(pwd)" TREED_MCU_TRANSPORT=uart TREED_UART_DISABLE_BT=1 bash loader/steps/rpi-uart-config.sh
-sudo REPO_DIR="$(pwd)" TREED_MCU_TRANSPORT=uart bash loader/steps/plymouth-cmdline.sh
-sudo reboot
+```text
+Rock Pi (Armbian Debian 12)
+ ├─ USB -> Octopus Pro (main MCU, Klipper serial)
+ └─ USB -> U2C V2.1
+          ├─ CAN -> EBB42 (required)
+          └─ CAN -> Eddy Duo (optional)
 ```
+
+Ветка `treed-v2` не поддерживает RN12/RPi/UART legacy-контур.
 
 ## Быстрый запуск (копируй в SSH)
 
 ```bash
 set -euo pipefail
 REPO_URL="https://github.com/TreeD-Hub/treed-mainshellOS.git"
-INSTALL_REF="${INSTALL_REF:-dev}"
+INSTALL_REF="${INSTALL_REF:-treed-v2}"
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
-TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT:-uart}"  # uart|usb
-TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
-TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-1}" # для UART обычно 1
+
+TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
+TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
+TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:?set TREED_EBB_CANBUS_UUID}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
+TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
+TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED:-1}"
+TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-/home/pi/klipper}"
+TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-/home/pi/treed/firmware-artifacts/treed-v2}"
+TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_usb.config}"
+TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
+TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_stm32g0b1.config}"
 
 sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
 
@@ -34,28 +49,30 @@ find loader -type f -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'
 chmod +x loader/loader.sh
 find loader/steps -type f -name '*.sh' -exec chmod +x {} +
 
-sudo TREED_MCU_TRANSPORT="${TREED_MCU_TRANSPORT}" \
-     TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV}" \
-     TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT}" \
+sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
+     TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK}" \
+     TREED_CAN_IFACE="${TREED_CAN_IFACE}" \
+     TREED_CAN_BITRATE="${TREED_CAN_BITRATE}" \
+     TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE}" \
+     TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID}" \
+     TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED}" \
+     TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID}" \
+     TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED}" \
+     TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR}" \
+     TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR}" \
+     TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG}" \
+     TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG}" \
+     TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG}" \
      bash loader/loader.sh
-sudo reboot
 ```
-
-## Перечень оборудования:
-
-- Контроллер принтера (RN): `MKS Robin Nano v1.2`.
-- SBC: `Raspberry Pi 3 Model B Rev 1.2` (MainsailOS).
-- Блок питания принтера: `24V 15A` (текущий выход `24.4V`).
-- Понижайка питания Raspberry Pi: `5.25V`
-- Камера: `USB 2.0 Camera (Sonix)`, рабочий поток через `crowsnest`/`mjpegstreamer`.
 
 ## Карта слоев
 
 1. Репозиторий (source of truth)
-- `loader/` — pipeline провижининга и проверки.
+- `loader/` — pipeline provisioning и проверки.
 - `klipper/` — канонические конфиги Klipper.
 - `moonraker/` — базовый конфиг Moonraker и компоненты.
-- `runtime-scripts/` — runtime-скрипты (например, для камеры).
+- `runtime-scripts/` — runtime-скрипты (например, камера).
 - `mainsail/` — тема и UI-ресурсы Mainsail.
 - `firmware/` — репозиторные firmware-артефакты.
 
@@ -73,45 +90,8 @@ sudo reboot
 5. Сервисы и UI
 - `klipper`, `moonraker`, `crowsnest`, `KlipperScreen`, `mainsail`
 
-## Ownership (кратко)
-
-- `klipper/*` -> `loader/steps/klipper-core.sh`
-- `moonraker/base/*` -> `loader/steps/moonraker-config.sh`
-- `moonraker/generated/50-webcam-treed.conf` -> `loader/steps/crowsnest-webcam.sh`
-- `runtime-scripts/treed-cam/*` -> `loader/steps/treed-cam.sh`
-- В `preserve` сохраняются только локальный `local_overrides.cfg` и stock `SAVE_CONFIG`-сегмент `printer.cfg`; остальные runtime-конфиги деплоятся из репозитория.
-
-Подробная карта владения: `docs/config-ownership.md`.
-
 ## Документация
 
 - Быстрый install path: `docs/README.md`
-- Первый старт платы: `docs/firstStart.md`
-- Прошивка RN12 под Klipper: `docs/rn_v12_to_klipper.md`
 - Модель владения конфигами: `docs/config-ownership.md`
-
-Для перехода RN12 с USB на UART используйте только двухфазный сценарий из
-`docs/rn_v12_to_klipper.md` (фаза 1: подготовка + reboot, фаза 2: переключение transport).
-Минимальный post-install smoke-test для UART/MCU также находится в `docs/rn_v12_to_klipper.md`.
-
-## Политика веток
-
-- `dev` — рабочая ветка для актуальных установок и развития.
-- `main` — консервативная/историческая ветка, не основной install-канал.
-- `refactor/*` — временные ветки для изолированных изменений.
-
-## Naming-конвенции
-
-- README-файлы: `README.md`.
-- Каталоги: lowercase + `kebab-case` для составных имен.
-- Runtime-скрипты: только в `runtime-scripts/`.
-- Firmware-артефакты: `firmware/<board>/<ARTIFACT>.bin`.
-
-## Коммит-сообщения
-
-- Заголовок коммита: коротко и по сути (что изменено).
-- Описание коммита (`body`): структурно, не сплошным текстом.
-- Рекомендуемый формат `body`:
-  - `Что:` список изменений;
-  - `Зачем:` причина/контекст;
-  - `Проверка:` как проверено.
+- Профиль Klipper V2: `klipper/profiles/treed_v2_corexy_v1/README.md`

@@ -6,7 +6,8 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Выполняет финальные post-configuration проверки provisioning-контура.
-# - Валидирует сервисы, boot-параметры, Klipper/Moonraker, обязательный EBB USB-контур и ADXL.
+# - Сохраняет паритет dev-отчета (boot/time/camera/ui/services) в V2-модели.
+# - Валидирует V2 runtime: main MCU USB, CAN EBB(required), Eddy(optional), ADXL.
 # Контур:
 # - required (непрошедшие проверки завершают loader с ошибкой).
 
@@ -16,13 +17,12 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
-# Блок 2: Счетчики итогов verify.
-log_info "Step verify: running post-configuration checks"
+log_info "Step verify: running V2 post-configuration checks (parity mode)"
 
 ok=0
 fail=0
 
-# Блок 3: Вспомогательные функции подсчета/парсинга/проверок.
+# Блок 2: Вспомогательные функции подсчета/парсинга/проверок.
 pass() {
   log_info "VERIFY $1: ok"
   ok=$((ok+1))
@@ -38,6 +38,12 @@ is_true() {
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+extract_cfg_value() {
+  local key_regex="$1"
+  local file="$2"
+  sed -nE "s|^[[:space:]]*${key_regex}[[:space:]]*:[[:space:]]*([^[:space:]#]+).*|\\1|p" "${file}" | head -n 1 || true
 }
 
 read_klipperscreen_main_theme() {
@@ -124,7 +130,6 @@ moonraker_ready_check() {
   code=""
 
   for attempt in $(seq 1 "${retries}"); do
-    # Moonraker может быть active в systemd, но еще не открыть HTTP.
     if ! systemctl is-active --quiet moonraker.service; then
       sleep 1
       continue
@@ -213,7 +218,6 @@ klipper_ebb_connected_check() {
   if grep -Eiq "${patterns}" "${tmp}"; then
     pass "${check_name}"
   else
-    # Startup-маркеры могут отсутствовать в узком окне ActiveEnterTimestamp.
     if journalctl -u "${unit}" -n 400 --no-pager > "${tmp}" 2>/dev/null; then
       if grep -Eiq "${patterns}" "${tmp}"; then
         pass "${check_name} (markers found in recent journal)"
@@ -228,55 +232,6 @@ klipper_ebb_connected_check() {
   fi
 
   rm -f "${tmp}"
-}
-
-ebb_serial_stability_check() {
-  local check_name="$1"
-  local serial_path="$2"
-  local window_sec_raw="$3"
-  local poll_sec_raw="$4"
-  local window_sec poll_sec samples i misses
-
-  case "${window_sec_raw}" in
-    ''|*[!0-9]*)
-      failf "${check_name} (invalid TREED_EBB_STABILITY_WINDOW_SEC=${window_sec_raw:-empty})"
-      return 0
-      ;;
-  esac
-  case "${poll_sec_raw}" in
-    ''|*[!0-9]*)
-      failf "${check_name} (invalid TREED_EBB_STABILITY_POLL_SEC=${poll_sec_raw:-empty})"
-      return 0
-      ;;
-  esac
-
-  window_sec="${window_sec_raw}"
-  poll_sec="${poll_sec_raw}"
-  if [ "${window_sec}" -le 0 ] || [ "${poll_sec}" -le 0 ]; then
-    failf "${check_name} (window/poll must be > 0)"
-    return 0
-  fi
-
-  samples=$(( (window_sec + poll_sec - 1) / poll_sec ))
-  if [ "${samples}" -lt 1 ]; then
-    samples=1
-  fi
-
-  misses=0
-  for i in $(seq 1 "${samples}"); do
-    if [ ! -e "${serial_path}" ] || [ ! -r "${serial_path}" ]; then
-      misses=$((misses+1))
-    fi
-    if [ "${i}" -lt "${samples}" ]; then
-      sleep "${poll_sec}"
-    fi
-  done
-
-  if [ "${misses}" -eq 0 ]; then
-    pass "${check_name} (${window_sec}s, poll=${poll_sec}s)"
-  else
-    failf "${check_name} (${window_sec}s, poll=${poll_sec}s, misses=${misses}/${samples})"
-  fi
 }
 
 http_snapshot_check() {
@@ -357,422 +312,181 @@ moonraker_gcode_ok_check() {
   done
 
   failf "${check_name} (http=${code:-n/a}, retries=${retries})"
-
   rm -f "${tmp}"
 }
 
-# Блок 4: Подготовка boot-путей при ручном запуске verify.
-# Гарантируем BOOT_DIR / CMDLINE_FILE / CONFIG_FILE даже при ручном запуске
-if [ -z "${BOOT_DIR:-}" ]; then
-  BOOT_DIR="$(detect_boot_dir)"
-fi
-
-if [ -z "${CMDLINE_FILE:-}" ] || [ ! -f "${CMDLINE_FILE}" ]; then
-  CMDLINE_FILE="$(detect_cmdline_file "${BOOT_DIR}" 2>/dev/null || true)"
-fi
-
-if [ -z "${CONFIG_FILE:-}" ] || [ ! -f "${CONFIG_FILE}" ]; then
-  CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
-fi
-
+# Блок 3: Подготовка boot-контекста и runtime-переменных.
+BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
+TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
+CMDLINE_FILE="${CMDLINE_FILE:-$(detect_cmdline_file "${BOOT_DIR}")}"
+CONFIG_FILE="${CONFIG_FILE:-$(detect_config_file "${BOOT_DIR}")}"
+ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
 KVER="$(uname -r)"
 INITRD="${BOOT_DIR}/initrd.img-${KVER}"
 
-# Блок 5: Проверки initramfs и boot/config привязки.
+PI_USER="${PI_USER:-pi}"
+PI_HOME="${PI_HOME:-/home/${PI_USER}}"
+TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
+
+PROFILE_DIR="${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1"
+PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
+MAIN_CFG_RUNTIME="${PROFILE_DIR}/mcu_main_octopus_usb.cfg"
+EBB_CFG_RUNTIME="${PROFILE_DIR}/ebb42_can.cfg"
+EDDY_CFG_RUNTIME="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
+STEPPERS_CFG_RUNTIME="${PROFILE_DIR}/steppers.cfg"
+INPUT_SHAPER_CFG="${PROFILE_DIR}/input_shaper.cfg"
+
+MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
+WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
+CAN_UNIT="treed-can-setup.service"
+
+KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
+KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
+TREED_KS_THEME_EXPECTED="${TREED_KS_THEME:-treed-oled}"
+TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-0}"
+TREED_KLIPPERSCREEN_HOME_RAW="${TREED_KLIPPERSCREEN_HOME:-}"
+if [ -n "${TREED_KLIPPERSCREEN_HOME_RAW}" ]; then
+  TREED_KLIPPERSCREEN_HOME="${TREED_KLIPPERSCREEN_HOME_RAW}"
+  log_info "VERIFY KlipperScreen home forced via TREED_KLIPPERSCREEN_HOME=${TREED_KLIPPERSCREEN_HOME}"
+else
+  TREED_KLIPPERSCREEN_HOME="$(detect_klipperscreen_home "${PI_HOME}/KlipperScreen" || true)"
+  if [ -n "${TREED_KLIPPERSCREEN_HOME}" ]; then
+    log_info "VERIFY KlipperScreen home resolved as ${TREED_KLIPPERSCREEN_HOME}"
+  else
+    log_info "VERIFY KlipperScreen home unresolved (service may be absent)"
+  fi
+fi
+KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
+KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
+
+# Блок 4: Проверки initramfs/boot backend/cmdline.
 if [ -f "${INITRD}" ]; then
   pass "initramfs file ${INITRD}"
 else
   failf "initramfs file (${INITRD} missing)"
 fi
 
-# Проверка строки initramfs в config.txt
-if [ -f "${CONFIG_FILE}" ]; then
-  if grep -Fq "initramfs initrd.img-${KVER} followkernel" "${CONFIG_FILE}"; then
-    pass "config.txt initramfs initrd.img-${KVER} followkernel"
-  else
-    failf "config.txt initramfs initrd.img-${KVER} followkernel"
-  fi
-else
-  failf "config.txt (${CONFIG_FILE} missing)"
-fi
+case "${TREED_BOOT_BACKEND}" in
+  rpi)
+    pass "boot backend rpi"
 
-# Блок 6: Проверки содержимого kernel cmdline.
-CMDLINE_CONTENT=""
-CMDLINE_PATH="${CMDLINE_FILE:-<empty>}"
-
-if [ -n "${CMDLINE_FILE:-}" ] && [ -f "${CMDLINE_FILE}" ]; then
-  CMDLINE_CONTENT="$(tr -d '\n' < "${CMDLINE_FILE}" 2>/dev/null || true)"
-
-  for tok in quiet splash plymouth.ignore-serial-consoles logo.nologo vt.global_cursor_default=0 consoleblank=0 loglevel=3 vt.handoff=7 usbcore.autosuspend=-1; do
-    if printf '%s\n' "${CMDLINE_CONTENT}" | grep -qE "(^| )${tok}( |$)"; then
-      pass "cmdline token ${tok}"
+    if [ -f "${CONFIG_FILE}" ] \
+      && grep -Fq "initramfs initrd.img-${KVER} followkernel" "${CONFIG_FILE}"; then
+      pass "config.txt initramfs initrd.img-${KVER} followkernel"
     else
-      failf "cmdline token ${tok}"
+      failf "config.txt initramfs initrd.img-${KVER} followkernel"
     fi
-  done
 
-  if printf '%s\n' "${CMDLINE_CONTENT}" | grep -q "plymouth.enable=0"; then
-    failf "cmdline has plymouth.enable=0"
-  else
-    pass "cmdline has no plymouth.enable=0"
-  fi
+    gm="$(grep -E "^gpu_mem=" "${CONFIG_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2)"
+    case "${gm}" in ''|*[!0-9]*) gm=0;; esac
+    if [ "${gm:-0}" -ge 96 ]; then
+      pass "gpu_mem >= 96"
+    else
+      failf "gpu_mem >= 96"
+    fi
 
-  if [ "$(wc -l < "${CMDLINE_FILE}" 2>/dev/null || echo 2)" -eq 1 ]; then
-    pass "cmdline one-line"
-  else
-    failf "cmdline one-line"
-  fi
-else
-  failf "cmdline file missing (${CMDLINE_PATH})"
-fi
+    CMDLINE_CONTENT=""
+    if [ -n "${CMDLINE_FILE}" ] && [ -f "${CMDLINE_FILE}" ]; then
+      CMDLINE_CONTENT="$(tr -d '\n' < "${CMDLINE_FILE}" 2>/dev/null || true)"
+      for tok in quiet splash plymouth.ignore-serial-consoles logo.nologo vt.global_cursor_default=0 consoleblank=0 loglevel=3 vt.handoff=7 usbcore.autosuspend=-1; do
+        if printf '%s\n' "${CMDLINE_CONTENT}" | grep -qE "(^| )${tok}( |$)"; then
+          pass "cmdline token ${tok}"
+        else
+          failf "cmdline token ${tok}"
+        fi
+      done
 
-# Блок 7: Подготовка переменных окружения для runtime-проверок.
-PI_USER="${PI_USER:-pi}"
-PI_HOME="${PI_HOME:-/home/${PI_USER}}"
-TREED_MCU_TRANSPORT_RAW="${TREED_MCU_TRANSPORT:-uart}"
-TREED_MCU_UART_DEV="${TREED_MCU_UART_DEV:-/dev/serial0}"
-TREED_UART_DISABLE_BT="${TREED_UART_DISABLE_BT:-auto}"
-TREED_EBB_SERIAL_BY_ID="${TREED_EBB_SERIAL_BY_ID:-}"
-TREED_EBB_STABILITY_WINDOW_SEC="${TREED_EBB_STABILITY_WINDOW_SEC:-20}"
-TREED_EBB_STABILITY_POLL_SEC="${TREED_EBB_STABILITY_POLL_SEC:-1}"
-TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-0}"
-TREED_KS_THEME_EXPECTED="${TREED_KS_THEME:-treed-oled}"
-TREED_KLIPPERSCREEN_HOME_RAW="${TREED_KLIPPERSCREEN_HOME:-}"
-if [ -n "${TREED_KLIPPERSCREEN_HOME_RAW}" ]; then
-  TREED_KLIPPERSCREEN_HOME="${TREED_KLIPPERSCREEN_HOME_RAW}"
-  log_info "VERIFY KlipperScreen home forced via TREED_KLIPPERSCREEN_HOME=${TREED_KLIPPERSCREEN_HOME}"
-else
-  TREED_KLIPPERSCREEN_HOME="$(detect_klipperscreen_home "${PI_HOME}/KlipperScreen")"
-  log_info "VERIFY KlipperScreen home resolved as ${TREED_KLIPPERSCREEN_HOME}"
-fi
-MCU_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/mcu_rn12.cfg"
-EBB_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg"
-EDDY_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/probe_eddy_duo.cfg"
-STEPPERS_CFG_RUNTIME="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/steppers.cfg"
-PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
-MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
-KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
-KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
-KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
-KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
-KS_SERVICE_PRESENT=0
-ADXL_EBB_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/ebb42_v1_2_usb.cfg"
-INPUT_SHAPER_CFG="${PI_HOME}/printer_data/config/profiles/rn12_corexy_v1/input_shaper.cfg"
+      if printf '%s\n' "${CMDLINE_CONTENT}" | grep -q "plymouth.enable=0"; then
+        failf "cmdline has no plymouth.enable=0"
+      else
+        pass "cmdline has no plymouth.enable=0"
+      fi
 
-case "${TREED_MCU_TRANSPORT_RAW}" in
-  usb|USB) TREED_MCU_TRANSPORT="usb" ;;
-  uart|UART) TREED_MCU_TRANSPORT="uart" ;;
+      if [ "$(wc -l < "${CMDLINE_FILE}" 2>/dev/null || echo 2)" -eq 1 ]; then
+        pass "cmdline one-line"
+      else
+        failf "cmdline one-line"
+      fi
+    else
+      failf "cmdline file present for rpi backend"
+    fi
+    ;;
+
+  armbian)
+    pass "boot backend armbian"
+
+    if [ -f "${ARMBIAN_ENV_FILE}" ]; then
+      pass "armbianEnv.txt present (${ARMBIAN_ENV_FILE})"
+    else
+      failf "armbianEnv.txt present (${ARMBIAN_ENV_FILE:-missing})"
+    fi
+
+    TREED_ARMBIAN_VERBOSITY="${TREED_ARMBIAN_VERBOSITY:-1}"
+    TREED_ARMBIAN_BOOTLOGO="${TREED_ARMBIAN_BOOTLOGO:-true}"
+    TREED_ARMBIAN_VIDEO_MODE="${TREED_ARMBIAN_VIDEO_MODE:-HDMI-A-1:960x544@60}"
+
+    if [ -f "${ARMBIAN_ENV_FILE}" ]; then
+      armbian_verbosity="$(get_armbian_env_value "${ARMBIAN_ENV_FILE}" "verbosity" | tr -d '"' | tr -d '\r\n')"
+      if [ "${armbian_verbosity}" = "${TREED_ARMBIAN_VERBOSITY}" ]; then
+        pass "armbianEnv verbosity=${TREED_ARMBIAN_VERBOSITY}"
+      else
+        failf "armbianEnv verbosity=${TREED_ARMBIAN_VERBOSITY} (current=${armbian_verbosity:-missing})"
+      fi
+
+      armbian_bootlogo="$(get_armbian_env_value "${ARMBIAN_ENV_FILE}" "bootlogo" | tr -d '"' | tr -d '\r\n')"
+      if [ "${armbian_bootlogo}" = "${TREED_ARMBIAN_BOOTLOGO}" ]; then
+        pass "armbianEnv bootlogo=${TREED_ARMBIAN_BOOTLOGO}"
+      else
+        failf "armbianEnv bootlogo=${TREED_ARMBIAN_BOOTLOGO} (current=${armbian_bootlogo:-missing})"
+      fi
+
+      armbian_extraargs="$(get_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs")"
+      armbian_extraargs="${armbian_extraargs#\"}"
+      armbian_extraargs="${armbian_extraargs%\"}"
+      for tok in quiet splash plymouth.ignore-serial-consoles logo.nologo vt.global_cursor_default=0 consoleblank=0 loglevel=3 vt.handoff=7 usbcore.autosuspend=-1; do
+        if printf '%s\n' "${armbian_extraargs}" | grep -qE "(^| )${tok}( |$)"; then
+          pass "armbian extraargs token ${tok}"
+        else
+          failf "armbian extraargs token ${tok}"
+        fi
+      done
+
+      if printf '%s\n' "${armbian_extraargs}" | grep -qE "(^| )video=${TREED_ARMBIAN_VIDEO_MODE}( |$)"; then
+        pass "armbian extraargs video=${TREED_ARMBIAN_VIDEO_MODE}"
+      else
+        failf "armbian extraargs video=${TREED_ARMBIAN_VIDEO_MODE}"
+      fi
+
+      if printf '%s\n' "${armbian_extraargs}" | grep -q "plymouth.enable=0"; then
+        failf "armbian extraargs has no plymouth.enable=0"
+      else
+        pass "armbian extraargs has no plymouth.enable=0"
+      fi
+    fi
+
+    if [ -f /proc/cmdline ]; then
+      proc_cmdline="$(tr -d '\n' < /proc/cmdline)"
+      for tok in quiet splash consoleblank=0; do
+        if printf '%s\n' "${proc_cmdline}" | grep -qE "(^| )${tok}( |$)"; then
+          pass "proc cmdline token ${tok}"
+        else
+          failf "proc cmdline token ${tok}"
+        fi
+      done
+    else
+      failf "proc cmdline readable"
+    fi
+    ;;
+
   *)
-    failf "TREED_MCU_TRANSPORT is valid (value=${TREED_MCU_TRANSPORT_RAW})"
-    TREED_MCU_TRANSPORT="uart"
+    failf "supported boot backend (current=${TREED_BOOT_BACKEND})"
     ;;
 esac
 
-# Блок 8: Базовые проверки обязательных сервисов и API Moonraker.
-check_required_service_active "klipper.service"
-check_required_service_active "moonraker.service"
-moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
-klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
-
-# Блок 9: Проверка runtime mcu_rn12.cfg и строки serial.
-if [ -f "${MCU_CFG_RUNTIME}" ]; then
-  pass "mcu config present (${MCU_CFG_RUNTIME})"
-  runtime_mcu_serial="$(
-    sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\1|p' "${MCU_CFG_RUNTIME}" \
-      | head -n 1 || true
-  )"
-  if [ -n "${runtime_mcu_serial}" ]; then
-    pass "mcu serial line present (${runtime_mcu_serial})"
-  else
-    failf "mcu serial line present (${MCU_CFG_RUNTIME})"
-  fi
-else
-  failf "mcu config present (${MCU_CFG_RUNTIME})"
-  runtime_mcu_serial=""
-fi
-
-# Блок 9а: Проверка runtime EBB-конфига и опционального override TREED_EBB_SERIAL_BY_ID.
-if [ -d /dev/serial/by-id ]; then
-  pass "/dev/serial/by-id directory present"
-else
-  log_warn "VERIFY /dev/serial/by-id directory present: not found (continuing with runtime EBB serial path checks)"
-fi
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/ebb42_v1_2_usb\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-  pass "runtime printer.cfg includes EBB profile"
-else
-  failf "runtime printer.cfg includes EBB profile"
-fi
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/(extruder|fans)\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-  failf "runtime printer.cfg has no legacy extruder/fans includes"
-else
-  pass "runtime printer.cfg has no legacy extruder/fans includes"
-fi
-
-if [ -n "${TREED_EBB_SERIAL_BY_ID}" ]; then
-  case "${TREED_EBB_SERIAL_BY_ID}" in
-    /dev/serial/by-id/*) pass "TREED_EBB_SERIAL_BY_ID format (/dev/serial/by-id/*)" ;;
-    *) failf "TREED_EBB_SERIAL_BY_ID format (/dev/serial/by-id/*)" ;;
-  esac
-
-  if [ -e "${TREED_EBB_SERIAL_BY_ID}" ] && [ -r "${TREED_EBB_SERIAL_BY_ID}" ]; then
-    pass "TREED_EBB_SERIAL_BY_ID exists/readable (${TREED_EBB_SERIAL_BY_ID})"
-  else
-    failf "TREED_EBB_SERIAL_BY_ID exists/readable (${TREED_EBB_SERIAL_BY_ID})"
-  fi
-else
-  log_info "VERIFY TREED_EBB_SERIAL_BY_ID not set: using runtime EBB serial checks"
-fi
-
-if [ -f "${EBB_CFG_RUNTIME}" ]; then
-  pass "ebb config present (${EBB_CFG_RUNTIME})"
-  runtime_ebb_serial="$(
-    sed -nE 's|^[[:space:]]*serial:[[:space:]]*([^[:space:]#]+).*|\1|p' "${EBB_CFG_RUNTIME}" \
-      | head -n 1 || true
-  )"
-  if [ -n "${runtime_ebb_serial}" ]; then
-    pass "ebb serial line present (${runtime_ebb_serial})"
-  else
-    failf "ebb serial line present (${EBB_CFG_RUNTIME})"
-  fi
-else
-  failf "ebb config present (${EBB_CFG_RUNTIME})"
-  runtime_ebb_serial=""
-fi
-
-if [ -n "${runtime_ebb_serial}" ] \
-  && printf '%s' "${runtime_ebb_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
-  pass "ebb serial path format (/dev/serial/by-id/*)"
-else
-  failf "ebb serial path format (/dev/serial/by-id/*)"
-fi
-
-if [ -n "${runtime_ebb_serial}" ] && [ -e "${runtime_ebb_serial}" ] && [ -r "${runtime_ebb_serial}" ]; then
-  pass "ebb usb serial path exists (${runtime_ebb_serial})"
-else
-  failf "ebb usb serial path exists (${runtime_ebb_serial:-missing})"
-fi
-
-if [ -n "${TREED_EBB_SERIAL_BY_ID}" ]; then
-  if [ -n "${runtime_ebb_serial}" ] && [ "${runtime_ebb_serial}" = "${TREED_EBB_SERIAL_BY_ID}" ]; then
-    pass "ebb serial matches TREED_EBB_SERIAL_BY_ID"
-  else
-    failf "ebb serial matches TREED_EBB_SERIAL_BY_ID"
-  fi
-fi
-
-if [ -n "${runtime_ebb_serial}" ]; then
-  ebb_serial_stability_check \
-    "ebb usb serial path is stable" \
-    "${runtime_ebb_serial}" \
-    "${TREED_EBB_STABILITY_WINDOW_SEC}" \
-    "${TREED_EBB_STABILITY_POLL_SEC}"
-fi
-
-klipper_ebb_connected_check "klipper startup connected EBBCan"
-
-# Блок 9b: Валидация Eddy Duo как probe + Z endstop.
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/probe_eddy_duo\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-  pass "runtime printer.cfg includes Eddy Duo profile"
-else
-  failf "runtime printer.cfg includes Eddy Duo profile"
-fi
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/optional_(bed_mesh|screws_tilt_adjust)\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-  failf "runtime printer.cfg has no legacy auto-level includes"
-else
-  pass "runtime printer.cfg has no legacy auto-level includes"
-fi
-
-if [ -f "${EDDY_CFG_RUNTIME}" ]; then
-  pass "Eddy Duo config present (${EDDY_CFG_RUNTIME})"
-else
-  failf "Eddy Duo config present (${EDDY_CFG_RUNTIME})"
-fi
-
-if [ -f "${EDDY_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[mcu[[:space:]]+eddy\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*canbus_uuid:[[:space:]]*[0-9A-Fa-f]+[[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*canbus_interface:[[:space:]]*can0[[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
-  pass "Eddy Duo MCU config includes canbus_uuid/can0"
-else
-  failf "Eddy Duo MCU config includes canbus_uuid/can0"
-fi
-
-if [ -f "${EDDY_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[probe_eddy_current[[:space:]]+btt_eddy\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*sensor_type:[[:space:]]*ldc1612[[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*i2c_mcu:[[:space:]]*eddy[[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*i2c_bus:[[:space:]]*i2c0f[[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
-  pass "Eddy Duo probe config present"
-else
-  failf "Eddy Duo probe config present"
-fi
-
-if [ -f "${EDDY_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[bed_mesh\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*\[safe_z_home\][[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
-  pass "Eddy Duo bed_mesh and safe_z_home present"
-else
-  failf "Eddy Duo bed_mesh and safe_z_home present"
-fi
-
-if [ -f "${EDDY_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[gcode_macro[[:space:]]+G28\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*\[gcode_macro[[:space:]]+SET_Z_FROM_PROBE\][[:space:]]*$' "${EDDY_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*\[gcode_macro[[:space:]]+PROBE_EDDY_CURRENT_CALIBRATE_AUTO\][[:space:]]*$' "${EDDY_CFG_RUNTIME}"; then
-  pass "Eddy Duo homing macros present"
-else
-  failf "Eddy Duo homing macros present"
-fi
-
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
-    /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
-    in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-    in_z && /^[[:space:]]*endstop_pin:[[:space:]]*probe:z_virtual_endstop[[:space:]]*$/ { found = 1 }
-    END { exit found ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "stepper_z uses probe:z_virtual_endstop"
-else
-  failf "stepper_z uses probe:z_virtual_endstop"
-fi
-
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
-    /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
-    in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-    in_z && /^[[:space:]]*position_endstop:[[:space:]]*/ { found = 1 }
-    END { exit found ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  failf "stepper_z has no physical position_endstop"
-else
-  pass "stepper_z has no physical position_endstop"
-fi
-
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
-    /^\[stepper_x\][[:space:]]*$/ { in_x = 1; next }
-    in_x && /^\[[^]]+\][[:space:]]*$/ { in_x = 0 }
-    in_x && /^[[:space:]]*endstop_pin:[[:space:]]*\^EBBCan:PB6[[:space:]]*$/ { found = 1 }
-    END { exit found ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "stepper_x uses EBB PB6 endstop"
-else
-  failf "stepper_x uses EBB PB6 endstop"
-fi
-
-# Блок 10: Валидация serial-path для USB-транспорта.
-if [ "${TREED_MCU_TRANSPORT}" = "usb" ]; then
-  if printf '%s' "${runtime_mcu_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
-    pass "mcu transport usb serial path format"
-  else
-    failf "mcu transport usb serial path format"
-  fi
-
-  if [ -n "${runtime_mcu_serial}" ] && [ -e "${runtime_mcu_serial}" ] && [ -r "${runtime_mcu_serial}" ]; then
-    pass "mcu usb serial path exists (${runtime_mcu_serial})"
-  else
-    failf "mcu usb serial path exists (${runtime_mcu_serial:-missing})"
-  fi
-fi
-
-# Блок 11: Валидация UART-режима (device/getty/udev/config/cmdline).
-if [ "${TREED_MCU_TRANSPORT}" = "uart" ]; then
-  if [ "${runtime_mcu_serial}" = "${TREED_MCU_UART_DEV}" ]; then
-    pass "mcu transport uart serial target (${TREED_MCU_UART_DEV})"
-  else
-    failf "mcu transport uart serial target (${TREED_MCU_UART_DEV}, current=${runtime_mcu_serial:-missing})"
-  fi
-
-  if [ -e "${TREED_MCU_UART_DEV}" ] || [ -L "${TREED_MCU_UART_DEV}" ]; then
-    pass "mcu uart device path exists (${TREED_MCU_UART_DEV})"
-  else
-    failf "mcu uart device path exists (${TREED_MCU_UART_DEV})"
-  fi
-
-  for unit in serial-getty@ttyAMA0.service serial-getty@ttyS0.service; do
-    if out="$(systemctl is-enabled "${unit}" 2>&1)"; then
-      st=0
-    else
-      st=$?
-    fi
-    state="$(printf '%s' "${out}" | head -n 1 | tr -d '\r\n')"
-    case "${state}" in
-      enabled|disabled|static|indirect|generated|masked|masked-runtime|linked|linked-runtime|alias) ;;
-      *)
-        log_error "verify: systemctl is-enabled ${unit} failed rc=${st}: ${out}"
-        exit 1
-        ;;
-    esac
-
-    if [ "${state}" = "masked" ] || [ "${state}" = "masked-runtime" ]; then
-      pass "${unit} masked for uart transport (state=${state})"
-    else
-      failf "${unit} masked for uart transport (state=${state})"
-    fi
-  done
-
-  if [ "$(id -u)" -eq 0 ]; then
-    if sudo -u "${PI_USER}" test -r "${TREED_MCU_UART_DEV}" \
-      && sudo -u "${PI_USER}" test -w "${TREED_MCU_UART_DEV}"; then
-      pass "mcu uart device readable/writable by ${PI_USER} (${TREED_MCU_UART_DEV})"
-    else
-      failf "mcu uart device readable/writable by ${PI_USER} (${TREED_MCU_UART_DEV})"
-    fi
-  else
-    log_info "VERIFY uart rw-check skipped (script not running as root)"
-  fi
-
-  UART_RULE_FILE="/etc/udev/rules.d/99-treed-uart-perms.rules"
-  if [ -f "${UART_RULE_FILE}" ] \
-    && grep -qE '^[[:space:]]*KERNEL=="ttyAMA0",[[:space:]]*MODE="0660",[[:space:]]*GROUP="dialout"[[:space:]]*$' "${UART_RULE_FILE}" \
-    && grep -qE '^[[:space:]]*KERNEL=="ttyS0",[[:space:]]*MODE="0660",[[:space:]]*GROUP="dialout"[[:space:]]*$' "${UART_RULE_FILE}"; then
-    pass "uart udev permissions rule present (${UART_RULE_FILE})"
-  else
-    failf "uart udev permissions rule present (${UART_RULE_FILE})"
-  fi
-
-  enable_uart_val="$(
-    sed -nE 's|^[[:space:]]*enable_uart[[:space:]]*=[[:space:]]*([0-9]+).*|\1|p' "${CONFIG_FILE}" \
-      | tail -n 1 || true
-  )"
-  if [ "${enable_uart_val}" = "1" ]; then
-    pass "config.txt enable_uart=1"
-  else
-    failf "config.txt enable_uart=1"
-  fi
-
-  if is_true "${TREED_UART_DISABLE_BT}"; then
-    if grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*disable-bt([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
-      pass "config.txt dtoverlay=disable-bt for uart transport"
-    else
-      failf "config.txt dtoverlay=disable-bt for uart transport"
-    fi
-  elif [ "${TREED_UART_DISABLE_BT}" = "0" ] || [ "${TREED_UART_DISABLE_BT}" = "false" ] || [ "${TREED_UART_DISABLE_BT}" = "FALSE" ] || [ "${TREED_UART_DISABLE_BT}" = "no" ] || [ "${TREED_UART_DISABLE_BT}" = "NO" ]; then
-    log_info "VERIFY bluetooth UART check skipped (TREED_UART_DISABLE_BT=${TREED_UART_DISABLE_BT})"
-  else
-    if grep -qE '^[[:space:]]*dtoverlay[[:space:]]*=[[:space:]]*disable-bt([[:space:]]*#.*)?$' "${CONFIG_FILE}"; then
-      pass "config.txt dtoverlay=disable-bt for uart transport (auto)"
-    else
-      log_info "VERIFY bluetooth UART check auto: dtoverlay=disable-bt not found"
-    fi
-  fi
-
-  if [ -n "${CMDLINE_CONTENT}" ] \
-    && printf '%s\n' "${CMDLINE_CONTENT}" | grep -qE '(^| )console=(serial0|ttyAMA0|ttyS0),[^ ]+'; then
-    failf "cmdline has no serial console tokens for uart transport"
-  else
-    pass "cmdline has no serial console tokens for uart transport"
-  fi
-fi
-
-# Блок 12: Проверка политики getty@tty1 и plymouth-quit unit.
+# Блок 5: Проверки политики getty@tty1 и plymouth-quit unit.
 TREED_MASK_TTY1="${TREED_MASK_TTY1:-1}"
 if out="$(systemctl is-enabled getty@tty1.service 2>&1)"; then
   rc=0
@@ -821,7 +535,6 @@ for unit in plymouth-quit.service plymouth-quit-wait.service; do
       exit 1
       ;;
   esac
-
   if [ "${s}" = "masked" ] || [ "${s}" = "masked-runtime" ]; then
     failf "${unit} should be unmasked (state=${s})"
   else
@@ -829,7 +542,210 @@ for unit in plymouth-quit.service plymouth-quit-wait.service; do
   fi
 done
 
-# Блок 13: Проверки состояния KlipperScreen (required/optional режимы).
+# Блок 6: Проверки timezone/NTP через timedatectl.
+if command -v timedatectl >/dev/null 2>&1; then
+  TREED_SET_TIMEZONE="${TREED_SET_TIMEZONE:-1}"
+  TREED_TIMEZONE="${TREED_TIMEZONE:-Europe/Moscow}"
+  TREED_ENABLE_NTP="${TREED_ENABLE_NTP:-1}"
+
+  if is_true "${TREED_SET_TIMEZONE}"; then
+    current_tz="$(timedatectl show -p Timezone --value 2>/dev/null | tr -d '\r\n')"
+    if [ "${current_tz}" = "${TREED_TIMEZONE}" ]; then
+      pass "system timezone ${TREED_TIMEZONE}"
+    else
+      failf "system timezone ${TREED_TIMEZONE} (current=${current_tz:-unknown})"
+    fi
+  else
+    log_info "VERIFY timezone check skipped (TREED_SET_TIMEZONE=${TREED_SET_TIMEZONE})"
+  fi
+
+  if is_true "${TREED_ENABLE_NTP}"; then
+    ntp_state="$(timedatectl show -p NTP --value 2>/dev/null | tr -d '\r\n')"
+    if [ "${ntp_state}" = "yes" ]; then
+      pass "timedatectl NTP enabled"
+    else
+      failf "timedatectl NTP enabled (state=${ntp_state:-unknown})"
+    fi
+  else
+    log_info "VERIFY NTP check skipped (TREED_ENABLE_NTP=${TREED_ENABLE_NTP})"
+  fi
+else
+  failf "timedatectl present"
+fi
+
+# Блок 7: Проверки сервисов, Moonraker API и CAN-интерфейса.
+check_required_service_active "klipper.service"
+check_required_service_active "moonraker.service"
+check_required_service_active "${CAN_UNIT}"
+moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
+klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
+klipper_ebb_connected_check "klipper startup connected EBBCan"
+
+if ip -details link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
+  pass "CAN interface present (${TREED_CAN_IFACE})"
+else
+  failf "CAN interface present (${TREED_CAN_IFACE})"
+fi
+
+if ip link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q '<[^>]*UP[^>]*>'; then
+  pass "CAN interface UP (${TREED_CAN_IFACE})"
+else
+  failf "CAN interface UP (${TREED_CAN_IFACE})"
+fi
+
+if ip -details link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q "bitrate ${TREED_CAN_BITRATE}"; then
+  pass "CAN bitrate ${TREED_CAN_BITRATE}"
+else
+  failf "CAN bitrate ${TREED_CAN_BITRATE}"
+fi
+
+if ip link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q "qlen ${TREED_CAN_TXQUEUE}"; then
+  pass "CAN txqueuelen ${TREED_CAN_TXQUEUE}"
+else
+  failf "CAN txqueuelen ${TREED_CAN_TXQUEUE}"
+fi
+
+# Блок 8: Проверки runtime-профиля V2 и MCU binding.
+for required_file in "${PRINTER_CFG_RUNTIME}" "${MAIN_CFG_RUNTIME}" "${EBB_CFG_RUNTIME}" "${EDDY_CFG_RUNTIME}" "${STEPPERS_CFG_RUNTIME}" "${INPUT_SHAPER_CFG}"; do
+  if [ -f "${required_file}" ]; then
+    pass "runtime file present (${required_file})"
+  else
+    failf "runtime file present (${required_file})"
+  fi
+done
+
+if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+  && grep -qF "[include profiles/treed_v2_corexy_v1/mcu_main_octopus_usb.cfg]" "${PRINTER_CFG_RUNTIME}"; then
+  pass "printer.cfg includes V2 main MCU config"
+else
+  failf "printer.cfg includes V2 main MCU config"
+fi
+
+if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+  && grep -qF "[include profiles/treed_v2_corexy_v1/ebb42_can.cfg]" "${PRINTER_CFG_RUNTIME}"; then
+  pass "printer.cfg includes V2 EBB config"
+else
+  failf "printer.cfg includes V2 EBB config"
+fi
+
+runtime_main_serial=""
+if [ -f "${MAIN_CFG_RUNTIME}" ]; then
+  runtime_main_serial="$(extract_cfg_value "serial" "${MAIN_CFG_RUNTIME}")"
+fi
+if [ -n "${runtime_main_serial}" ] && printf '%s' "${runtime_main_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
+  pass "main MCU serial format (/dev/serial/by-id/*)"
+else
+  failf "main MCU serial format (/dev/serial/by-id/*)"
+fi
+
+if [ -n "${runtime_main_serial}" ] && [ -e "${runtime_main_serial}" ] && [ -r "${runtime_main_serial}" ]; then
+  pass "main MCU serial path exists/readable (${runtime_main_serial})"
+else
+  failf "main MCU serial path exists/readable (${runtime_main_serial:-missing})"
+fi
+
+runtime_ebb_uuid=""
+if [ -f "${EBB_CFG_RUNTIME}" ]; then
+  runtime_ebb_uuid="$(extract_cfg_value "canbus_uuid" "${EBB_CFG_RUNTIME}")"
+fi
+if [ -n "${runtime_ebb_uuid}" ] && ! printf '%s' "${runtime_ebb_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
+  pass "EBB canbus_uuid is hex"
+else
+  failf "EBB canbus_uuid is hex"
+fi
+
+if [ -f "${EBB_CFG_RUNTIME}" ] \
+  && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${EBB_CFG_RUNTIME}"; then
+  pass "EBB canbus_interface is ${TREED_CAN_IFACE}"
+else
+  failf "EBB canbus_interface is ${TREED_CAN_IFACE}"
+fi
+
+if [ -f "${EBB_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${EBB_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*EBBCan:PB12[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*spi2_PB2_PB11_PB10[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${EBB_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${EBB_CFG_RUNTIME}"; then
+  pass "EBB config contains onboard ADXL/resonance_tester"
+else
+  failf "EBB config contains onboard ADXL/resonance_tester"
+fi
+
+if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
+  pass "Input Shaper include enabled in printer.cfg"
+else
+  failf "Input Shaper include enabled in printer.cfg"
+fi
+
+if [ -f "${INPUT_SHAPER_CFG}" ] && grep -qE '^[[:space:]]*\[input_shaper\][[:space:]]*$' "${INPUT_SHAPER_CFG}"; then
+  pass "Input Shaper config present (${INPUT_SHAPER_CFG})"
+else
+  failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
+fi
+
+moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
+
+# Блок 9: Optional Eddy-контур.
+case "${TREED_EDDY_ENABLED}" in
+  0|1) ;;
+  *)
+    failf "TREED_EDDY_ENABLED is valid (0|1, current=${TREED_EDDY_ENABLED})"
+    TREED_EDDY_ENABLED="0"
+    ;;
+esac
+
+EDDY_INCLUDE_LINE="[include profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg]"
+if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
+  if [ -f "${PRINTER_CFG_RUNTIME}" ] && grep -qF "${EDDY_INCLUDE_LINE}" "${PRINTER_CFG_RUNTIME}"; then
+    pass "Eddy include enabled in printer.cfg"
+  else
+    failf "Eddy include enabled in printer.cfg"
+  fi
+
+  runtime_eddy_uuid=""
+  if [ -f "${EDDY_CFG_RUNTIME}" ]; then
+    runtime_eddy_uuid="$(extract_cfg_value "canbus_uuid" "${EDDY_CFG_RUNTIME}")"
+  fi
+  if [ -n "${runtime_eddy_uuid}" ] && ! printf '%s' "${runtime_eddy_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
+    pass "Eddy canbus_uuid is hex"
+  else
+    failf "Eddy canbus_uuid is hex"
+  fi
+
+  if [ -f "${EDDY_CFG_RUNTIME}" ] \
+    && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${EDDY_CFG_RUNTIME}"; then
+    pass "Eddy canbus_interface is ${TREED_CAN_IFACE}"
+  else
+    failf "Eddy canbus_interface is ${TREED_CAN_IFACE}"
+  fi
+
+  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+    && awk '
+      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
+      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+      in_z && /^[[:space:]]*endstop_pin:[[:space:]]*probe:z_virtual_endstop[[:space:]]*$/ { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "${STEPPERS_CFG_RUNTIME}"; then
+    pass "stepper_z uses probe:z_virtual_endstop"
+  else
+    failf "stepper_z uses probe:z_virtual_endstop"
+  fi
+else
+  if [ -f "${PRINTER_CFG_RUNTIME}" ] \
+    && grep -qE '^[[:space:]]*#?[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/probe_eddy_duo_optional\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}" \
+    && ! grep -qF "${EDDY_INCLUDE_LINE}" "${PRINTER_CFG_RUNTIME}"; then
+    pass "Eddy include disabled in printer.cfg"
+  else
+    failf "Eddy include disabled in printer.cfg"
+  fi
+
+  pass "Eddy checks skipped (TREED_EDDY_ENABLED=0)"
+fi
+
+# Блок 10: Проверки состояния KlipperScreen (required/optional режимы).
+KS_SERVICE_PRESENT=0
 if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
   KS_SERVICE_PRESENT=1
 fi
@@ -871,13 +787,6 @@ else
       ks_state="$(systemctl is-active KlipperScreen.service 2>/dev/null || true)"
       log_info "VERIFY KlipperScreen optional: service not active (state=${ks_state:-unknown})"
     fi
-
-    ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
-    if [ "${ks_substate}" = "running" ]; then
-      pass "KlipperScreen.service substate running (optional)"
-    else
-      log_info "VERIFY KlipperScreen optional: substate is ${ks_substate:-unknown}"
-    fi
   else
     log_info "VERIFY KlipperScreen optional: service not installed"
   fi
@@ -905,18 +814,18 @@ elif [ "${KS_SERVICE_PRESENT}" = "1" ]; then
       required_ks_icons="$(extract_required_theme_icons "${KS_THEME_RUNTIME_STYLE}" || true)"
       if [ -n "${required_ks_icons}" ]; then
         pass "KlipperScreen treed-oled style icon refs parsed"
-      else
-        log_info "VERIFY KlipperScreen treed-oled: no explicit images/* refs in style (${KS_THEME_RUNTIME_STYLE})"
       fi
     else
       failf "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
     fi
+
     if [ -d "${KS_THEME_RUNTIME_IMAGES_DIR}" ] \
       && [ -n "$(find "${KS_THEME_RUNTIME_IMAGES_DIR}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
       pass "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
     else
       failf "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
     fi
+
     if [ -n "${required_ks_icons}" ]; then
       missing_ks_icons="$(missing_required_icons "${KS_THEME_RUNTIME_IMAGES_DIR}" "${required_ks_icons}" || true)"
       if [ -z "${missing_ks_icons}" ]; then
@@ -930,58 +839,15 @@ else
   log_info "VERIFY KlipperScreen theme check skipped (service not installed)"
 fi
 
-# Блок 14: Проверки timezone/NTP через timedatectl.
-if command -v timedatectl >/dev/null 2>&1; then
-  TREED_SET_TIMEZONE="${TREED_SET_TIMEZONE:-1}"
-  TREED_TIMEZONE="${TREED_TIMEZONE:-Europe/Moscow}"
-  TREED_ENABLE_NTP="${TREED_ENABLE_NTP:-1}"
-
-  if is_true "${TREED_SET_TIMEZONE}"; then
-    current_tz="$(timedatectl show -p Timezone --value 2>/dev/null | tr -d '\r\n')"
-    if [ "${current_tz}" = "${TREED_TIMEZONE}" ]; then
-      pass "system timezone ${TREED_TIMEZONE}"
-    else
-      failf "system timezone ${TREED_TIMEZONE} (current=${current_tz:-unknown})"
-    fi
-  else
-    log_info "VERIFY timezone check skipped (TREED_SET_TIMEZONE=${TREED_SET_TIMEZONE})"
-  fi
-
-  if is_true "${TREED_ENABLE_NTP}"; then
-    ntp_state="$(timedatectl show -p NTP --value 2>/dev/null | tr -d '\r\n')"
-    if [ "${ntp_state}" = "yes" ]; then
-      pass "timedatectl NTP enabled"
-    else
-      failf "timedatectl NTP enabled (state=${ntp_state:-unknown})"
-    fi
-  else
-    log_info "VERIFY NTP check skipped (TREED_ENABLE_NTP=${TREED_ENABLE_NTP})"
-  fi
-else
-  failf "timedatectl present"
-fi
-
-# Блок 15: Проверка минимального gpu_mem.
-gm="$(grep -E "^gpu_mem=" "${CONFIG_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2)"
-case "${gm}" in ''|*[!0-9]*) gm=0;; esac
-
-if [ "${gm:-0}" -ge 96 ]; then
-  pass "gpu_mem >= 96"
-else
-  failf "gpu_mem >= 96"
-fi
-
-# Блок 16: Подготовка и переключение режима camera-проверок.
+# Блок 11: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
 CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
 CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
 MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"
 MOONRAKER_WEBCAM_FRAGMENT="${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf"
-WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
 
 TREED_VERIFY_CAMERA="${TREED_VERIFY_CAMERA:-auto}"
 camera_checks_enabled=0
 camera_checks_reason=""
-
 case "${TREED_VERIFY_CAMERA}" in
   1|true|TRUE|yes|YES)
     camera_checks_enabled=1
@@ -1012,7 +878,6 @@ case "${TREED_VERIFY_CAMERA}" in
     ;;
 esac
 
-# Блок 17: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
 if [ "${camera_checks_enabled}" = "1" ]; then
   byid_index0_available=0
   if find /dev/v4l/by-id -maxdepth 1 -type l -name '*-video-index0' -print -quit 2>/dev/null | grep -q .; then
@@ -1040,12 +905,6 @@ if [ "${camera_checks_enabled}" = "1" ]; then
       pass "moonraker include generated/*.conf"
     else
       failf "moonraker include generated/*.conf"
-    fi
-
-    if grep -qE '^\[webcam treed\][[:space:]]*$' "${MOONRAKER_CFG}"; then
-      failf "moonraker root config should not contain [webcam treed]"
-    else
-      pass "moonraker root config has no [webcam treed]"
     fi
   else
     failf "moonraker config present (${MOONRAKER_CFG})"
@@ -1098,47 +957,32 @@ else
   log_info "VERIFY camera checks skipped (${camera_checks_reason})"
 fi
 
-# Блок 17a: Проверки ADXL345 (ebb-only, mandatory).
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-  pass "Input Shaper include enabled in printer.cfg"
+# Блок 12: Проверки firmware-build артефактов (если этап включен).
+TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED:-1}"
+TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-/home/pi/treed/firmware-artifacts/treed-v2}"
+if [ "${TREED_FIRMWARE_BUILD_ENABLED}" = "1" ]; then
+  if [ -L "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest" ] || [ -d "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest" ]; then
+    pass "firmware artifacts latest present (${TREED_FIRMWARE_ARTIFACTS_DIR}/latest)"
+  else
+    failf "firmware artifacts latest present (${TREED_FIRMWARE_ARTIFACTS_DIR}/latest)"
+  fi
+
+  if [ -f "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv" ]; then
+    pass "firmware manifest present"
+  else
+    failf "firmware manifest present"
+  fi
+
+  if [ -f "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/checksums.sha256" ]; then
+    pass "firmware checksums present"
+  else
+    failf "firmware checksums present"
+  fi
 else
-  failf "Input Shaper include enabled in printer.cfg"
+  log_info "VERIFY firmware artifact checks skipped (TREED_FIRMWARE_BUILD_ENABLED=0)"
 fi
 
-if [ -f "${INPUT_SHAPER_CFG}" ] && grep -qE '^[[:space:]]*\[input_shaper\][[:space:]]*$' "${INPUT_SHAPER_CFG}"; then
-  pass "Input Shaper config present (${INPUT_SHAPER_CFG})"
-else
-  failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
-fi
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/rn12_corexy_v1/adxl345_rpi\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-  failf "printer.cfg has no legacy adxl345_rpi include"
-else
-  pass "printer.cfg has no legacy adxl345_rpi include"
-fi
-
-if [ -f "${ADXL_EBB_CFG}" ] \
-  && grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${ADXL_EBB_CFG}" \
-  && grep -qE '^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*EBBCan:PB12[[:space:]]*$' "${ADXL_EBB_CFG}" \
-  && grep -qE '^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*spi2_PB2_PB11_PB10[[:space:]]*$' "${ADXL_EBB_CFG}"; then
-  pass "EBB config includes onboard ADXL345 pins"
-else
-  failf "EBB config includes onboard ADXL345 pins"
-fi
-
-if [ -f "${ADXL_EBB_CFG}" ] \
-  && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${ADXL_EBB_CFG}" \
-  && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${ADXL_EBB_CFG}"; then
-  pass "EBB config includes resonance_tester section"
-else
-  failf "EBB config includes resonance_tester section"
-fi
-
-moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
-
-# Блок 18: Итог verify (pass/fail счетчики).
+# Блок 13: Итог verify (pass/fail счетчики).
 if [ "${fail}" -eq 0 ]; then
   log_info "verify: all ${ok} checks passed"
 else

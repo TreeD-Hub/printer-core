@@ -40,38 +40,59 @@ export PI_HOME
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
-# Блок 5: Определение boot-путей (BOOT_DIR/cmdline.txt/config.txt).
+# Блок 5: Определение boot-backend и путей (RPi/Armbian aware).
 BOOT_DIR="$(detect_boot_dir)"
+TREED_BOOT_BACKEND="$(detect_boot_backend "${BOOT_DIR}")"
 CMDLINE_FILE="$(detect_cmdline_file "${BOOT_DIR}")"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
+ARMBIAN_ENV_FILE="$(detect_armbian_env_file "${BOOT_DIR}")"
 
 # Блок 6: Нормализация BOOT_DIR до фактического каталога boot-файлов.
-# Если cmdline/config оказались в одном каталоге, считаем его источником правды.
 if [ -n "${CMDLINE_FILE}" ] && [ -n "${CONFIG_FILE}" ]; then
   cmd_dir="$(dirname "${CMDLINE_FILE}")"
   cfg_dir="$(dirname "${CONFIG_FILE}")"
   if [ "${cmd_dir}" = "${cfg_dir}" ]; then
     BOOT_DIR="${cmd_dir}"
+  elif [ -n "${cfg_dir}" ]; then
+    BOOT_DIR="${cfg_dir}"
   fi
-elif [ -n "${CMDLINE_FILE}" ]; then
-  BOOT_DIR="$(dirname "${CMDLINE_FILE}")"
 elif [ -n "${CONFIG_FILE}" ]; then
   BOOT_DIR="$(dirname "${CONFIG_FILE}")"
+elif [ -n "${CMDLINE_FILE}" ]; then
+  BOOT_DIR="$(dirname "${CMDLINE_FILE}")"
+elif [ -n "${ARMBIAN_ENV_FILE}" ]; then
+  BOOT_DIR="$(dirname "${ARMBIAN_ENV_FILE}")"
 fi
 
-# Блок 7: Жесткая валидация boot-файлов (fail-fast без silent skip).
-if [ -z "${CMDLINE_FILE}" ] || [ ! -f "${CMDLINE_FILE}" ]; then
-  echo "[loader] ERROR: cmdline.txt not found (BOOT_DIR=${BOOT_DIR})" >&2
-  exit 1
-fi
-if [ -z "${CONFIG_FILE}" ] || [ ! -f "${CONFIG_FILE}" ]; then
-  echo "[loader] ERROR: config.txt not found (BOOT_DIR=${BOOT_DIR})" >&2
-  exit 1
-fi
+# Блок 7: Валидация boot-backend (fail-fast без legacy-only ограничений).
+case "${TREED_BOOT_BACKEND}" in
+  rpi)
+    if [ -z "${CMDLINE_FILE}" ] || [ ! -f "${CMDLINE_FILE}" ]; then
+      echo "[loader] ERROR: rpi backend requires cmdline.txt (BOOT_DIR=${BOOT_DIR})" >&2
+      exit 1
+    fi
+    if [ -z "${CONFIG_FILE}" ] || [ ! -f "${CONFIG_FILE}" ]; then
+      echo "[loader] ERROR: rpi backend requires config.txt (BOOT_DIR=${BOOT_DIR})" >&2
+      exit 1
+    fi
+    ;;
+  armbian)
+    if [ -z "${ARMBIAN_ENV_FILE}" ] || [ ! -f "${ARMBIAN_ENV_FILE}" ]; then
+      echo "[loader] ERROR: armbian backend requires /boot/armbianEnv.txt (BOOT_DIR=${BOOT_DIR})" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "[loader] ERROR: unsupported boot backend '${TREED_BOOT_BACKEND}' (expected: rpi|armbian)" >&2
+    exit 1
+    ;;
+esac
 
 export BOOT_DIR
+export TREED_BOOT_BACKEND
 export CMDLINE_FILE
 export CONFIG_FILE
+export ARMBIAN_ENV_FILE
 
 # Блок 8: Глобальные режимы оркестрации (maintenance/deploy mode).
 TREED_MAINTENANCE_MODE="${TREED_MAINTENANCE_MODE:-1}"
@@ -149,25 +170,26 @@ trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BAS
 STEPS=(
   # Предварительные проверки и подготовка окружения.
   "check-env"                # Контракт окружения: root, PI_USER/PI_HOME, OS sanity.
-  "detect-rpi"               # Выявление boot-путей и модели RPi для последующих шагов.
+  "detect-rpi"               # Host-aware определение boot backend и boot-файлов.
   "timezone-sync"            # Синхронизация timezone/NTP для корректного времени UI/логов.
   "maintenance-stop"         # Остановка runtime-сервисов перед изменением конфигов.
 
   # Системная база и boot-контур.
   "packages-core"            # Установка базовых пакетов provisioning-контура.
+  "can-setup"                # Подготовка и подъем CAN-интерфейса host (U2C -> can0).
+  "firmware-build"           # Сборка firmware-артефактов main/EBB/(Eddy) без автопрошивки.
   "boot-hdmi-config"         # Управляемый HDMI-блок + контроль gpu_mem.
-  "rpi-uart-config"          # Настройка UART-транспорта MCU (enable_uart/getty/udev).
   "plymouth-theme-install"   # Установка темы TreeD в системный каталог Plymouth.
   "plymouth-initramfs"       # Пересборка initramfs с активной темой Plymouth.
   "plymouth-initramfs-config" # Привязка initramfs строки в config.txt.
-  "plymouth-cmdline"         # Нормализация kernel cmdline (splash/UART).
+  "plymouth-cmdline"         # Нормализация kernel cmdline (splash/noise reduction).
   "plymouth-systemd"         # Политика getty@tty1 и unit-цепочки Plymouth.
 
   # Конфигурация Klipper/Moonraker/камера/UI.
   "klipper-sync"             # Репозиторные конфиги -> staging: ~/treed/klipper.
-  "klipper-profiles"         # Применение профиля RN12 и serial-path MCU в staging.
+  "klipper-profiles"         # Применение профиля V2 и идентификаторов main/CAN MCU в staging.
   "klipper-core"             # Раскладка staging -> runtime: ~/printer_data/config.
-  "klipper-adxl-rpi"         # Обязательная интеграция ADXL345/Input Shaper (только onboard EBB42).
+  "klipper-adxl-rpi"         # Обязательная интеграция ADXL345/Input Shaper (onboard EBB42).
   "klipper-anti-shutdown"    # Сброс MCU shutdown при обнаружении после раскладки.
   "moonraker-config"         # Деплой moonraker.conf/base/generated и shell-компонента.
   "crowsnest-webcam"         # Деплой камеры (crowsnest + moonraker webcam fragment).
@@ -215,7 +237,8 @@ run_step_script() {
 
 # Блок 17: Стартовая диагностика оркестратора.
 log_info "TreeD loader starting"
-log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, CMDLINE_FILE=${CMDLINE_FILE}"
+log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, BOOT_BACKEND=${TREED_BOOT_BACKEND}"
+log_info "BOOT_DIR=${BOOT_DIR}, CMDLINE_FILE=${CMDLINE_FILE:-<none>}, CONFIG_FILE=${CONFIG_FILE:-<none>}, ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE:-<none>}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
 log_info "TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE}, TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}, TREED_DEPLOY_BRANCH=${TREED_DEPLOY_BRANCH:-unknown}"
 

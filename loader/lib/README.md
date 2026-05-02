@@ -25,15 +25,18 @@
 
 ## `rpi.sh`
 
-Функции для RPi/boot-детекта:
+Функции для boot-детекта (историческое имя файла сохранено):
 
-- `detect_rpi_model` — модель RPi.
+- `detect_host_model` / `detect_rpi_model` — best-effort идентификатор платформы.
 - `is_mounted` — проверка монтирования каталога.
 - `detect_boot_dir` — выбор актуального boot-каталога.
+- `detect_boot_backend` — определение backend (`rpi|armbian`).
 - `detect_cmdline_file` — поиск `cmdline.txt`.
 - `detect_config_file` — поиск `config.txt`.
+- `detect_armbian_env_file` — поиск `armbianEnv.txt`.
+- `get_armbian_env_value` / `set_armbian_env_value` — безопасное чтение/запись `key=value` в `armbianEnv.txt`.
 
-Используется в шагах, которые правят boot-файлы и cmdline.
+Используется в шагах, которые правят boot-файлы/cmdline/armbianEnv в host-aware режиме.
 
 ## `plymouth.sh`
 
