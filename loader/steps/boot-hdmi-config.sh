@@ -49,6 +49,7 @@ BOOT_DIR="$(detect_boot_dir)"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
 ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
+EXTLINUX_FILE="${EXTLINUX_FILE:-$(detect_extlinux_file "${BOOT_DIR}")}"
 
 ensure_root
 
@@ -86,6 +87,52 @@ if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
   log_info "boot-hdmi-config: armbian backend updated ${ARMBIAN_ENV_FILE}"
   log_info "boot-hdmi-config: verbosity=${TREED_ARMBIAN_VERBOSITY}, bootlogo=${TREED_ARMBIAN_BOOTLOGO}, console=${TREED_ARMBIAN_CONSOLE}"
   log_info "boot-hdmi-config: extraargs includes video=${TREED_ARMBIAN_VIDEO_MODE}"
+  log_info "boot-hdmi-config: OK"
+  exit 0
+fi
+
+# Блок 2b: Extlinux backend — нормализация video-токена в append строках.
+if [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
+  TREED_ARMBIAN_VIDEO_MODE="${TREED_ARMBIAN_VIDEO_MODE:-HDMI-A-1:960x544@60}"
+
+  if [ -z "${EXTLINUX_FILE}" ] || [ ! -f "${EXTLINUX_FILE}" ]; then
+    log_error "boot-hdmi-config: extlinux backend requires extlinux.conf"
+    exit 1
+  fi
+
+  backup_file_once "${EXTLINUX_FILE}"
+  tmp="$(mktemp)"
+  awk -v video_token="video=${TREED_ARMBIAN_VIDEO_MODE}" '
+    function upsert_video(args,      i, n, a, t, out) {
+      out = ""
+      n = split(args, a, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        t = a[i]
+        if (t == "" || t ~ /^video=/) {
+          continue
+        }
+        out = (out == "" ? t : out " " t)
+      }
+      out = (out == "" ? video_token : out " " video_token)
+      return out
+    }
+    {
+      if ($0 ~ /^[[:space:]]*append[[:space:]]+/) {
+        prefix = $0
+        sub(/append[[:space:]]+.*/, "", prefix)
+        args = $0
+        sub(/^[[:space:]]*append[[:space:]]+/, "", args)
+        print prefix "append " upsert_video(args)
+        next
+      }
+      print
+    }
+  ' "${EXTLINUX_FILE}" > "${tmp}"
+  cat "${tmp}" > "${EXTLINUX_FILE}"
+  rm -f "${tmp}"
+
+  log_info "boot-hdmi-config: extlinux backend updated ${EXTLINUX_FILE}"
+  log_info "boot-hdmi-config: append includes video=${TREED_ARMBIAN_VIDEO_MODE}"
   log_info "boot-hdmi-config: OK"
   exit 0
 fi

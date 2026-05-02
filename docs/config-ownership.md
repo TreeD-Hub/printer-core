@@ -14,28 +14,29 @@ Entrypoint:
 3. `timezone-sync`
 4. `maintenance-stop`
 5. `packages-core`
-6. `can-setup`
-7. `firmware-build`
-8. `boot-hdmi-config`
-9. `plymouth-theme-install`
-10. `plymouth-initramfs`
-11. `plymouth-initramfs-config`
-12. `plymouth-cmdline`
-13. `plymouth-systemd`
-14. `klipper-sync`
-15. `klipper-profiles`
-16. `klipper-core`
-17. `klipper-adxl-rpi`
-18. `klipper-anti-shutdown`
-19. `moonraker-config`
-20. `crowsnest-webcam`
-21. `treed-cam`
-22. `klipper-mainsail-theme`
-23. `klipperscreen-install`
-24. `klipperscreen-theme`
-25. `klipperscreen-integr`
-26. `maintenance-start`
-27. `verify`
+6. `runtime-bootstrap`
+7. `can-setup`
+8. `firmware-build`
+9. `boot-hdmi-config`
+10. `plymouth-theme-install`
+11. `plymouth-initramfs`
+12. `plymouth-initramfs-config`
+13. `plymouth-cmdline`
+14. `plymouth-systemd`
+15. `klipper-sync`
+16. `klipper-profiles`
+17. `klipper-core`
+18. `klipper-adxl-rpi`
+19. `klipper-anti-shutdown`
+20. `moonraker-config`
+21. `crowsnest-webcam`
+22. `treed-cam`
+23. `klipper-mainsail-theme`
+24. `klipperscreen-install`
+25. `klipperscreen-theme`
+26. `klipperscreen-integr`
+27. `maintenance-start`
+28. `verify`
 
 ## 2. Слои и source of truth
 
@@ -79,7 +80,7 @@ CAN-host слой:
 ## 4. Контракт V2: main/CAN/Eddy
 
 Required:
-- `TREED_EBB_CANBUS_UUID`
+- `TREED_EBB_CANBUS_UUID` (или успешный auto-detect через `canbus_query` при единственном UUID на шине)
 
 Optional:
 - `TREED_MAIN_MCU_SERIAL_BY_ID`

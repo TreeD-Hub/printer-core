@@ -38,8 +38,14 @@ initrd_dst="${BOOT_DIR}/initrd.img-$(uname -r)"
 # Блок 4: Копирование initrd в boot-раздел.
 # Копируем собранный initrd в boot-раздел, откуда его читает прошивка RPi.
 if [ -f "${initrd_src}" ]; then
-  cp -f "${initrd_src}" "${initrd_dst}"
-  log_info "plymouth-initramfs: copied initrd to ${initrd_dst}"
+  src_real="$(readlink -f "${initrd_src}" 2>/dev/null || printf '%s' "${initrd_src}")"
+  dst_real="$(readlink -f "${initrd_dst}" 2>/dev/null || printf '%s' "${initrd_dst}")"
+  if [ "${src_real}" = "${dst_real}" ]; then
+    log_info "plymouth-initramfs: initrd source and destination are identical (${initrd_dst}), copy skipped"
+  else
+    cp -f "${initrd_src}" "${initrd_dst}"
+    log_info "plymouth-initramfs: copied initrd to ${initrd_dst}"
+  fi
 else
   log_error "plymouth-initramfs: initrd source not found: ${initrd_src}"
   exit 1

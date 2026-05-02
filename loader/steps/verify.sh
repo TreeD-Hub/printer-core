@@ -63,6 +63,31 @@ read_klipperscreen_main_theme() {
   ' "${cfg}"
 }
 
+read_extlinux_append() {
+  local cfg="$1"
+  awk '
+    BEGIN { in_l0 = 0; fallback = "" }
+    /^[[:space:]]*label[[:space:]]+l0([[:space:]]|$)/ { in_l0 = 1; next }
+    in_l0 && /^[[:space:]]*label[[:space:]]+/ { in_l0 = 0 }
+    in_l0 && /^[[:space:]]*append[[:space:]]+/ {
+      line = $0
+      sub(/^[[:space:]]*append[[:space:]]+/, "", line)
+      print line
+      exit
+    }
+    /^[[:space:]]*append[[:space:]]+/ {
+      line = $0
+      sub(/^[[:space:]]*append[[:space:]]+/, "", line)
+      fallback = line
+    }
+    END {
+      if (fallback != "") {
+        print fallback
+      }
+    }
+  ' "${cfg}"
+}
+
 extract_required_theme_icons() {
   local style_file="$1"
   if [ ! -f "${style_file}" ]; then
@@ -321,14 +346,24 @@ TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
 CMDLINE_FILE="${CMDLINE_FILE:-$(detect_cmdline_file "${BOOT_DIR}")}"
 CONFIG_FILE="${CONFIG_FILE:-$(detect_config_file "${BOOT_DIR}")}"
 ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
+EXTLINUX_FILE="${EXTLINUX_FILE:-$(detect_extlinux_file "${BOOT_DIR}")}"
 KVER="$(uname -r)"
 INITRD="${BOOT_DIR}/initrd.img-${KVER}"
 
 PI_USER="${PI_USER:-pi}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
-TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
-TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
-TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+CAN_SETUP_ENV_FILE="${TREED_CAN_SETUP_ENV_FILE:-/etc/default/treed-can-setup}"
+CAN_ENV_IFACE=""
+CAN_ENV_BITRATE=""
+CAN_ENV_TXQUEUE=""
+if [ -f "${CAN_SETUP_ENV_FILE}" ]; then
+  CAN_ENV_IFACE="$(sed -nE 's|^[[:space:]]*TREED_CAN_IFACE=([A-Za-z0-9_.:-]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
+  CAN_ENV_BITRATE="$(sed -nE 's|^[[:space:]]*TREED_CAN_BITRATE=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
+  CAN_ENV_TXQUEUE="$(sed -nE 's|^[[:space:]]*TREED_CAN_TXQUEUE=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
+fi
+TREED_CAN_IFACE="${TREED_CAN_IFACE:-${CAN_ENV_IFACE:-can0}}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-500000}}"
+TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-${CAN_ENV_TXQUEUE:-1024}}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 
 PROFILE_DIR="${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1"
@@ -465,6 +500,60 @@ case "${TREED_BOOT_BACKEND}" in
       else
         pass "armbian extraargs has no plymouth.enable=0"
       fi
+    fi
+
+    if [ -f /proc/cmdline ]; then
+      proc_cmdline="$(tr -d '\n' < /proc/cmdline)"
+      for tok in quiet splash consoleblank=0; do
+        if printf '%s\n' "${proc_cmdline}" | grep -qE "(^| )${tok}( |$)"; then
+          pass "proc cmdline token ${tok}"
+        else
+          failf "proc cmdline token ${tok}"
+        fi
+      done
+    else
+      failf "proc cmdline readable"
+    fi
+    ;;
+
+  extlinux)
+    pass "boot backend extlinux"
+
+    if [ -f "${EXTLINUX_FILE}" ]; then
+      pass "extlinux.conf present (${EXTLINUX_FILE})"
+    else
+      failf "extlinux.conf present (${EXTLINUX_FILE:-missing})"
+    fi
+
+    TREED_ARMBIAN_VIDEO_MODE="${TREED_ARMBIAN_VIDEO_MODE:-HDMI-A-1:960x544@60}"
+
+    extlinux_append=""
+    if [ -f "${EXTLINUX_FILE}" ]; then
+      extlinux_append="$(read_extlinux_append "${EXTLINUX_FILE}" | tr -d '\r\n')"
+    fi
+
+    if [ -n "${extlinux_append}" ]; then
+      for tok in quiet splash plymouth.ignore-serial-consoles logo.nologo vt.global_cursor_default=0 consoleblank=0 loglevel=3 vt.handoff=7 usbcore.autosuspend=-1; do
+        if printf '%s\n' "${extlinux_append}" | grep -qE "(^| )${tok}( |$)"; then
+          pass "extlinux append token ${tok}"
+        else
+          failf "extlinux append token ${tok}"
+        fi
+      done
+
+      if printf '%s\n' "${extlinux_append}" | grep -qE "(^| )video=${TREED_ARMBIAN_VIDEO_MODE}( |$)"; then
+        pass "extlinux append video=${TREED_ARMBIAN_VIDEO_MODE}"
+      else
+        failf "extlinux append video=${TREED_ARMBIAN_VIDEO_MODE}"
+      fi
+
+      if printf '%s\n' "${extlinux_append}" | grep -q "plymouth.enable=0"; then
+        failf "extlinux append has no plymouth.enable=0"
+      else
+        pass "extlinux append has no plymouth.enable=0"
+      fi
+    else
+      failf "extlinux append line present"
     fi
 
     if [ -f /proc/cmdline ]; then
@@ -959,7 +1048,7 @@ fi
 
 # Блок 12: Проверки firmware-build артефактов (если этап включен).
 TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED:-1}"
-TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-/home/pi/treed/firmware-artifacts/treed-v2}"
+TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
 if [ "${TREED_FIRMWARE_BUILD_ENABLED}" = "1" ]; then
   if [ -L "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest" ] || [ -d "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest" ]; then
     pass "firmware artifacts latest present (${TREED_FIRMWARE_ARTIFACTS_DIR}/latest)"

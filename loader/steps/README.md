@@ -7,32 +7,33 @@
 | # | Шаг | Тип | Назначение |
 |---|---|---|---|
 | 1 | `check-env.sh` | required | Проверка V2-контракта переменных и базового окружения loader. |
-| 2 | `detect-rpi.sh` | required | Host-aware определение backend (`rpi|armbian`) и boot-путей. |
+| 2 | `detect-rpi.sh` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-путей. |
 | 3 | `timezone-sync.sh` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop.sh` | required | Остановка runtime-сервисов перед provisioning. |
 | 5 | `packages-core.sh` | required | Базовые системные пакеты. |
-| 6 | `can-setup.sh` | required | Подъем CAN интерфейса (`can0`) через systemd oneshot + `ip link`. |
-| 7 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum. |
-| 8 | `boot-hdmi-config.sh` | required | RPi: HDMI/gpu_mem в `config.txt`; Armbian: `armbianEnv.txt` (`verbosity/bootlogo/extraargs video`). |
-| 9 | `plymouth-theme-install.sh` | required | Установка темы Plymouth. |
-| 10 | `plymouth-initramfs.sh` | required | Пересборка initramfs. |
-| 11 | `plymouth-initramfs-config.sh` | required | RPi: `initramfs ... followkernel`; Armbian: проверка backend-контекста initrd. |
-| 12 | `plymouth-cmdline.sh` | required | RPi: нормализация `cmdline.txt`; Armbian: нормализация `extraargs`. |
-| 13 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
-| 14 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 15 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID. |
-| 16 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 17 | `klipper-adxl-rpi.sh` | required | Проверка mandatory ADXL/Input Shaper через EBB42. |
-| 18 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
-| 19 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
-| 20 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
-| 21 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
-| 22 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 23 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
-| 24 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
-| 25 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
-| 26 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 27 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью. |
+| 6 | `runtime-bootstrap.sh` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов. |
+| 7 | `can-setup.sh` | required | Подъем CAN интерфейса (`can0`) через systemd oneshot + `ip link`. |
+| 8 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum. |
+| 9 | `boot-hdmi-config.sh` | required | RPi: HDMI/gpu_mem; Armbian: `armbianEnv.txt`; Extlinux: `append video=...`. |
+| 10 | `plymouth-theme-install.sh` | required | Установка темы Plymouth. |
+| 11 | `plymouth-initramfs.sh` | required | Пересборка initramfs. |
+| 12 | `plymouth-initramfs-config.sh` | required | RPi/Armbian/Extlinux backend-aware валидация initrd. |
+| 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
+| 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
+| 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
+| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID. |
+| 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
+| 18 | `klipper-adxl-rpi.sh` | required | Проверка mandatory ADXL/Input Shaper через EBB42. |
+| 19 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
+| 20 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
+| 21 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
+| 22 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
+| 23 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
+| 24 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
+| 25 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
+| 26 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
+| 27 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
+| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью. |
 
 ## Контракт для step-скриптов
 
@@ -53,6 +54,7 @@
 - `BOOT_DIR`, `TREED_BOOT_BACKEND`
 - `CMDLINE_FILE`, `CONFIG_FILE` (для `rpi` backend)
 - `ARMBIAN_ENV_FILE` (для `armbian` backend)
+- `EXTLINUX_FILE` (для `extlinux` backend)
 - `TREED_DEPLOY_MODE_EFFECTIVE` (`clean|preserve`)
 - `TREED_MAINTENANCE_MODE` (`1|0`)
 
@@ -63,18 +65,33 @@
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `500000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
-- `TREED_EBB_CANBUS_UUID` (required hex UUID)
+- `TREED_CAN_AUTOBITRATE` (`0|1`, default `1`; при auto-detect EBB UUID допускает перебор типовых bitrate)
+- `TREED_CAN_AUTOBITRATE_LIST` (default `500000 1000000 250000 125000`)
+- `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
+- `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
+- `TREED_EBB_CANBUS_UUID` (рекомендуемый hex UUID; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` при единственном UUID на шине)
+- `TREED_CANBUS_QUERY_PYTHON` (optional override интерпретатора для `canbus_query.py`; по умолчанию используется `${TREED_KLIPPY_ENV_DIR}/bin/python*`)
 - `TREED_EDDY_ENABLED` (`0|1`, default `0`)
 - `TREED_EDDY_CANBUS_UUID` (required hex UUID when `TREED_EDDY_ENABLED=1`)
 
 ### Firmware build
 
 - `TREED_FIRMWARE_BUILD_ENABLED` (`0|1`, default `1`)
-- `TREED_KLIPPER_SRC_DIR` (default `/home/pi/klipper`)
-- `TREED_FIRMWARE_ARTIFACTS_DIR` (default `/home/pi/treed/firmware-artifacts/treed-v2`)
+- `TREED_KLIPPER_SRC_DIR` (default `${PI_HOME}/klipper`)
+- `TREED_FIRMWARE_ARTIFACTS_DIR` (default `${PI_HOME}/treed/firmware-artifacts/treed-v2`)
 - `TREED_FW_MAIN_CONFIG` (default `firmware/configs/treed_v2/main_octopus_pro_f446_usb.config`)
 - `TREED_FW_EBB_CONFIG` (default `firmware/configs/treed_v2/ebb42_can_stm32g0b1.config`)
 - `TREED_FW_EDDY_CONFIG` (default `firmware/configs/treed_v2/eddy_can_stm32g0b1.config`)
+
+### Runtime bootstrap
+
+- `TREED_RUNTIME_BOOTSTRAP` (`0|1`, default `1`)
+- `TREED_ALLOW_MISSING_REQUIRED_SERVICES_ON_STOP` (`0|1`, default `1`)
+- `TREED_KLIPPY_ENV_DIR` (default `${PI_HOME}/klippy-env`)
+- `TREED_MOONRAKER_SRC_DIR` (default `${PI_HOME}/moonraker`)
+- `TREED_MOONRAKER_ENV_DIR` (default `${PI_HOME}/moonraker-env`)
+- `TREED_MOONRAKER_REPO` (default `https://github.com/Arksine/moonraker.git`)
+- `TREED_MOONRAKER_REF` (optional, empty by default)
 
 ### Moonraker / Camera
 
@@ -131,6 +148,7 @@
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
-- `klipper-profiles.sh` fail-fast, если не задан `TREED_EBB_CANBUS_UUID`.
+- `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст и auto-detect через `canbus_query` (с авто-перебором bitrate при `TREED_CAN_AUTOBITRATE=1`) не смог однозначно определить UUID.
+- При нахождении UUID на bitrate, отличном от `TREED_CAN_BITRATE`, `klipper-profiles.sh` обновляет `${TREED_CAN_SETUP_ENV_FILE}` и перезапускает `${TREED_CAN_SETUP_UNIT}`.
 - `klipper-profiles.sh` включает Eddy include только при `TREED_EDDY_ENABLED=1`.
 - `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0`, main USB serial, EBB CAN UUID, ADXL и optional Eddy.

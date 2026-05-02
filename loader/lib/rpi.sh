@@ -167,16 +167,38 @@ detect_armbian_env_file() {
   echo ""
 }
 
+# Блок 9a: Поиск extlinux.conf с учетом boot_dir.
+detect_extlinux_file() {
+  local boot_dir="${1:-}"
+  local candidates=()
+  local f
+
+  if [ -n "${boot_dir}" ]; then
+    candidates+=("${boot_dir}/extlinux/extlinux.conf")
+  fi
+  candidates+=("/boot/extlinux/extlinux.conf" "/boot/firmware/extlinux/extlinux.conf")
+
+  for f in "${candidates[@]}"; do
+    if [ -f "${f}" ]; then
+      echo "${f}"
+      return 0
+    fi
+  done
+
+  echo ""
+}
+
 # Блок 10: Определение boot-backend.
 detect_boot_backend() {
   local boot_dir="${1:-}"
   local cmdline_file=""
   local config_file=""
   local armbian_env=""
+  local extlinux_file=""
 
   if [ -n "${TREED_BOOT_BACKEND:-}" ]; then
     case "${TREED_BOOT_BACKEND}" in
-      rpi|armbian)
+      rpi|armbian|extlinux)
         echo "${TREED_BOOT_BACKEND}"
         return 0
         ;;
@@ -204,6 +226,12 @@ detect_boot_backend() {
 
   if [ -f /etc/armbian-release ]; then
     echo "armbian"
+    return 0
+  fi
+
+  extlinux_file="$(detect_extlinux_file "${boot_dir}")"
+  if [ -n "${extlinux_file}" ] && [ -f "${extlinux_file}" ]; then
+    echo "extlinux"
     return 0
   fi
 

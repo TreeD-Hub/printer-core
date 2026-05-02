@@ -40,12 +40,13 @@ export PI_HOME
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
-# Блок 5: Определение boot-backend и путей (RPi/Armbian aware).
+# Блок 5: Определение boot-backend и путей (RPi/Armbian/Extlinux aware).
 BOOT_DIR="$(detect_boot_dir)"
 TREED_BOOT_BACKEND="$(detect_boot_backend "${BOOT_DIR}")"
 CMDLINE_FILE="$(detect_cmdline_file "${BOOT_DIR}")"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
 ARMBIAN_ENV_FILE="$(detect_armbian_env_file "${BOOT_DIR}")"
+EXTLINUX_FILE="$(detect_extlinux_file "${BOOT_DIR}")"
 
 # Блок 6: Нормализация BOOT_DIR до фактического каталога boot-файлов.
 if [ -n "${CMDLINE_FILE}" ] && [ -n "${CONFIG_FILE}" ]; then
@@ -62,6 +63,8 @@ elif [ -n "${CMDLINE_FILE}" ]; then
   BOOT_DIR="$(dirname "${CMDLINE_FILE}")"
 elif [ -n "${ARMBIAN_ENV_FILE}" ]; then
   BOOT_DIR="$(dirname "${ARMBIAN_ENV_FILE}")"
+elif [ -n "${EXTLINUX_FILE}" ]; then
+  BOOT_DIR="$(dirname "$(dirname "${EXTLINUX_FILE}")")"
 fi
 
 # Блок 7: Валидация boot-backend (fail-fast без legacy-only ограничений).
@@ -82,8 +85,14 @@ case "${TREED_BOOT_BACKEND}" in
       exit 1
     fi
     ;;
+  extlinux)
+    if [ -z "${EXTLINUX_FILE}" ] || [ ! -f "${EXTLINUX_FILE}" ]; then
+      echo "[loader] ERROR: extlinux backend requires /boot/extlinux/extlinux.conf (BOOT_DIR=${BOOT_DIR})" >&2
+      exit 1
+    fi
+    ;;
   *)
-    echo "[loader] ERROR: unsupported boot backend '${TREED_BOOT_BACKEND}' (expected: rpi|armbian)" >&2
+    echo "[loader] ERROR: unsupported boot backend '${TREED_BOOT_BACKEND}' (expected: rpi|armbian|extlinux)" >&2
     exit 1
     ;;
 esac
@@ -93,6 +102,7 @@ export TREED_BOOT_BACKEND
 export CMDLINE_FILE
 export CONFIG_FILE
 export ARMBIAN_ENV_FILE
+export EXTLINUX_FILE
 
 # Блок 8: Глобальные режимы оркестрации (maintenance/deploy mode).
 TREED_MAINTENANCE_MODE="${TREED_MAINTENANCE_MODE:-1}"
@@ -176,6 +186,7 @@ STEPS=(
 
   # Системная база и boot-контур.
   "packages-core"            # Установка базовых пакетов provisioning-контура.
+  "runtime-bootstrap"        # Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов.
   "can-setup"                # Подготовка и подъем CAN-интерфейса host (U2C -> can0).
   "firmware-build"           # Сборка firmware-артефактов main/EBB/(Eddy) без автопрошивки.
   "boot-hdmi-config"         # Управляемый HDMI-блок + контроль gpu_mem.
@@ -238,7 +249,7 @@ run_step_script() {
 # Блок 17: Стартовая диагностика оркестратора.
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, BOOT_BACKEND=${TREED_BOOT_BACKEND}"
-log_info "BOOT_DIR=${BOOT_DIR}, CMDLINE_FILE=${CMDLINE_FILE:-<none>}, CONFIG_FILE=${CONFIG_FILE:-<none>}, ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE:-<none>}"
+log_info "BOOT_DIR=${BOOT_DIR}, CMDLINE_FILE=${CMDLINE_FILE:-<none>}, CONFIG_FILE=${CONFIG_FILE:-<none>}, ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE:-<none>}, EXTLINUX_FILE=${EXTLINUX_FILE:-<none>}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
 log_info "TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE}, TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}, TREED_DEPLOY_BRANCH=${TREED_DEPLOY_BRANCH:-unknown}"
 

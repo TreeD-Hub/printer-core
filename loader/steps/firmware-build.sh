@@ -37,8 +37,8 @@ if [ "${TREED_FIRMWARE_BUILD_ENABLED}" = "0" ]; then
 fi
 
 # Блок 2: Контракт путей/таргетов сборки.
-TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-/home/pi/klipper}"
-TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-/home/pi/treed/firmware-artifacts/treed-v2}"
+TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
+TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
 TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_usb.config}"
 TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
 TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_stm32g0b1.config}"

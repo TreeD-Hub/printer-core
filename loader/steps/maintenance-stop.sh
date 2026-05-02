@@ -38,6 +38,7 @@ BEST_EFFORT_SERVICES=(
 
 REQUIRED_STOP_TIMEOUT="${TREED_REQUIRED_SERVICE_STOP_TIMEOUT:-20}"
 BEST_EFFORT_STOP_TIMEOUT="${TREED_BEST_EFFORT_SERVICE_STOP_TIMEOUT:-10}"
+TREED_ALLOW_MISSING_REQUIRED_SERVICES_ON_STOP="${TREED_ALLOW_MISSING_REQUIRED_SERVICES_ON_STOP:-1}"
 
 # Блок 5: Вспомогательные функции (ожидание, required-stop, best-effort-stop).
 wait_service_inactive() {
@@ -69,6 +70,10 @@ stop_required_service() {
 
   # Для критичных сервисов любой сбой — блокирующий.
   if ! systemctl cat "${unit}" >/dev/null 2>&1; then
+    if [ "${TREED_ALLOW_MISSING_REQUIRED_SERVICES_ON_STOP}" = "1" ]; then
+      log_warn "maintenance-stop: required ${unit} not found (bootstrap mode, continuing)"
+      return 0
+    fi
     log_error "maintenance-stop: required ${unit} not found"
     return 1
   fi

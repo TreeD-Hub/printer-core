@@ -20,6 +20,7 @@ log_info "Step plymouth-cmdline: updating kernel cmdline for plymouth"
 BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
 ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
+EXTLINUX_FILE="${EXTLINUX_FILE:-$(detect_extlinux_file "${BOOT_DIR}")}"
 
 # Блок 1b: Целевой набор токенов (общий для RPi/Armbian).
 target_tokens=(
@@ -67,6 +68,73 @@ if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
 
   set_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs" "${new_tokens[*]}"
   log_info "plymouth-cmdline: OK (armbian backend, updated extraargs in ${ARMBIAN_ENV_FILE})"
+  exit 0
+fi
+
+# Блок 1d: Extlinux backend — нормализуем append токены в extlinux.conf.
+if [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
+  if [ -z "${EXTLINUX_FILE}" ] || [ ! -f "${EXTLINUX_FILE}" ]; then
+    log_error "plymouth-cmdline: extlinux backend requires extlinux.conf"
+    exit 1
+  fi
+
+  backup_file_once "${EXTLINUX_FILE}"
+
+  tmp="$(mktemp)"
+  awk '
+    function normalize_append(args,      i, n, a, t, out) {
+      out = ""
+      n = split(args, a, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        t = a[i]
+        if (t == "" ||
+            t == "quiet" ||
+            t == "splash" ||
+            t == "plymouth.ignore-serial-consoles" ||
+            t == "logo.nologo" ||
+            t == "plymouth.debug" ||
+            t == "plymouth.enable=0" ||
+            t ~ /^vt.global_cursor_default=/ ||
+            t ~ /^consoleblank=/ ||
+            t ~ /^loglevel=/ ||
+            t ~ /^vt.handoff=/ ||
+            t ~ /^usbcore.autosuspend=/ ||
+            t ~ /^console=serial0,/ ||
+            t ~ /^console=ttyAMA0,/ ||
+            t ~ /^console=ttyS0,/ ||
+            t ~ /^console=ttyFIQ0,/) {
+          continue
+        }
+        out = (out == "" ? t : out " " t)
+      }
+
+      out = (out == "" ? "quiet" : out " quiet")
+      out = out " splash"
+      out = out " plymouth.ignore-serial-consoles"
+      out = out " vt.global_cursor_default=0"
+      out = out " consoleblank=0"
+      out = out " loglevel=3"
+      out = out " logo.nologo"
+      out = out " vt.handoff=7"
+      out = out " usbcore.autosuspend=-1"
+      return out
+    }
+    {
+      if ($0 ~ /^[[:space:]]*append[[:space:]]+/) {
+        prefix = $0
+        sub(/append[[:space:]]+.*/, "", prefix)
+        args = $0
+        sub(/^[[:space:]]*append[[:space:]]+/, "", args)
+        print prefix "append " normalize_append(args)
+        next
+      }
+      print
+    }
+  ' "${EXTLINUX_FILE}" > "${tmp}"
+  cat "${tmp}" > "${EXTLINUX_FILE}"
+  rm -f "${tmp}"
+
+  log_info "plymouth-cmdline: OK (extlinux backend, updated append in ${EXTLINUX_FILE})"
   exit 0
 fi
 

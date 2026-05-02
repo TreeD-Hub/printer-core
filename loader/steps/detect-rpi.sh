@@ -23,6 +23,7 @@ TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
 CMDLINE_FILE="$(detect_cmdline_file "${BOOT_DIR}")"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
 ARMBIAN_ENV_FILE="$(detect_armbian_env_file "${BOOT_DIR}")"
+EXTLINUX_FILE="$(detect_extlinux_file "${BOOT_DIR}")"
 
 # Блок 3: Нормализация BOOT_DIR по реальным путям config/cmdline.
 # Синхронизируем BOOT_DIR с фактическим расположением config/cmdline, если это возможно.
@@ -55,6 +56,7 @@ export TREED_BOOT_BACKEND
 export CMDLINE_FILE
 export CONFIG_FILE
 export ARMBIAN_ENV_FILE
+export EXTLINUX_FILE
 
 log_info "HOST_MODEL=${RPI_MODEL}"
 log_info "TREED_BOOT_BACKEND=${TREED_BOOT_BACKEND}"
@@ -84,6 +86,17 @@ case "${TREED_BOOT_BACKEND}" in
     fi
     log_info "CMDLINE_FILE=${CMDLINE_FILE:-<not used by armbian backend>}"
     log_info "CONFIG_FILE=${CONFIG_FILE:-<not used by armbian backend>}"
+    ;;
+  extlinux)
+    if [ -n "${EXTLINUX_FILE}" ] && [ -f "${EXTLINUX_FILE}" ]; then
+      log_info "EXTLINUX_FILE=${EXTLINUX_FILE}"
+    else
+      log_error "detect-rpi: extlinux backend requires /boot/extlinux/extlinux.conf"
+      exit 1
+    fi
+    log_info "CMDLINE_FILE=${CMDLINE_FILE:-<not used by extlinux backend>}"
+    log_info "CONFIG_FILE=${CONFIG_FILE:-<not used by extlinux backend>}"
+    log_info "ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE:-<not used by extlinux backend>}"
     ;;
   *)
     log_error "detect-rpi: unsupported TREED_BOOT_BACKEND=${TREED_BOOT_BACKEND}"

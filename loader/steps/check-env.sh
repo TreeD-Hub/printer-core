@@ -54,8 +54,8 @@ TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-}"
 
 TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED:-1}"
-TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-/home/pi/klipper}"
-TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-/home/pi/treed/firmware-artifacts/treed-v2}"
+TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
+TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
 TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_usb.config}"
 TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
 TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_stm32g0b1.config}"
@@ -76,15 +76,15 @@ if [ -z "${TREED_MAIN_MCU_SERIAL_MASK}" ]; then
 fi
 
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
-  log_error "check-env: TREED_EBB_CANBUS_UUID is required for V2"
-  exit 1
+  log_warn "check-env: TREED_EBB_CANBUS_UUID is empty, klipper-profiles will try auto-detect via canbus_query"
+else
+  case "${TREED_EBB_CANBUS_UUID}" in
+    *[!0-9A-Fa-f]*)
+      log_error "check-env: TREED_EBB_CANBUS_UUID must be hex, got: ${TREED_EBB_CANBUS_UUID}"
+      exit 1
+      ;;
+  esac
 fi
-case "${TREED_EBB_CANBUS_UUID}" in
-  *[!0-9A-Fa-f]*)
-    log_error "check-env: TREED_EBB_CANBUS_UUID must be hex, got: ${TREED_EBB_CANBUS_UUID}"
-    exit 1
-    ;;
-esac
 
 case "${TREED_EDDY_ENABLED}" in
   0|1) ;;
@@ -114,9 +114,9 @@ fi
 
 if [ -n "${TREED_BOOT_BACKEND}" ]; then
   case "${TREED_BOOT_BACKEND}" in
-    rpi|armbian) ;;
+    rpi|armbian|extlinux) ;;
     *)
-      log_error "check-env: TREED_BOOT_BACKEND must be rpi|armbian when set, got: ${TREED_BOOT_BACKEND}"
+      log_error "check-env: TREED_BOOT_BACKEND must be rpi|armbian|extlinux when set, got: ${TREED_BOOT_BACKEND}"
       exit 1
       ;;
   esac

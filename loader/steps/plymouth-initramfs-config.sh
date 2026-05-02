@@ -37,8 +37,8 @@ if [ ! -f "${initrd_path}" ]; then
   exit 0
 fi
 
-# Блок 4a: Armbian backend — initrd управляется boot scripts/extlinux.
-if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
+# Блок 4a: Armbian/Extlinux backend — initrd управляется boot scripts/extlinux.
+if [ "${TREED_BOOT_BACKEND}" = "armbian" ] || [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
   if [ -n "${ARMBIAN_ENV_FILE}" ] && [ -f "${ARMBIAN_ENV_FILE}" ]; then
     log_info "plymouth-initramfs-config: armbian backend uses ${ARMBIAN_ENV_FILE}"
   else
