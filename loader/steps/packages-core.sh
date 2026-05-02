@@ -15,8 +15,8 @@ ensure_root
 
 # Блок 2: Установка базового пакета зависимостей.
 log_info "Step packages-core: installing core packages"
-apt-get update
-apt-get -y install \
+apt_update_noninteractive
+apt_get_noninteractive install \
   plymouth plymouth-themes plymouth-label \
   rsync curl v4l-utils git \
   python3 python3-pip python3-venv python3-dev \
@@ -32,7 +32,7 @@ if command -v socat >/dev/null 2>&1; then
   else
     rc=$?
     log_warn "packages-core: socat is broken (rc=${rc}), removing package"
-    apt-get -y purge socat || true
+    apt_get_noninteractive purge socat || true
   fi
 else
   log_info "packages-core: socat not installed (expected)"

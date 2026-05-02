@@ -68,6 +68,7 @@
 - `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
+- `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.
 - `TREED_FIRMWARE_BUILD_ENABLED` — `0|1`, default `1`.
 - `TREED_KLIPPER_SRC_DIR` — default `${PI_HOME}/klipper`.
 - `TREED_FIRMWARE_ARTIFACTS_DIR` — default `${PI_HOME}/treed/firmware-artifacts/treed-v2`.

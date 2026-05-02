@@ -57,6 +57,7 @@
 - `EXTLINUX_FILE` (для `extlinux` backend)
 - `TREED_DEPLOY_MODE_EFFECTIVE` (`clean|preserve`)
 - `TREED_MAINTENANCE_MODE` (`1|0`)
+- `TREED_NONINTERACTIVE` (`0|1`, default `1`; apt/dpkg/needrestart без prompt)
 
 ### Main MCU / CAN / Eddy
 
@@ -107,6 +108,10 @@
 ### KlipperScreen
 
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL` (`1` — принудительная установка)
+- `TREED_KLIPPERSCREEN_INSTALL_SERVICE` (default `1`, ответ installer-у на установку service)
+- `TREED_KLIPPERSCREEN_BACKEND` (default `X`, ответ installer-у на выбор Xserver/Wayland)
+- `TREED_KLIPPERSCREEN_NETWORK_MANAGER` (default `N`, ответ installer-у на установку NetworkManager)
+- `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` (default `0`, внешний installer не стартует сервис сам)
 - `TREED_KLIPPERSCREEN_REPO`
 - `TREED_KLIPPERSCREEN_REF`
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` (default `45`)

@@ -14,6 +14,17 @@ if [ -z "${REPO_DIR:-}" ]; then
   exit 1
 fi
 
+# Блок 1a: Noninteractive-контур системных установщиков.
+# По умолчанию loader не должен ждать подтверждений apt/dpkg/needrestart.
+TREED_NONINTERACTIVE="${TREED_NONINTERACTIVE:-1}"
+export TREED_NONINTERACTIVE
+
+if [ "${TREED_NONINTERACTIVE}" = "1" ]; then
+  export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
+  export APT_LISTCHANGES_FRONTEND="${APT_LISTCHANGES_FRONTEND:-none}"
+  export NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}"
+fi
+
 # Блок 2: Логирование с единым форматом timestamp/уровней.
 log_ts() {
   date +"%Y-%m-%d %H:%M:%S"
@@ -44,6 +55,31 @@ ensure_dir() {
   if [ ! -d "$dir" ]; then
     mkdir -p "$dir"
     log_info "Created directory: ${dir}"
+  fi
+}
+
+apt_update_noninteractive() {
+  if [ "${TREED_NONINTERACTIVE:-1}" = "1" ]; then
+    DEBIAN_FRONTEND=noninteractive \
+    APT_LISTCHANGES_FRONTEND=none \
+    NEEDRESTART_MODE=a \
+      apt-get update
+  else
+    apt-get update
+  fi
+}
+
+apt_get_noninteractive() {
+  if [ "${TREED_NONINTERACTIVE:-1}" = "1" ]; then
+    DEBIAN_FRONTEND=noninteractive \
+    APT_LISTCHANGES_FRONTEND=none \
+    NEEDRESTART_MODE=a \
+      apt-get -y \
+        -o Dpkg::Options::=--force-confdef \
+        -o Dpkg::Options::=--force-confold \
+        "$@"
+  else
+    apt-get "$@"
   fi
 }
 
