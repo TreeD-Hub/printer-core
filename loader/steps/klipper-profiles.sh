@@ -202,7 +202,16 @@ resolve_ebb_canbus_uuid_auto() {
     return 1
   fi
 
-  query_canbus_candidates "${query_python}" "${query_script}"
+  log_info "klipper-profiles: trying CAN bitrate auto-detect on ${CAN_IFACE}: ${CAN_BITRATE}"
+  if setup_can_iface_bitrate "${CAN_BITRATE}"; then
+    last_applied_bitrate="${CAN_BITRATE}"
+    query_canbus_candidates "${query_python}" "${query_script}"
+  else
+    log_warn "klipper-profiles: failed to switch ${CAN_IFACE} to bitrate ${CAN_BITRATE}"
+    CAN_QUERY_OUTPUT=""
+    CAN_QUERY_RC=1
+    CAN_QUERY_UUID_COUNT=0
+  fi
 
   if [ "${CAN_QUERY_UUID_COUNT}" -eq 0 ] && [ "${CAN_AUTOBITRATE}" = "1" ]; then
     scan_bitrate_list="${CAN_AUTOBITRATE_LIST}"
