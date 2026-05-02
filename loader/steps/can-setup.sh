@@ -18,7 +18,7 @@ ensure_root
 
 # Блок 2: Нормализация env-контракта CAN.
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
-TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 
 if ! printf '%s' "${TREED_CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then
@@ -64,7 +64,7 @@ if [ -f "${CAN_ENV_FILE}" ]; then
 fi
 
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
-TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 
 IP_BIN="$(command -v ip || true)"

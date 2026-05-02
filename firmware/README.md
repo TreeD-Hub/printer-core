@@ -17,7 +17,8 @@
   - `manifest.tsv`
   - `checksums.sha256`
   - `build-report.txt`
-  - `artifacts/*/*.bin`
+  - `artifacts/*/*.bin` для STM32 targets
+  - `artifacts/*/*.uf2` для RP2040 Eddy target
 
 ## Важно
 

@@ -362,9 +362,11 @@ if [ -f "${CAN_SETUP_ENV_FILE}" ]; then
   CAN_ENV_TXQUEUE="$(sed -nE 's|^[[:space:]]*TREED_CAN_TXQUEUE=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
 fi
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-${CAN_ENV_IFACE:-can0}}"
-TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-500000}}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-1000000}}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-${CAN_ENV_TXQUEUE:-1024}}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
+TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
+TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 
 PROFILE_DIR="${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1"
 PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
@@ -830,7 +832,39 @@ else
     failf "Eddy include disabled in printer.cfg"
   fi
 
-  pass "Eddy checks skipped (TREED_EDDY_ENABLED=0)"
+  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+    && awk -v expected="${TREED_Z_ENDSTOP_PIN}" '
+      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
+      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+      in_z && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
+        value = $0
+        sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
+        sub(/[[:space:]]*(#.*)?$/, "", value)
+        found = (value == expected)
+      }
+      END { exit found ? 0 : 1 }
+    ' "${STEPPERS_CFG_RUNTIME}"; then
+    pass "stepper_z uses physical Z endstop ${TREED_Z_ENDSTOP_PIN}"
+  else
+    failf "stepper_z uses physical Z endstop ${TREED_Z_ENDSTOP_PIN}"
+  fi
+
+  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+    && awk -v expected="${TREED_Z_POSITION_ENDSTOP}" '
+      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
+      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+      in_z && /^[[:space:]]*position_endstop[[:space:]]*:/ {
+        value = $0
+        sub(/^[[:space:]]*position_endstop[[:space:]]*:[[:space:]]*/, "", value)
+        sub(/[[:space:]]*(#.*)?$/, "", value)
+        found = (value == expected)
+      }
+      END { exit found ? 0 : 1 }
+    ' "${STEPPERS_CFG_RUNTIME}"; then
+    pass "stepper_z position_endstop ${TREED_Z_POSITION_ENDSTOP}"
+  else
+    failf "stepper_z position_endstop ${TREED_Z_POSITION_ENDSTOP}"
+  fi
 fi
 
 # Блок 10: Проверки состояния KlipperScreen (required/optional режимы).

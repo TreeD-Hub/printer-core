@@ -41,7 +41,7 @@ TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
 TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
 TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_usb.config}"
 TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
-TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_stm32g0b1.config}"
+TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_rp2040.config}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 
 case "${TREED_EDDY_ENABLED}" in
@@ -133,11 +133,13 @@ build_target() {
   local target_config="$2"
   local expected_config_marker="$3"
   local artifact_name="$4"
+  local build_output_rel="${5:-out/klipper.bin}"
 
   local target_log="${LOG_DIR}/${target_name}.log"
   local target_cfg="${CFG_DIR}/${target_name}.config"
   local target_art_dir="${ART_DIR}/${target_name}"
   local target_artifact="${target_art_dir}/${artifact_name}"
+  local build_output="${TREED_KLIPPER_SRC_DIR}/${build_output_rel}"
   local target_sha=""
 
   ensure_dir "${target_art_dir}"
@@ -152,12 +154,12 @@ build_target() {
     exit 1
   fi
 
-  if [ ! -f "${TREED_KLIPPER_SRC_DIR}/out/klipper.bin" ]; then
-    log_error "firmware-build: out/klipper.bin not found after target ${target_name}"
+  if [ ! -f "${build_output}" ]; then
+    log_error "firmware-build: ${build_output_rel} not found after target ${target_name}"
     exit 1
   fi
 
-  cp -f "${TREED_KLIPPER_SRC_DIR}/out/klipper.bin" "${target_artifact}"
+  cp -f "${build_output}" "${target_artifact}"
   target_sha="$(sha256sum "${target_artifact}" | awk '{print $1}')"
   printf '%s\t%s\t%s\t%s\n' "${target_name}" "${target_artifact}" "${target_sha}" "${target_config}" >> "${MANIFEST_FILE}"
   printf '%s  %s\n' "${target_sha}" "${target_artifact}" >> "${CHECKSUM_FILE}"
@@ -172,7 +174,7 @@ build_target "ebb42_can" "${TREED_FW_EBB_CONFIG}" '^CONFIG_MACH_STM32G0B1=y$' "f
 
 # Блок 6: Optional target Eddy.
 if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
-  build_target "eddy_can" "${TREED_FW_EDDY_CONFIG}" '^CONFIG_CANBUS=y$' "firmware-eddy-can.bin"
+  build_target "eddy_can" "${TREED_FW_EDDY_CONFIG}" '^CONFIG_MACH_RP2040=y$' "firmware-eddy-can.uf2" "out/klipper.uf2"
 else
   printf 'target=eddy_can status=skipped reason=TREED_EDDY_ENABLED=0\n' >> "${REPORT_FILE}"
   log_info "firmware-build: target eddy_can skipped (TREED_EDDY_ENABLED=0)"

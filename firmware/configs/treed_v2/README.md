@@ -8,8 +8,8 @@
   - Octopus Pro V1.0.1 (вариант F446) через USB serial.
 - `ebb42_can_stm32g0b1.config`
   - EBB42 CAN (STM32G0B1, CAN PB0/PB1).
-- `eddy_can_stm32g0b1.config`
-  - Базовый шаблон для Eddy CAN (по умолчанию как STM32G0B1).
+- `eddy_can_rp2040.config`
+  - Eddy Duo CAN (RP2040, CAN GPIO4/GPIO5, 1M, UF2 artifact).
 
 ## Важно
 

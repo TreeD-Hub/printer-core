@@ -30,8 +30,10 @@ export TREED_EDDY_ENABLED=0
 ```bash
 export TREED_MAIN_MCU_SERIAL_BY_ID="/dev/serial/by-id/usb-..."
 export TREED_CAN_IFACE="can0"
-export TREED_CAN_BITRATE="500000"
+export TREED_CAN_BITRATE="1000000"
 export TREED_CAN_TXQUEUE="1024"
+export TREED_Z_ENDSTOP_PIN="PG10"
+export TREED_Z_POSITION_ENDSTOP="0.5"
 ```
 
 ## 4. Запуск loader

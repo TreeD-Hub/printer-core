@@ -59,13 +59,15 @@
 - `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override `/dev/serial/by-id/*`.
 - `TREED_MAIN_MCU_SERIAL_MASK` — маска автопоиска main MCU (`/dev/serial/by-id/*stm32*` по умолчанию).
 - `TREED_CAN_IFACE` — default `can0`.
-- `TREED_CAN_BITRATE` — default `500000`.
+- `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
 - `TREED_CAN_AUTOBITRATE` — `0|1`, default `1` (перебор типовых bitrate при auto-detect UUID).
-- `TREED_CAN_AUTOBITRATE_LIST` — default `500000 1000000 250000 125000`.
+- `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
 - `TREED_EBB_CANBUS_UUID` — рекомендуется задавать явно; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` (только при единственном UUID на шине).
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
 - `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
+- `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
+- `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_FIRMWARE_BUILD_ENABLED` — `0|1`, default `1`.
 - `TREED_KLIPPER_SRC_DIR` — default `${PI_HOME}/klipper`.
 - `TREED_FIRMWARE_ARTIFACTS_DIR` — default `${PI_HOME}/treed/firmware-artifacts/treed-v2`.

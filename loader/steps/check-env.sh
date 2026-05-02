@@ -49,8 +49,10 @@ TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
-TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
+TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
+TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-}"
 
 TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED:-1}"
@@ -58,7 +60,7 @@ TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
 TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
 TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_usb.config}"
 TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
-TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_stm32g0b1.config}"
+TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_rp2040.config}"
 
 if [ -n "${TREED_MAIN_MCU_SERIAL_BY_ID}" ]; then
   case "${TREED_MAIN_MCU_SERIAL_BY_ID}" in
@@ -105,6 +107,19 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
       exit 1
       ;;
   esac
+else
+  if [ -z "${TREED_Z_ENDSTOP_PIN}" ] || ! printf '%s' "${TREED_Z_ENDSTOP_PIN}" | grep -Eq '^[!^~]*[A-Za-z0-9_.:-]+$'; then
+    log_error "check-env: TREED_Z_ENDSTOP_PIN has invalid format: ${TREED_Z_ENDSTOP_PIN}"
+    exit 1
+  fi
+  if [ "${TREED_Z_ENDSTOP_PIN}" = "probe:z_virtual_endstop" ]; then
+    log_error "check-env: TREED_Z_ENDSTOP_PIN=probe:z_virtual_endstop requires TREED_EDDY_ENABLED=1"
+    exit 1
+  fi
+  if ! printf '%s' "${TREED_Z_POSITION_ENDSTOP}" | grep -Eq '^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$'; then
+    log_error "check-env: TREED_Z_POSITION_ENDSTOP must be numeric, got: ${TREED_Z_POSITION_ENDSTOP}"
+    exit 1
+  fi
 fi
 
 if ! printf '%s' "${TREED_CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then

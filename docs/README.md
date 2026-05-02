@@ -13,13 +13,15 @@ REPO_DIR="${BASE}/treed-mainshellOS"
 TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
 TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
-TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 TREED_CAN_AUTOBITRATE="${TREED_CAN_AUTOBITRATE:-1}"
-TREED_CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST:-500000 1000000 250000 125000}"
+TREED_CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST:-1000000 500000 250000 125000}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
+TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
+TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 
 sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
 
@@ -42,6 +44,8 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
      TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID}" \
      TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED}" \
      TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID}" \
+     TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN}" \
+     TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP}" \
      bash loader/loader.sh
 ```
 
@@ -50,13 +54,15 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 - `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override `/dev/serial/by-id/*`.
 - `TREED_MAIN_MCU_SERIAL_MASK` — маска для auto-resolve main MCU, default `/dev/serial/by-id/*stm32*`.
 - `TREED_CAN_IFACE` — default `can0`.
-- `TREED_CAN_BITRATE` — default `500000`.
+- `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
 - `TREED_CAN_AUTOBITRATE` — `0|1`, default `1`; при пустом UUID позволяет подобрать рабочий bitrate из `TREED_CAN_AUTOBITRATE_LIST`.
-- `TREED_CAN_AUTOBITRATE_LIST` — default `500000 1000000 250000 125000`.
+- `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
 - `TREED_EBB_CANBUS_UUID` — рекомендуется задавать явно; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` (успех только при единственном UUID на шине).
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
 - `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
+- `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
+- `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 
 ## Контракт железа
 

@@ -63,16 +63,18 @@
 - `TREED_MAIN_MCU_SERIAL_BY_ID` (optional, `/dev/serial/by-id/*`)
 - `TREED_MAIN_MCU_SERIAL_MASK` (default `/dev/serial/by-id/*stm32*`)
 - `TREED_CAN_IFACE` (default `can0`)
-- `TREED_CAN_BITRATE` (default `500000`)
+- `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
 - `TREED_CAN_AUTOBITRATE` (`0|1`, default `1`; при auto-detect EBB UUID допускает перебор типовых bitrate)
-- `TREED_CAN_AUTOBITRATE_LIST` (default `500000 1000000 250000 125000`)
+- `TREED_CAN_AUTOBITRATE_LIST` (default `1000000 500000 250000 125000`)
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
 - `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
 - `TREED_EBB_CANBUS_UUID` (рекомендуемый hex UUID; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` при единственном UUID на шине)
 - `TREED_CANBUS_QUERY_PYTHON` (optional override интерпретатора для `canbus_query.py`; по умолчанию используется `${TREED_KLIPPY_ENV_DIR}/bin/python*`)
 - `TREED_EDDY_ENABLED` (`0|1`, default `0`)
 - `TREED_EDDY_CANBUS_UUID` (required hex UUID when `TREED_EDDY_ENABLED=1`)
+- `TREED_Z_ENDSTOP_PIN` (default `PG10`, used when `TREED_EDDY_ENABLED=0`)
+- `TREED_Z_POSITION_ENDSTOP` (default `0.5`, used when `TREED_EDDY_ENABLED=0`)
 
 ### Firmware build
 
@@ -81,7 +83,7 @@
 - `TREED_FIRMWARE_ARTIFACTS_DIR` (default `${PI_HOME}/treed/firmware-artifacts/treed-v2`)
 - `TREED_FW_MAIN_CONFIG` (default `firmware/configs/treed_v2/main_octopus_pro_f446_usb.config`)
 - `TREED_FW_EBB_CONFIG` (default `firmware/configs/treed_v2/ebb42_can_stm32g0b1.config`)
-- `TREED_FW_EDDY_CONFIG` (default `firmware/configs/treed_v2/eddy_can_stm32g0b1.config`)
+- `TREED_FW_EDDY_CONFIG` (default `firmware/configs/treed_v2/eddy_can_rp2040.config`)
 
 ### Runtime bootstrap
 

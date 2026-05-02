@@ -86,10 +86,12 @@ Optional:
 - `TREED_MAIN_MCU_SERIAL_BY_ID`
 - `TREED_MAIN_MCU_SERIAL_MASK` (default `/dev/serial/by-id/*stm32*`)
 - `TREED_CAN_IFACE` (default `can0`)
-- `TREED_CAN_BITRATE` (default `500000`)
+- `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
 - `TREED_EDDY_ENABLED` (`0|1`, default `0`)
 - `TREED_EDDY_CANBUS_UUID` (обязателен только при `TREED_EDDY_ENABLED=1`)
+- `TREED_Z_ENDSTOP_PIN` (default `PG10`, используется при `TREED_EDDY_ENABLED=0`)
+- `TREED_Z_POSITION_ENDSTOP` (default `0.5`, используется при `TREED_EDDY_ENABLED=0`)
 
 Fail-fast сценарии:
 - auto-resolve main MCU: `0` кандидатов -> fail;

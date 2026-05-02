@@ -20,17 +20,20 @@ PRINTER_CFG="${KLIPPER_DIR}/printer.cfg"
 MAIN_MCU_CFG="${PROFILE_DIR}/mcu_main_octopus_usb.cfg"
 EBB_CFG="${PROFILE_DIR}/ebb42_can.cfg"
 EDDY_CFG="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
+STEPPERS_CFG="${PROFILE_DIR}/steppers.cfg"
 
 MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
 MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
 EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
 EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
+Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
+Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 CAN_IFACE="${TREED_CAN_IFACE:-can0}"
-CAN_BITRATE="${TREED_CAN_BITRATE:-500000}"
+CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 CAN_AUTOBITRATE="${TREED_CAN_AUTOBITRATE:-1}"
-CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST:-500000 1000000 250000 125000}"
+CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST:-1000000 500000 250000 125000}"
 CAN_SETUP_ENV_FILE="${TREED_CAN_SETUP_ENV_FILE:-/etc/default/treed-can-setup}"
 CAN_SETUP_UNIT="${TREED_CAN_SETUP_UNIT:-treed-can-setup.service}"
 EDDY_INCLUDE_PATH="profiles/${PROFILE_NAME}/probe_eddy_duo_optional.cfg"
@@ -47,7 +50,7 @@ if [ ! -d "${KLIPPER_DIR}" ] || [ ! -f "${PRINTER_CFG}" ]; then
   exit 1
 fi
 
-for required_file in "${MAIN_MCU_CFG}" "${EBB_CFG}" "${EDDY_CFG}"; do
+for required_file in "${MAIN_MCU_CFG}" "${EBB_CFG}" "${EDDY_CFG}" "${STEPPERS_CFG}"; do
   if [ ! -f "${required_file}" ]; then
     log_error "klipper-profiles: required file not found: ${required_file}"
     exit 1
@@ -269,6 +272,73 @@ EOF
 }
 
 # Блок 3: Резолв main MCU serial (override -> auto by vendor-mask).
+set_stepper_z_endstop() {
+  local endstop_pin="$1"
+  local position_endstop="${2:-}"
+  local keep_position_endstop="$3"
+  local tmp=""
+
+  if ! grep -qE '^[[:space:]]*\[stepper_z\][[:space:]]*$' "${STEPPERS_CFG}"; then
+    log_error "klipper-profiles: [stepper_z] section not found in ${STEPPERS_CFG}"
+    exit 1
+  fi
+
+  tmp="$(mktemp)"
+  awk -v endstop_pin="${endstop_pin}" \
+      -v position_endstop="${position_endstop}" \
+      -v keep_position_endstop="${keep_position_endstop}" '
+    BEGIN {
+      in_z = 0
+      saw_z = 0
+      saw_endstop = 0
+      wrote_position = 0
+    }
+    function emit_position_if_needed() {
+      if (in_z && keep_position_endstop == "1" && !wrote_position) {
+        print "position_endstop: " position_endstop
+        wrote_position = 1
+      }
+    }
+    /^[[:space:]]*\[stepper_z\][[:space:]]*$/ {
+      in_z = 1
+      saw_z = 1
+      wrote_position = 0
+      print
+      next
+    }
+    /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+      emit_position_if_needed()
+      in_z = 0
+      print
+      next
+    }
+    in_z && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
+      print "endstop_pin: " endstop_pin
+      saw_endstop = 1
+      next
+    }
+    in_z && /^[[:space:]]*position_endstop[[:space:]]*:/ {
+      if (keep_position_endstop == "1") {
+        print "position_endstop: " position_endstop
+        wrote_position = 1
+      }
+      next
+    }
+    { print }
+    END {
+      emit_position_if_needed()
+      if (!saw_z || !saw_endstop) {
+        exit 2
+      }
+    }
+  ' "${STEPPERS_CFG}" > "${tmp}" || {
+    rm -f "${tmp}"
+    log_error "klipper-profiles: failed to update stepper_z endstop in ${STEPPERS_CFG}"
+    exit 1
+  }
+  mv "${tmp}" "${STEPPERS_CFG}"
+}
+
 MAIN_SERIAL_PATH=""
 if [ -n "${MAIN_MCU_SERIAL_BY_ID}" ]; then
   case "${MAIN_MCU_SERIAL_BY_ID}" in
@@ -325,6 +395,17 @@ if ! printf '%s' "${CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then
   exit 1
 fi
 
+case "${CAN_BITRATE}" in
+  ''|*[!0-9]*)
+    log_error "klipper-profiles: TREED_CAN_BITRATE must be a positive integer, got: ${CAN_BITRATE}"
+    exit 1
+    ;;
+esac
+if [ "${CAN_BITRATE}" -le 0 ]; then
+  log_error "klipper-profiles: TREED_CAN_BITRATE must be > 0"
+  exit 1
+fi
+
 # Блок 5: Валидация режима Eddy и include-тоггла.
 case "${EDDY_ENABLED}" in
   0|1) ;;
@@ -350,6 +431,19 @@ if [ "${EDDY_ENABLED}" = "1" ]; then
       exit 1
       ;;
   esac
+else
+  if [ -z "${Z_ENDSTOP_PIN}" ] || ! printf '%s' "${Z_ENDSTOP_PIN}" | grep -Eq '^[!^~]*[A-Za-z0-9_.:-]+$'; then
+    log_error "klipper-profiles: TREED_Z_ENDSTOP_PIN has invalid format: ${Z_ENDSTOP_PIN}"
+    exit 1
+  fi
+  if [ "${Z_ENDSTOP_PIN}" = "probe:z_virtual_endstop" ]; then
+    log_error "klipper-profiles: TREED_Z_ENDSTOP_PIN=probe:z_virtual_endstop requires TREED_EDDY_ENABLED=1"
+    exit 1
+  fi
+  if ! printf '%s' "${Z_POSITION_ENDSTOP}" | grep -Eq '^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$'; then
+    log_error "klipper-profiles: TREED_Z_POSITION_ENDSTOP must be numeric, got: ${Z_POSITION_ENDSTOP}"
+    exit 1
+  fi
 fi
 
 # Блок 6: Идемпотентная запись main serial и EBB UUID.
@@ -387,11 +481,15 @@ if [ "${EDDY_ENABLED}" = "1" ]; then
     exit 1
   fi
   sed -i -E "s|^([[:space:]]*canbus_interface:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${CAN_IFACE}\\2|" "${EDDY_CFG}"
+  set_stepper_z_endstop "probe:z_virtual_endstop" "" "0"
   log_info "klipper-profiles: Eddy enabled, canbus_uuid -> ${EDDY_CANBUS_UUID}"
   log_info "klipper-profiles: Eddy canbus_interface -> ${CAN_IFACE}"
+  log_info "klipper-profiles: stepper_z endstop -> probe:z_virtual_endstop"
 else
   sed -i -E "s|^[[:space:]]*#?[[:space:]]*\\[include[[:space:]]+${EDDY_INCLUDE_PATH//\//\\/}\\][[:space:]]*$|# [include ${EDDY_INCLUDE_PATH}]|" "${PRINTER_CFG}"
+  set_stepper_z_endstop "${Z_ENDSTOP_PIN}" "${Z_POSITION_ENDSTOP}" "1"
   log_info "klipper-profiles: Eddy disabled (include commented)"
+  log_info "klipper-profiles: stepper_z endstop -> ${Z_ENDSTOP_PIN}, position_endstop=${Z_POSITION_ENDSTOP}"
 fi
 
 # Блок 8: Финализация владельца staging.

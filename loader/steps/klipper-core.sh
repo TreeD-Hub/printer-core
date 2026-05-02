@@ -45,11 +45,12 @@ sanitize_save_config_block() {
       normalized = normalize($0)
       if (normalized ~ /^\[[^]]+\][[:space:]]*$/) {
         section = normalized
-        drop_section = (
-          section ~ /^\[bltouch\]$/ ||
-          section ~ /^\[probe\]$/ ||
-          section ~ /^\[bed_mesh([[:space:]][^]]+)?\]$/
-        )
+        drop_section = 0
+        if (section ~ /^\[bltouch\]$/ ||
+            section ~ /^\[probe\]$/ ||
+            section ~ /^\[bed_mesh([[:space:]][^]]+)?\]$/) {
+          drop_section = 1
+        }
       }
 
       if (drop_section) {
