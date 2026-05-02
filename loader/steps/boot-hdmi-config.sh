@@ -6,44 +6,136 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Настраивает boot HDMI-параметры backend-aware.
-# - RPi backend: правит HDMI-блок и `gpu_mem` в `config.txt`.
-# - Armbian backend: правит `verbosity/bootlogo/console/extraargs` в `armbianEnv.txt`.
+# - RPi backend: сохраняет legacy fixed 960x544 через config.txt.
+# - Rock Pi / Armbian / Extlinux backend: по умолчанию включает автодетект EDID
+#   за счет удаления принудительных kernel video= токенов.
+# - Fixed-режим для Rock Pi остается доступен через TREED_HDMI_MODE=fixed.
 # Контур:
-# - required (формирует boot-конфиг дисплея и проверяемый gpu_mem).
+# - required (формирует boot-конфиг дисплея и параметры boot UI).
 
-# Блок 1: Библиотеки и функции определения boot-путей.
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/rpi.sh"
 
-# Блок 1a: Helper-нормализация токена в extraargs (armbian backend).
-upsert_extraargs_token() {
+remove_extraargs_tokens_by_prefix() {
   local extraargs="${1:-}"
-  local token_to_set="${2:-}"
-  local token_key=""
+  local prefix="${2:-}"
   local token=""
   local -a tokens=()
   local -a filtered=()
-  local result=""
 
-  token_key="${token_to_set%%=*}"
   read -r -a tokens <<< "${extraargs}"
   for token in "${tokens[@]}"; do
     [ -z "${token}" ] && continue
     case "${token}" in
-      "${token_key}"=*)
-        ;;
-      *)
-        filtered+=("${token}")
+      "${prefix}"*) ;;
+      *) filtered+=("${token}") ;;
+    esac
+  done
+
+  printf '%s\n' "${filtered[*]}"
+}
+
+append_extraargs_token() {
+  local extraargs="${1:-}"
+  local token_to_add="${2:-}"
+
+  if [ -z "${token_to_add}" ]; then
+    printf '%s\n' "${extraargs}"
+    return 0
+  fi
+
+  if [ -z "${extraargs}" ]; then
+    printf '%s\n' "${token_to_add}"
+  else
+    printf '%s\n' "${extraargs} ${token_to_add}"
+  fi
+}
+
+detect_connected_drm_connector() {
+  local status_file=""
+  local drm_dir=""
+  local drm_name=""
+  local connector=""
+  local first_connected=""
+  local first_hdmi=""
+
+  for status_file in /sys/class/drm/card*-*/status; do
+    [ -f "${status_file}" ] || continue
+    [ "$(cat "${status_file}" 2>/dev/null || true)" = "connected" ] || continue
+
+    drm_dir="$(dirname "${status_file}")"
+    drm_name="$(basename "${drm_dir}")"
+    connector="$(printf '%s\n' "${drm_name}" | sed -E 's/^card[0-9]+-//')"
+
+    [ -z "${first_connected}" ] && first_connected="${connector}"
+    case "${connector}" in
+      HDMI-*|HDMI-A-*|HDMI-B-*)
+        first_hdmi="${connector}"
+        break
         ;;
     esac
   done
-  filtered+=("${token_to_set}")
-  result="${filtered[*]}"
-  printf '%s\n' "${result}"
+
+  if [ -n "${first_hdmi}" ]; then
+    printf '%s\n' "${first_hdmi}"
+  else
+    printf '%s\n' "${first_connected}"
+  fi
 }
 
-# Блок 2: Старт шага и определение config.txt.
-log_info "Step boot-hdmi-config: configuring HDMI output for 960x544 display"
+build_kernel_video_token() {
+  local connector="${TREED_HDMI_CONNECTOR:-auto}"
+  local fallback_connector="${TREED_HDMI_CONNECTOR_FALLBACK:-HDMI-A-1}"
+  local resolution="${TREED_HDMI_RESOLUTION:-960x544}"
+  local refresh="${TREED_HDMI_REFRESH:-60}"
+  local full_mode="${TREED_HDMI_VIDEO_MODE:-}"
+  local rotate="${TREED_HDMI_ROTATE:-}"
+  local mode=""
+
+  if [ "${connector}" = "auto" ]; then
+    connector="$(detect_connected_drm_connector || true)"
+    if [ -z "${connector}" ]; then
+      connector="${fallback_connector}"
+      log_warn "boot-hdmi-config: no connected DRM connector found, fallback connector=${connector}"
+    else
+      log_info "boot-hdmi-config: detected connected DRM connector=${connector}"
+    fi
+  fi
+
+  if [ -n "${full_mode}" ]; then
+    case "${full_mode}" in
+      *:*) mode="${full_mode}" ;;
+      *) mode="${connector}:${full_mode}" ;;
+    esac
+  else
+    mode="${connector}:${resolution}"
+    if [ -n "${refresh}" ]; then
+      mode="${mode}@${refresh}"
+    fi
+  fi
+
+  if [ -n "${rotate}" ]; then
+    mode="${mode},rotate=${rotate}"
+  fi
+
+  printf 'video=%s\n' "${mode}"
+}
+
+normalize_hdmi_mode() {
+  local mode="${1:-auto}"
+
+  case "${mode}" in
+    auto|fixed|off)
+      printf '%s\n' "${mode}"
+      ;;
+    *)
+      log_error "boot-hdmi-config: TREED_HDMI_MODE must be auto, fixed or off; got ${mode}"
+      exit 1
+      ;;
+  esac
+}
+
+log_info "Step boot-hdmi-config: configuring HDMI output backend-aware"
 
 BOOT_DIR="$(detect_boot_dir)"
 CONFIG_FILE="$(detect_config_file "${BOOT_DIR}")"
@@ -53,12 +145,25 @@ EXTLINUX_FILE="${EXTLINUX_FILE:-$(detect_extlinux_file "${BOOT_DIR}")}"
 
 ensure_root
 
-# Блок 2a: Armbian backend (без config.txt/gpu_mem).
+# Rock Pi / Armbian policy:
+# - auto  (default): remove forced video= and let DRM/EDID select resolution.
+# - fixed: add video=<connector>:<resolution>@<refresh>; connector can be auto-detected.
+# - off:   do not touch existing video= tokens.
+TREED_HDMI_MODE="$(normalize_hdmi_mode "${TREED_HDMI_MODE:-auto}")"
+TREED_HDMI_CONNECTOR="${TREED_HDMI_CONNECTOR:-auto}"
+TREED_HDMI_RESOLUTION="${TREED_HDMI_RESOLUTION:-960x544}"
+TREED_HDMI_REFRESH="${TREED_HDMI_REFRESH:-60}"
+TREED_HDMI_CONNECTOR_FALLBACK="${TREED_HDMI_CONNECTOR_FALLBACK:-HDMI-A-1}"
+
+# Backward-compatible full-mode override for old env name.
+if [ -z "${TREED_HDMI_VIDEO_MODE:-}" ] && [ -n "${TREED_ARMBIAN_VIDEO_MODE:-}" ]; then
+  TREED_HDMI_VIDEO_MODE="${TREED_ARMBIAN_VIDEO_MODE}"
+fi
+
 if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
   TREED_ARMBIAN_VERBOSITY="${TREED_ARMBIAN_VERBOSITY:-1}"
   TREED_ARMBIAN_BOOTLOGO="${TREED_ARMBIAN_BOOTLOGO:-true}"
   TREED_ARMBIAN_CONSOLE="${TREED_ARMBIAN_CONSOLE:-both}"
-  TREED_ARMBIAN_VIDEO_MODE="${TREED_ARMBIAN_VIDEO_MODE:-HDMI-A-1:960x544@60}"
 
   if [ -z "${ARMBIAN_ENV_FILE}" ] || [ ! -f "${ARMBIAN_ENV_FILE}" ]; then
     log_error "boot-hdmi-config: armbianEnv.txt not found for armbian backend"
@@ -81,39 +186,62 @@ if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
   armbian_extraargs_raw="$(get_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs")"
   armbian_extraargs_raw="${armbian_extraargs_raw#\"}"
   armbian_extraargs_raw="${armbian_extraargs_raw%\"}"
-  armbian_extraargs_new="$(upsert_extraargs_token "${armbian_extraargs_raw}" "video=${TREED_ARMBIAN_VIDEO_MODE}")"
-  set_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs" "${armbian_extraargs_new}"
+
+  case "${TREED_HDMI_MODE}" in
+    auto)
+      armbian_extraargs_new="$(remove_extraargs_tokens_by_prefix "${armbian_extraargs_raw}" "video=")"
+      set_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs" "${armbian_extraargs_new}"
+      log_info "boot-hdmi-config: armbian HDMI mode=auto, removed forced video= tokens for EDID/kernel autodetect"
+      ;;
+    fixed)
+      video_token="$(build_kernel_video_token)"
+      armbian_extraargs_new="$(remove_extraargs_tokens_by_prefix "${armbian_extraargs_raw}" "video=")"
+      armbian_extraargs_new="$(append_extraargs_token "${armbian_extraargs_new}" "${video_token}")"
+      set_armbian_env_value "${ARMBIAN_ENV_FILE}" "extraargs" "${armbian_extraargs_new}"
+      log_info "boot-hdmi-config: armbian HDMI mode=fixed, extraargs includes ${video_token}"
+      ;;
+    off)
+      log_info "boot-hdmi-config: armbian HDMI mode=off, existing video= tokens preserved"
+      ;;
+  esac
 
   log_info "boot-hdmi-config: armbian backend updated ${ARMBIAN_ENV_FILE}"
   log_info "boot-hdmi-config: verbosity=${TREED_ARMBIAN_VERBOSITY}, bootlogo=${TREED_ARMBIAN_BOOTLOGO}, console=${TREED_ARMBIAN_CONSOLE}"
-  log_info "boot-hdmi-config: extraargs includes video=${TREED_ARMBIAN_VIDEO_MODE}"
   log_info "boot-hdmi-config: OK"
   exit 0
 fi
 
-# Блок 2b: Extlinux backend — нормализация video-токена в append строках.
 if [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
-  TREED_ARMBIAN_VIDEO_MODE="${TREED_ARMBIAN_VIDEO_MODE:-HDMI-A-1:960x544@60}"
-
   if [ -z "${EXTLINUX_FILE}" ] || [ ! -f "${EXTLINUX_FILE}" ]; then
     log_error "boot-hdmi-config: extlinux backend requires extlinux.conf"
     exit 1
   fi
 
+  case "${TREED_HDMI_MODE}" in
+    auto) video_token="" ;;
+    fixed) video_token="$(build_kernel_video_token)" ;;
+    off) video_token="__TREED_PRESERVE_VIDEO__" ;;
+  esac
+
   backup_file_once "${EXTLINUX_FILE}"
   tmp="$(mktemp)"
-  awk -v video_token="video=${TREED_ARMBIAN_VIDEO_MODE}" '
-    function upsert_video(args,      i, n, a, t, out) {
+  awk -v mode="${TREED_HDMI_MODE}" -v video_token="${video_token}" '
+    function rewrite_append(args,      i, n, a, t, out) {
       out = ""
       n = split(args, a, /[[:space:]]+/)
       for (i = 1; i <= n; i++) {
         t = a[i]
-        if (t == "" || t ~ /^video=/) {
+        if (t == "") {
+          continue
+        }
+        if (mode != "off" && t ~ /^video=/) {
           continue
         }
         out = (out == "" ? t : out " " t)
       }
-      out = (out == "" ? video_token : out " " video_token)
+      if (mode == "fixed" && video_token != "") {
+        out = (out == "" ? video_token : out " " video_token)
+      }
       return out
     }
     {
@@ -122,7 +250,7 @@ if [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
         sub(/append[[:space:]]+.*/, "", prefix)
         args = $0
         sub(/^[[:space:]]*append[[:space:]]+/, "", args)
-        print prefix "append " upsert_video(args)
+        print prefix "append " rewrite_append(args)
         next
       }
       print
@@ -132,20 +260,23 @@ if [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
   rm -f "${tmp}"
 
   log_info "boot-hdmi-config: extlinux backend updated ${EXTLINUX_FILE}"
-  log_info "boot-hdmi-config: append includes video=${TREED_ARMBIAN_VIDEO_MODE}"
+  case "${TREED_HDMI_MODE}" in
+    auto) log_info "boot-hdmi-config: extlinux HDMI mode=auto, removed forced video= tokens for EDID/kernel autodetect" ;;
+    fixed) log_info "boot-hdmi-config: extlinux HDMI mode=fixed, append includes ${video_token}" ;;
+    off) log_info "boot-hdmi-config: extlinux HDMI mode=off, existing video= tokens preserved" ;;
+  esac
   log_info "boot-hdmi-config: OK"
   exit 0
 fi
 
+# RPi legacy backend: сохраняем старое поведение под штатный 960x544 экран.
 if [ -z "${CONFIG_FILE}" ] || [ ! -f "${CONFIG_FILE}" ]; then
   log_error "boot-hdmi-config: config.txt not found: ${CONFIG_FILE:-<empty>}"
   exit 1
 fi
 
-# Блок 3: Нормализация gpu_mem и удаление дублей.
 backup_file_once "${CONFIG_FILE}"
 
-# Держим gpu_mem не ниже порога для стабильного UI и ожидаемого результата verify.
 GPU_MEM_MIN=96
 gpu_count="$(grep -cE '^[[:space:]]*gpu_mem[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null || true)"
 last_gpu_info="$(grep -nE '^[[:space:]]*gpu_mem[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null | tail -n 1 || true)"
@@ -159,7 +290,7 @@ if [ "${gpu_count}" -eq 0 ]; then
 else
   last_gpu_lineno="${last_gpu_info%%:*}"
   last_gpu_line="${last_gpu_info#*:}"
-  last_gpu_value="$(printf '%s\n' "${last_gpu_line}" | sed -nE 's|^[[:space:]]*gpu_mem[[:space:]]*=[[:space:]]*([0-9]+).*|\\1|p')"
+  last_gpu_value="$(printf '%s\n' "${last_gpu_line}" | sed -nE 's|^[[:space:]]*gpu_mem[[:space:]]*=[[:space:]]*([0-9]+).*|\1|p')"
   case "${last_gpu_value}" in ''|*[!0-9]*) last_gpu_value=0;; esac
 
   if [ "${last_gpu_value}" -lt "${GPU_MEM_MIN}" ]; then
@@ -185,8 +316,6 @@ fi
 BEGIN_TREED_HDMI="# BEGIN TreeD HDMI"
 END_TREED_HDMI="# END TreeD HDMI"
 
-# Блок 4: Поиск потенциальных конфликтов HDMI/dtparam вне managed-блока.
-# Ищем потенциальные конфликты вне managed-блока TreeD (только предупреждения).
 conflicts="$(awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '
   BEGIN { inblk=0 }
   $0==b { inblk=1; next }
@@ -235,8 +364,6 @@ if [ -n "${conflicts}" ]; then
   done <<< "${conflicts}"
 fi
 
-# Блок 5: Проверка целостности парных маркеров managed-блока.
-# Проверяем парность маркеров, чтобы не повредить config.txt при битом блоке.
 if grep -qF "${BEGIN_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null || grep -qF "${END_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null; then
   if ! awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '
     BEGIN { inblk=0; ok=1 }
@@ -249,7 +376,6 @@ if grep -qF "${BEGIN_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null || grep -qF "${EN
   fi
 fi
 
-# Блок 6: Обновление или создание managed TreeD HDMI-блока.
 if grep -qF "${BEGIN_TREED_HDMI}" "${CONFIG_FILE}" 2>/dev/null; then
   tmp="$(mktemp)"
   awk -v b="${BEGIN_TREED_HDMI}" -v e="${END_TREED_HDMI}" '
