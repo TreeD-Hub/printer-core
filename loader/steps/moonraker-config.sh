@@ -155,10 +155,27 @@ deploy_treed_shell_component() {
   log_info "Deployed Moonraker component to ${dst}"
 }
 
+render_base_fragment_templates() {
+  local file=""
+  local pi_home_escaped=""
+  local pi_user_escaped=""
+
+  pi_home_escaped="$(printf '%s' "${PI_HOME}" | sed 's|[&|]|\\&|g')"
+  pi_user_escaped="$(printf '%s' "${PI_USER}" | sed 's|[&|]|\\&|g')"
+
+  while IFS= read -r -d '' file; do
+    sed -i \
+      -e "s|{{PI_HOME}}|${pi_home_escaped}|g" \
+      -e "s|{{PI_USER}}|${pi_user_escaped}|g" \
+      "${file}"
+  done < <(find "${DST_BASE_DIR}" -maxdepth 1 -type f -name '*.conf' -print0 2>/dev/null)
+}
+
 deploy_base_fragments() {
   rm -rf "${DST_BASE_DIR}"
   ensure_dir "${DST_BASE_DIR}"
   cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
+  render_base_fragment_templates
   chown -R "${PI_USER}:${grp}" "${DST_BASE_DIR}" || true
   BASE_DEPLOYED=1
   log_info "Deployed Moonraker base fragments to ${DST_BASE_DIR}"

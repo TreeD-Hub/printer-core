@@ -88,6 +88,59 @@ read_extlinux_append() {
   ' "${cfg}"
 }
 
+normalize_hdmi_mode() {
+  local mode="${1:-auto}"
+  case "${mode}" in
+    auto|fixed|off)
+      printf '%s\n' "${mode}"
+      ;;
+    *)
+      log_warn "VERIFY invalid TREED_HDMI_MODE='${mode}', fallback to auto"
+      printf 'auto\n'
+      ;;
+  esac
+}
+
+verify_video_token_policy() {
+  local scope="$1"
+  local args="$2"
+  local mode="$3"
+  local expected_video_mode="${4:-}"
+  local expected_video_token=""
+
+  if [ -n "${expected_video_mode}" ]; then
+    expected_video_token="video=${expected_video_mode}"
+  fi
+
+  case "${mode}" in
+    auto)
+      if printf '%s\n' "${args}" | grep -qE "(^| )video=[^ ]+( |$)"; then
+        failf "${scope} has no forced video= in TREED_HDMI_MODE=auto"
+      else
+        pass "${scope} has no forced video= in TREED_HDMI_MODE=auto"
+      fi
+      ;;
+    fixed)
+      if [ -n "${expected_video_token}" ]; then
+        if printf '%s\n' "${args}" | grep -qE "(^| )${expected_video_token}( |$)"; then
+          pass "${scope} ${expected_video_token}"
+        else
+          failf "${scope} ${expected_video_token}"
+        fi
+      else
+        if printf '%s\n' "${args}" | grep -qE "(^| )video=[^ ]+( |$)"; then
+          pass "${scope} has video= token (TREED_HDMI_MODE=fixed)"
+        else
+          failf "${scope} has video= token (TREED_HDMI_MODE=fixed)"
+        fi
+      fi
+      ;;
+    off)
+      pass "${scope} video check skipped (TREED_HDMI_MODE=off)"
+      ;;
+  esac
+}
+
 extract_required_theme_icons() {
   local style_file="$1"
   if [ ! -f "${style_file}" ]; then
@@ -114,8 +167,10 @@ missing_required_icons() {
 
 check_required_service_active() {
   local unit="$1"
+  local substate_allowed="${2:-running}"
   local state=""
   local substate=""
+  local allowed=""
 
   if systemctl cat "${unit}" >/dev/null 2>&1; then
     pass "${unit} present"
@@ -133,10 +188,17 @@ check_required_service_active() {
   fi
 
   substate="$(systemctl show -p SubState --value "${unit}" 2>/dev/null | tr -d '\r\n')"
-  if [ "${substate}" = "running" ]; then
-    pass "${unit} substate running"
-  else
+  for allowed in ${substate_allowed}; do
+    if [ "${substate}" = "${allowed}" ]; then
+      pass "${unit} substate ${substate}"
+      return 0
+    fi
+  done
+
+  if [ "${substate_allowed}" = "running" ]; then
     failf "${unit} substate running (state=${substate:-unknown})"
+  else
+    failf "${unit} substate one-of(${substate_allowed// /|}) (state=${substate:-unknown})"
   fi
 }
 
@@ -347,6 +409,10 @@ CMDLINE_FILE="${CMDLINE_FILE:-$(detect_cmdline_file "${BOOT_DIR}")}"
 CONFIG_FILE="${CONFIG_FILE:-$(detect_config_file "${BOOT_DIR}")}"
 ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
 EXTLINUX_FILE="${EXTLINUX_FILE:-$(detect_extlinux_file "${BOOT_DIR}")}"
+TREED_HDMI_MODE="${TREED_HDMI_MODE:-auto}"
+TREED_HDMI_MODE="$(normalize_hdmi_mode "${TREED_HDMI_MODE}")"
+TREED_HDMI_VIDEO_MODE_RAW="${TREED_HDMI_VIDEO_MODE:-}"
+TREED_ARMBIAN_VIDEO_MODE_RAW="${TREED_ARMBIAN_VIDEO_MODE:-}"
 KVER="$(uname -r)"
 INITRD="${BOOT_DIR}/initrd.img-${KVER}"
 
@@ -491,11 +557,11 @@ case "${TREED_BOOT_BACKEND}" in
         fi
       done
 
-      if printf '%s\n' "${armbian_extraargs}" | grep -qE "(^| )video=${TREED_ARMBIAN_VIDEO_MODE}( |$)"; then
-        pass "armbian extraargs video=${TREED_ARMBIAN_VIDEO_MODE}"
-      else
-        failf "armbian extraargs video=${TREED_ARMBIAN_VIDEO_MODE}"
-      fi
+      verify_video_token_policy \
+        "armbian extraargs" \
+        "${armbian_extraargs}" \
+        "${TREED_HDMI_MODE}" \
+        "${TREED_HDMI_VIDEO_MODE_RAW:-${TREED_ARMBIAN_VIDEO_MODE_RAW:-}}"
 
       if printf '%s\n' "${armbian_extraargs}" | grep -q "plymouth.enable=0"; then
         failf "armbian extraargs has no plymouth.enable=0"
@@ -543,11 +609,11 @@ case "${TREED_BOOT_BACKEND}" in
         fi
       done
 
-      if printf '%s\n' "${extlinux_append}" | grep -qE "(^| )video=${TREED_ARMBIAN_VIDEO_MODE}( |$)"; then
-        pass "extlinux append video=${TREED_ARMBIAN_VIDEO_MODE}"
-      else
-        failf "extlinux append video=${TREED_ARMBIAN_VIDEO_MODE}"
-      fi
+      verify_video_token_policy \
+        "extlinux append" \
+        "${extlinux_append}" \
+        "${TREED_HDMI_MODE}" \
+        "${TREED_HDMI_VIDEO_MODE_RAW:-${TREED_ARMBIAN_VIDEO_MODE_RAW:-}}"
 
       if printf '%s\n' "${extlinux_append}" | grep -q "plymouth.enable=0"; then
         failf "extlinux append has no plymouth.enable=0"
@@ -667,7 +733,7 @@ fi
 # Блок 7: Проверки сервисов, Moonraker API и CAN-интерфейса.
 check_required_service_active "klipper.service"
 check_required_service_active "moonraker.service"
-check_required_service_active "${CAN_UNIT}"
+check_required_service_active "${CAN_UNIT}" "running exited"
 moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
 klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
 klipper_ebb_connected_check "klipper startup connected EBBCan"
@@ -825,8 +891,7 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   fi
 else
   if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-    && grep -qE '^[[:space:]]*#?[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/probe_eddy_duo_optional\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}" \
-    && ! grep -qF "${EDDY_INCLUDE_LINE}" "${PRINTER_CFG_RUNTIME}"; then
+    && grep -qE '^[[:space:]]*#[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/probe_eddy_duo_optional\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
     pass "Eddy include disabled in printer.cfg"
   else
     failf "Eddy include disabled in printer.cfg"

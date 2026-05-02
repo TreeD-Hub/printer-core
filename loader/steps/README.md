@@ -14,7 +14,7 @@
 | 6 | `runtime-bootstrap.sh` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов. |
 | 7 | `can-setup.sh` | required | Подъем CAN интерфейса (`can0`) через systemd oneshot + `ip link`. |
 | 8 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum. |
-| 9 | `boot-hdmi-config.sh` | required | RPi: HDMI/gpu_mem; Armbian: `armbianEnv.txt`; Extlinux: `append video=...`. |
+| 9 | `boot-hdmi-config.sh` | required | Backend-aware HDMI policy: `auto` (удаляет forced `video=`), `fixed` (добавляет `video=`), `off` (не трогает `video=`). |
 | 10 | `plymouth-theme-install.sh` | required | Установка темы Plymouth. |
 | 11 | `plymouth-initramfs.sh` | required | Пересборка initramfs. |
 | 12 | `plymouth-initramfs-config.sh` | required | RPi/Armbian/Extlinux backend-aware валидация initrd. |
@@ -133,6 +133,8 @@
 - `TREED_ARMBIAN_VERBOSITY` (default `1`)
 - `TREED_ARMBIAN_BOOTLOGO` (default `true`)
 - `TREED_ARMBIAN_CONSOLE` (default `both`)
+- `TREED_HDMI_MODE` (`auto|fixed|off`, default `auto`)
+- `TREED_HDMI_VIDEO_MODE` (optional full mode override for `fixed`, e.g. `HDMI-A-1:960x544@60`)
 - `TREED_ARMBIAN_VIDEO_MODE` (default `HDMI-A-1:960x544@60`)
 
 ## Поведение `TREED_DEPLOY_MODE_EFFECTIVE`

@@ -21,4 +21,5 @@
 
 - порядок применения задается префиксами имен (`00-`, `10-`, ...);
 - фрагменты должны оставаться совместимыми с `moonraker/moonraker.conf`;
+- для user-зависимых путей использовать шаблоны `{{PI_HOME}}`/`{{PI_USER}}` (подстановка в runtime делает `loader/steps/moonraker-config.sh`);
 - generated-конфиги в этот каталог не добавляются (они живут в runtime: `${PI_HOME}/printer_data/config/moonraker/generated/*.conf`, не в репозитории).
