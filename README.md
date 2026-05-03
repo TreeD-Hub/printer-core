@@ -32,6 +32,7 @@ git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
 
 cd "${REPO_DIR}"
 sudo bash install.sh
+sudo reboot
 ```
 ## Карта слоев
 
