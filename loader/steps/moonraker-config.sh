@@ -25,7 +25,7 @@ DST_GENERATED_DIR="${PI_HOME}/printer_data/config/moonraker/generated"
 SRC_COMPONENT="${REPO_DIR}/moonraker/components/treed_shell_command.py"
 COMPONENT_NAME="treed_shell_command.py"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
-TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-}"
+TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
 
 case "${DEPLOY_MODE}" in
   clean|preserve)
@@ -158,11 +158,13 @@ deploy_treed_shell_component() {
 
 is_valid_mainsail_web_path() {
   local candidate="$1"
-
   if [ -z "${candidate}" ]; then
     return 1
   fi
   if [ ! -d "${candidate}" ]; then
+    return 1
+  fi
+  if [ ! -f "${candidate}/index.html" ]; then
     return 1
   fi
   if [ ! -f "${candidate}/release_info.json" ]; then
@@ -179,11 +181,11 @@ resolve_mainsail_web_path() {
     candidates+=("${TREED_MAINSAIL_WEB_PATH}")
   fi
   candidates+=(
-    "${PI_HOME}/mainsail"
-    "${PI_HOME}/printer_data/www/mainsail"
-    "${PI_HOME}/printer_data/www"
     "/var/www/mainsail"
     "/var/www/html/mainsail"
+    "${PI_HOME}/printer_data/www/mainsail"
+    "${PI_HOME}/printer_data/www"
+    "${PI_HOME}/mainsail"
     "/usr/share/mainsail"
   )
 

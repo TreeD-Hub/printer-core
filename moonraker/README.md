@@ -30,7 +30,7 @@
 - очищается/переинициализируется loader шагами.
 
 Пост-обработка `00-core.conf` в `moonraker-config.sh`:
-- если найден валидный локальный путь Mainsail (и в нем есть `release_info.json`), updater-секция Mainsail остается активной;
+- если найден валидный локальный путь Mainsail (по умолчанию `/var/www/mainsail`, с `index.html` и `release_info.json`), updater-секция Mainsail остается активной;
 - если путь не найден, секция `[update_manager mainsail]` автоматически комментируется, чтобы исключить warning о невалидном `path`.
 
 ## Связанные каталоги

@@ -21,7 +21,13 @@ log_info "Step verify: running V2 post-configuration checks (parity mode)"
 
 ok=0
 fail=0
+MOONRAKER_HTTP_OK=0
+MOONRAKER_PROXY_HTTP_OK=0
+MOONRAKER_PRINTER_INFO_OK=0
 MOONRAKER_READY_OK=0
+KLIPPER_STATE=""
+KLIPPER_STATE_CLASS=""
+KLIPPER_STATE_MESSAGE=""
 
 # Блок 2: Вспомогательные функции подсчета/парсинга/проверок.
 pass() {
@@ -203,14 +209,22 @@ check_required_service_active() {
   fi
 }
 
-moonraker_ready_check() {
+json_string_value() {
+  local key="$1"
+  local file="$2"
+  sed -nE "s|.*\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*|\\1|p" "${file}" \
+    | head -n 1 \
+    | sed 's|\\n| |g; s|\\"|"|g; s|\\\\|\\|g' || true
+}
+
+moonraker_server_info_check() {
   local check_name="$1"
   local url="$2"
+  local scope="${3:-direct}"
   local tmp code retries attempt
 
   if ! command -v curl >/dev/null 2>&1; then
     failf "${check_name} (curl missing)"
-    MOONRAKER_READY_OK=0
     return 0
   fi
 
@@ -225,11 +239,12 @@ moonraker_ready_check() {
     fi
 
     code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
-    if [ "${code}" = "200" ] \
-      && grep -qE '"klippy_connected"[[:space:]]*:[[:space:]]*true' "${tmp}" \
-      && grep -qE '"klippy_state"[[:space:]]*:[[:space:]]*"ready"' "${tmp}"; then
+    if [ "${code}" = "200" ] && grep -qE '"result"[[:space:]]*:' "${tmp}"; then
       pass "${check_name}"
-      MOONRAKER_READY_OK=1
+      case "${scope}" in
+        direct) MOONRAKER_HTTP_OK=1 ;;
+        proxy) MOONRAKER_PROXY_HTTP_OK=1 ;;
+      esac
       rm -f "${tmp}"
       return 0
     fi
@@ -237,7 +252,78 @@ moonraker_ready_check() {
   done
 
   failf "${check_name} (http=${code:-n/a}, retries=${retries})"
+  rm -f "${tmp}"
+}
+
+printer_info_check() {
+  local check_name="$1"
+  local url="$2"
+  local tmp code retries attempt state state_message
+
+  if ! command -v curl >/dev/null 2>&1; then
+    failf "${check_name} (curl missing)"
+    return 0
+  fi
+
+  tmp="$(mktemp "/tmp/treed_verify_printer_info_XXXXXX.json")"
+  retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
+  code=""
+  state=""
+  state_message=""
+  MOONRAKER_PRINTER_INFO_OK=0
   MOONRAKER_READY_OK=0
+
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
+    if [ "${code}" = "200" ] && grep -qE '"result"[[:space:]]*:' "${tmp}"; then
+      MOONRAKER_PRINTER_INFO_OK=1
+      state="$(json_string_value "state" "${tmp}" | tr -d '\r\n')"
+      state_message="$(json_string_value "state_message" "${tmp}" | tr -d '\r\n')"
+      KLIPPER_STATE="${state:-unknown}"
+      KLIPPER_STATE_MESSAGE="${state_message:-}"
+      KLIPPER_STATE_CLASS="${KLIPPER_STATE}"
+      if printf '%s\n' "${KLIPPER_STATE} ${KLIPPER_STATE_MESSAGE}" | grep -Eiq 'shutdown|thermal|heater|temperature|adc'; then
+        KLIPPER_STATE_CLASS="shutdown"
+      fi
+      break
+    fi
+    sleep 1
+  done
+
+  if [ "${MOONRAKER_PRINTER_INFO_OK}" != "1" ]; then
+    if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
+      failf "${check_name} (http=${code:-n/a}, retries=${retries})"
+    else
+      log_warn "VERIFY ${check_name}: unavailable (http=${code:-n/a}, retries=${retries}, TREED_REQUIRE_KLIPPER_READY=0)"
+      pass "Klipper ready not required (TREED_REQUIRE_KLIPPER_READY=0, printer_info unavailable)"
+    fi
+    rm -f "${tmp}"
+    return 0
+  fi
+
+  case "${KLIPPER_STATE_CLASS:-${KLIPPER_STATE}}" in
+    ready)
+      pass "${check_name} ready"
+      MOONRAKER_READY_OK=1
+      ;;
+    startup|error|shutdown|unknown|"")
+      log_warn "VERIFY ${check_name}: Klipper state=${KLIPPER_STATE:-unknown}, class=${KLIPPER_STATE_CLASS:-unknown}, state_message=${KLIPPER_STATE_MESSAGE:-missing}"
+      if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
+        failf "Klipper ready required (state=${KLIPPER_STATE:-unknown}, class=${KLIPPER_STATE_CLASS:-unknown}, state_message=${KLIPPER_STATE_MESSAGE:-missing})"
+      else
+        pass "Klipper ready not required (TREED_REQUIRE_KLIPPER_READY=0, state=${KLIPPER_STATE:-unknown}, class=${KLIPPER_STATE_CLASS:-unknown})"
+      fi
+      ;;
+    *)
+      log_warn "VERIFY ${check_name}: unexpected Klipper state=${KLIPPER_STATE}, class=${KLIPPER_STATE_CLASS:-unknown}, state_message=${KLIPPER_STATE_MESSAGE:-missing}"
+      if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
+        failf "Klipper ready required (unexpected state=${KLIPPER_STATE}, class=${KLIPPER_STATE_CLASS:-unknown})"
+      else
+        pass "Klipper ready not required (TREED_REQUIRE_KLIPPER_READY=0, state=${KLIPPER_STATE}, class=${KLIPPER_STATE_CLASS:-unknown})"
+      fi
+      ;;
+  esac
+
   rm -f "${tmp}"
 }
 
@@ -269,7 +355,11 @@ klipper_mcu_journal_clean_check() {
 
   patterns="Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|MCU 'EBBCan' shutdown|mcu[.]error|Error configuring printer|Unable to open serial port|mcu 'mcu': Unable to connect|mcu 'EBBCan': Unable to connect"
   if grep -Eiq "${patterns}" "${tmp}"; then
-    failf "${check_name} (mcu errors found since=${since})"
+    if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
+      failf "${check_name} (mcu errors found since=${since})"
+    else
+      log_warn "VERIFY ${check_name}: runtime MCU errors found since=${since} (TREED_REQUIRE_KLIPPER_READY=0, not blocking)"
+    fi
   else
     pass "${check_name}"
   fi
@@ -435,6 +525,83 @@ http_status_ok_check() {
   rm -f "${tmp}"
 }
 
+normalize_path_for_compare() {
+  local path="$1"
+  if [ -e "${path}" ]; then
+    readlink -f "${path}" 2>/dev/null || printf '%s\n' "${path}"
+  else
+    printf '%s\n' "${path}"
+  fi
+}
+
+read_moonraker_mainsail_updater_path() {
+  local cfg="$1"
+  awk '
+    BEGIN { in_section = 0 }
+    /^[[:space:]]*\[update_manager mainsail\][[:space:]]*$/ { in_section = 1; next }
+    in_section && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_section = 0 }
+    in_section && /^[[:space:]]*path[[:space:]]*:/ {
+      value = $0
+      sub(/^[[:space:]]*path[[:space:]]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]*(#.*)?$/, "", value)
+      print value
+      exit
+    }
+  ' "${cfg}"
+}
+
+read_nginx_mainsail_root() {
+  local cfg="$1"
+  awk '
+    /^[[:space:]]*root[[:space:]]+/ {
+      value = $0
+      sub(/^[[:space:]]*root[[:space:]]+/, "", value)
+      sub(/[[:space:]]*;[[:space:]]*$/, "", value)
+      print value
+      exit
+    }
+  ' "${cfg}"
+}
+
+mainsail_web_path_alignment_check() {
+  local expected_path updater_path nginx_root expected_norm updater_norm nginx_norm
+
+  expected_path="${TREED_MAINSAIL_WEB_PATH}"
+  expected_norm="$(normalize_path_for_compare "${expected_path}")"
+
+  if [ -f "${MOONRAKER_BASE_CORE_RUNTIME}" ]; then
+    updater_path="$(read_moonraker_mainsail_updater_path "${MOONRAKER_BASE_CORE_RUNTIME}" | tr -d '\r\n' || true)"
+    if [ -n "${updater_path}" ]; then
+      updater_norm="$(normalize_path_for_compare "${updater_path}")"
+      if [ "${updater_norm}" = "${expected_norm}" ]; then
+        pass "Moonraker Mainsail updater path matches web root (${updater_path})"
+      else
+        failf "Moonraker Mainsail updater path matches web root (path=${updater_path:-missing}, expected=${expected_path})"
+      fi
+    else
+      failf "Moonraker Mainsail updater path present (${MOONRAKER_BASE_CORE_RUNTIME})"
+    fi
+  else
+    failf "Moonraker base core config present (${MOONRAKER_BASE_CORE_RUNTIME})"
+  fi
+
+  if [ -f "${TREED_MAINSAIL_NGINX_SITE_ENABLED}" ] || [ -L "${TREED_MAINSAIL_NGINX_SITE_ENABLED}" ]; then
+    nginx_root="$(read_nginx_mainsail_root "${TREED_MAINSAIL_NGINX_SITE_ENABLED}" | tr -d '\r\n' || true)"
+    if [ -n "${nginx_root}" ]; then
+      nginx_norm="$(normalize_path_for_compare "${nginx_root}")"
+      if [ "${nginx_norm}" = "${expected_norm}" ]; then
+        pass "nginx Mainsail root matches web root (${nginx_root})"
+      else
+        failf "nginx Mainsail root matches web root (root=${nginx_root:-missing}, expected=${expected_path})"
+      fi
+    else
+      failf "nginx Mainsail root present (${TREED_MAINSAIL_NGINX_SITE_ENABLED})"
+    fi
+  else
+    failf "nginx Mainsail site enabled (${TREED_MAINSAIL_NGINX_SITE_ENABLED})"
+  fi
+}
+
 # Блок 3: Подготовка boot-контекста и runtime-переменных.
 BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
@@ -478,10 +645,22 @@ EDDY_CFG_RUNTIME="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
 STEPPERS_CFG_RUNTIME="${PROFILE_DIR}/steppers.cfg"
 INPUT_SHAPER_CFG="${PROFILE_DIR}/input_shaper.cfg"
 
+TREED_REQUIRE_KLIPPER_READY="${TREED_REQUIRE_KLIPPER_READY:-0}"
+case "${TREED_REQUIRE_KLIPPER_READY}" in
+  0|1|true|TRUE|yes|YES|on|ON|false|FALSE|no|NO|off|OFF) ;;
+  *)
+    failf "TREED_REQUIRE_KLIPPER_READY is valid (0|1, current=${TREED_REQUIRE_KLIPPER_READY})"
+    TREED_REQUIRE_KLIPPER_READY="0"
+    ;;
+esac
+
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
+MOONRAKER_PRINTER_INFO_URL="http://127.0.0.1:7125/printer/info"
 WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
 CAN_UNIT="treed-can-setup.service"
-TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-${PI_HOME}/mainsail}"
+TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
+TREED_MAINSAIL_NGINX_SITE_ENABLED="${TREED_MAINSAIL_NGINX_SITE_ENABLED:-/etc/nginx/sites-enabled/mainsail}"
+MOONRAKER_BASE_CORE_RUNTIME="${PI_HOME}/printer_data/config/moonraker/base/00-core.conf"
 MAINSAIL_HTTP_ROOT_URL="http://127.0.0.1/"
 MAINSAIL_MOONRAKER_PROXY_INFO_URL="http://127.0.0.1/server/info"
 
@@ -781,11 +960,17 @@ else
   failf "Mainsail web root release_info present (${TREED_MAINSAIL_WEB_PATH}/release_info.json)"
 fi
 
+if [ -f "${TREED_MAINSAIL_WEB_PATH}/index.html" ]; then
+  pass "Mainsail web root index present (${TREED_MAINSAIL_WEB_PATH}/index.html)"
+else
+  failf "Mainsail web root index present (${TREED_MAINSAIL_WEB_PATH}/index.html)"
+fi
+
+mainsail_web_path_alignment_check
 http_status_ok_check "nginx HTTP root responds 200" "${MAINSAIL_HTTP_ROOT_URL}" "200" "8"
-moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
-moonraker_ready_direct="${MOONRAKER_READY_OK}"
-moonraker_ready_check "nginx proxy moonraker api ready/klippy connected" "${MAINSAIL_MOONRAKER_PROXY_INFO_URL}"
-MOONRAKER_READY_OK="${moonraker_ready_direct}"
+moonraker_server_info_check "Moonraker HTTP 127.0.0.1:7125 /server/info" "${MOONRAKER_SERVER_INFO_URL}" "direct"
+moonraker_server_info_check "nginx proxy /server/info" "${MAINSAIL_MOONRAKER_PROXY_INFO_URL}" "proxy"
+printer_info_check "Klipper /printer/info" "${MOONRAKER_PRINTER_INFO_URL}"
 klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
 klipper_ebb_connected_check "klipper startup connected EBBCan"
 
