@@ -1084,24 +1084,32 @@ else
   failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
 fi
 
-# Проверки sensorless X/Y: tmc2209 + virtual endstop + retract=0.
+# Проверки sensorless X/Y: tmc5160/tmc2209 + virtual endstop + retract=0.
+SENSORLESS_XY_TMC_DRIVER=""
 if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_x\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_y\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
+  SENSORLESS_XY_TMC_DRIVER="tmc5160"
+  pass "sensorless X/Y: tmc5160 sections present"
+elif [ -f "${STEPPERS_CFG_RUNTIME}" ] \
   && grep -qE '^[[:space:]]*\[tmc2209[[:space:]]+stepper_x\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}" \
   && grep -qE '^[[:space:]]*\[tmc2209[[:space:]]+stepper_y\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
+  SENSORLESS_XY_TMC_DRIVER="tmc2209"
   pass "sensorless X/Y: tmc2209 sections present"
 else
-  failf "sensorless X/Y: tmc2209 sections present"
+  failf "sensorless X/Y: tmc5160/tmc2209 sections present"
 fi
 
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
+if [ -n "${SENSORLESS_XY_TMC_DRIVER}" ] \
+  && [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk -v expected="${SENSORLESS_XY_TMC_DRIVER}_stepper_x:virtual_endstop" '
     /^\[stepper_x\][[:space:]]*$/ { in_section = 1; next }
     in_section && /^\[[^]]+\][[:space:]]*$/ { in_section = 0 }
     in_section && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
       value = $0
       sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
       sub(/[[:space:]]*(#.*)?$/, "", value)
-      found = (value == "tmc2209_stepper_x:virtual_endstop")
+      found = (value == expected)
     }
     END { exit found ? 0 : 1 }
   ' "${STEPPERS_CFG_RUNTIME}"; then
@@ -1110,15 +1118,16 @@ else
   failf "sensorless X: virtual endstop"
 fi
 
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
+if [ -n "${SENSORLESS_XY_TMC_DRIVER}" ] \
+  && [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk -v expected="${SENSORLESS_XY_TMC_DRIVER}_stepper_y:virtual_endstop" '
     /^\[stepper_y\][[:space:]]*$/ { in_section = 1; next }
     in_section && /^\[[^]]+\][[:space:]]*$/ { in_section = 0 }
     in_section && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
       value = $0
       sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
       sub(/[[:space:]]*(#.*)?$/, "", value)
-      found = (value == "tmc2209_stepper_y:virtual_endstop")
+      found = (value == expected)
     }
     END { exit found ? 0 : 1 }
   ' "${STEPPERS_CFG_RUNTIME}"; then

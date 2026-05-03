@@ -32,30 +32,31 @@ Optional include:
 - при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `probe:z_virtual_endstop` и убирает `position_endstop`;
 - при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
 
-## X/Y sensorless (TMC2209 UART)
+## X/Y sensorless (TMC5160 SPI)
 
-Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc2209_*:virtual_endstop`.
+Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
 
 Обязательные аппаратные предпосылки перед запуском loader:
-- на X/Y драйверах включен UART-режим джамперами;
+- на X/Y драйверах корректно заведены SPI-линии и `CS`;
 - на X/Y включены DIAG-джамперы в линии endstop;
 - X/Y механические концевики не участвуют в логике хоуминга;
-- драйверы соответствуют рабочему режиму TMC2209.
+- драйверы соответствуют рабочему режиму TMC5160/TMC5160T Pro.
 
 База пинов X/Y (Octopus Pro):
-- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `uart_pin=PC4`, `diag_pin=^PG6`;
-- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `uart_pin=PD11`, `diag_pin=^PG9`.
+- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
+- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
+- общая software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
 
 Стартовые параметры sensorless:
 - `homing_speed: 20`, `homing_retract_dist: 0` (второй проход отключен);
-- `run_current: 0.80`, `stealthchop_threshold: 0`, `driver_SGTHRS: 255`;
+- `run_current: 0.90`, `sense_resistor: 0.075`, `stealthchop_threshold: 0`, `driver_SGT: -64`;
 - `hold_current` для X/Y не используется.
 
-## Тюн `driver_SGTHRS` (обязательный после внедрения)
+## Тюн `driver_SGT` (обязательный после внедрения)
 
-1. Проверить UART-связь: `DUMP_TMC STEPPER=stepper_x` и `DUMP_TMC STEPPER=stepper_y`.
-2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD ... FIELD=SGTHRS VALUE=...`.
-3. Зафиксировать финальные `driver_SGTHRS` ближе к нижней рабочей границе.
+1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x` и `DUMP_TMC STEPPER=stepper_y`.
+2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD ... FIELD=SGT VALUE=...`.
+3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний.
 4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний.
 
 ## Переменные окружения

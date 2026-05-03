@@ -21,7 +21,7 @@
 | 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID, контур X/Y sensorless (tmc2209 virtual endstop). |
+| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID, контур X/Y sensorless (tmc5160 virtual endstop). |
 | 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 18 | `klipper-adxl-rpi.sh` | required | Проверка mandatory ADXL/Input Shaper через EBB42. |
 | 19 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
@@ -175,7 +175,7 @@
 - `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст и auto-detect через `canbus_query` (с авто-перебором bitrate при `TREED_CAN_AUTOBITRATE=1`) не смог однозначно определить UUID.
 - При нахождении UUID на bitrate, отличном от `TREED_CAN_BITRATE`, `klipper-profiles.sh` обновляет `${TREED_CAN_SETUP_ENV_FILE}` и перезапускает `${TREED_CAN_SETUP_UNIT}`.
 - `klipper-profiles.sh` включает Eddy include только при `TREED_EDDY_ENABLED=1`.
-- Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc2209_stepper_x/y:virtual_endstop`): перед deploy требуются UART/DIAG джамперы на TMC2209 и отключение X/Y механических endstop из логики.
+- Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются корректная SPI/DIAG обвязка на TMC5160 и отключение X/Y механических endstop из логики.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
