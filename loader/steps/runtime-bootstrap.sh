@@ -45,6 +45,7 @@ PRINTER_CFG_DIR="${PRINTER_DATA_DIR}/config"
 PRINTER_LOG_DIR="${PRINTER_DATA_DIR}/logs"
 PRINTER_GCODE_DIR="${PRINTER_DATA_DIR}/gcodes"
 PRINTER_COMMS_DIR="${PRINTER_DATA_DIR}/comms"
+KLIPPY_API_SOCK="${PRINTER_COMMS_DIR}/klippy.sock"
 
 # Блок 4: Вспомогательные функции (run-as-user, clone/update, venv, requirements).
 run_as_pi() {
@@ -172,7 +173,7 @@ User=${PI_USER}
 Group=${PI_GROUP}
 SupplementaryGroups=dialout tty video render
 WorkingDirectory=${KLIPPER_DIR}
-ExecStart=${KLIPPY_ENV_DIR}/bin/python ${KLIPPER_DIR}/klippy/klippy.py ${PRINTER_CFG_DIR}/printer.cfg -l ${PRINTER_LOG_DIR}/klippy.log -I ${PRINTER_COMMS_DIR}/klippy.serial
+ExecStart=${KLIPPY_ENV_DIR}/bin/python ${KLIPPER_DIR}/klippy/klippy.py ${PRINTER_CFG_DIR}/printer.cfg -l ${PRINTER_LOG_DIR}/klippy.log -I ${PRINTER_COMMS_DIR}/klippy.serial -a ${KLIPPY_API_SOCK}
 Restart=always
 RestartSec=5
 EOF

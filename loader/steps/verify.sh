@@ -21,6 +21,7 @@ log_info "Step verify: running V2 post-configuration checks (parity mode)"
 
 ok=0
 fail=0
+MOONRAKER_READY_OK=0
 
 # Блок 2: Вспомогательные функции подсчета/парсинга/проверок.
 pass() {
@@ -209,6 +210,7 @@ moonraker_ready_check() {
 
   if ! command -v curl >/dev/null 2>&1; then
     failf "${check_name} (curl missing)"
+    MOONRAKER_READY_OK=0
     return 0
   fi
 
@@ -227,6 +229,7 @@ moonraker_ready_check() {
       && grep -qE '"klippy_connected"[[:space:]]*:[[:space:]]*true' "${tmp}" \
       && grep -qE '"klippy_state"[[:space:]]*:[[:space:]]*"ready"' "${tmp}"; then
       pass "${check_name}"
+      MOONRAKER_READY_OK=1
       rm -f "${tmp}"
       return 0
     fi
@@ -234,6 +237,7 @@ moonraker_ready_check() {
   done
 
   failf "${check_name} (http=${code:-n/a}, retries=${retries})"
+  MOONRAKER_READY_OK=0
   rm -f "${tmp}"
 }
 
@@ -930,7 +934,11 @@ else
   failf "sensorless Y: homing_retract_dist=0"
 fi
 
-moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
+if [ "${MOONRAKER_READY_OK}" = "1" ]; then
+  moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
+else
+  log_info "VERIFY ADXL ACCELEROMETER_QUERY via Moonraker skipped (moonraker/klippy not ready)"
+fi
 
 # Блок 9: Optional Eddy-контур.
 case "${TREED_EDDY_ENABLED}" in

@@ -160,6 +160,7 @@
 - `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen` и `restart-ms`.
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
+- `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
 - `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст и auto-detect через `canbus_query` (с авто-перебором bitrate при `TREED_CAN_AUTOBITRATE=1`) не смог однозначно определить UUID.
 - При нахождении UUID на bitrate, отличном от `TREED_CAN_BITRATE`, `klipper-profiles.sh` обновляет `${TREED_CAN_SETUP_ENV_FILE}` и перезапускает `${TREED_CAN_SETUP_UNIT}`.
