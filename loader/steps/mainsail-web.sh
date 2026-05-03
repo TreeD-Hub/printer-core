@@ -29,7 +29,7 @@ if ! grp="$(pi_primary_group "${PI_USER}")"; then
 fi
 
 # Блок 2: Конфигурация путей/URL с безопасными дефолтами.
-TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-${PI_HOME}/mainsail}"
+TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
 TREED_MAINSAIL_ZIP_URL="${TREED_MAINSAIL_ZIP_URL:-https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip}"
 TREED_MAINSAIL_NGINX_SITE_AVAILABLE="${TREED_MAINSAIL_NGINX_SITE_AVAILABLE:-/etc/nginx/sites-available/mainsail}"
 TREED_MAINSAIL_NGINX_SITE_ENABLED="${TREED_MAINSAIL_NGINX_SITE_ENABLED:-/etc/nginx/sites-enabled/mainsail}"
@@ -41,7 +41,7 @@ log_info "mainsail-web: web_path=${TREED_MAINSAIL_WEB_PATH}, zip_url=${TREED_MAI
 
 # Блок 3: Установка зависимостей web-слоя.
 apt_update_noninteractive
-apt_get_noninteractive install nginx wget unzip
+apt_get_noninteractive install nginx wget unzip acl
 
 # Блок 4: Загрузка и раскладка фронтенда Mainsail.
 tmp_dir="$(mktemp -d "/tmp/treed_mainsail_web_XXXXXX")"
@@ -63,9 +63,25 @@ fi
 
 ensure_dir "${TREED_MAINSAIL_WEB_PATH}"
 rsync -a --delete "${tmp_dir}/unpack/" "${TREED_MAINSAIL_WEB_PATH}/"
-if [[ "${TREED_MAINSAIL_WEB_PATH}" == "/home/${PI_USER}/"* ]]; then
-  chown -R "${PI_USER}:${grp}" "${TREED_MAINSAIL_WEB_PATH}" || true
+if [ ! -f "${TREED_MAINSAIL_WEB_PATH}/index.html" ]; then
+  log_error "mainsail-web: index.html not found after sync: ${TREED_MAINSAIL_WEB_PATH}/index.html"
+  exit 1
 fi
+
+if [[ "${TREED_MAINSAIL_WEB_PATH}" == "/home/${PI_USER}/"* ]]; then
+  chown -R "${PI_USER}:${grp}" "${TREED_MAINSAIL_WEB_PATH}"
+  setfacl -m "u:www-data:x" "${PI_HOME}"
+else
+  chown -R root:root "${TREED_MAINSAIL_WEB_PATH}"
+  find "${TREED_MAINSAIL_WEB_PATH}" -type d -exec chmod 755 {} \;
+  find "${TREED_MAINSAIL_WEB_PATH}" -type f -exec chmod 644 {} \;
+fi
+
+  if ! sudo -u www-data test -r "${TREED_MAINSAIL_WEB_PATH}/index.html"; then
+  log_error "mainsail-web: www-data cannot read ${TREED_MAINSAIL_WEB_PATH}/index.html"
+  exit 1
+fi
+
 log_info "mainsail-web: synced web root to ${TREED_MAINSAIL_WEB_PATH}"
 
 # Блок 5: Генерация nginx-конфига с проксированием Moonraker.

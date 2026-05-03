@@ -18,7 +18,7 @@ log_info "Step packages-core: installing core packages"
 apt_update_noninteractive
 apt_get_noninteractive install \
   plymouth plymouth-themes plymouth-label \
-  rsync curl v4l-utils git \
+  rsync curl v4l-utils git acl \
   python3 python3-pip python3-venv python3-dev \
   build-essential libffi-dev libssl-dev \
   gcc-avr binutils-avr avr-libc \
