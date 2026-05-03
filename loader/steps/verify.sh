@@ -406,6 +406,35 @@ moonraker_gcode_ok_check() {
   rm -f "${tmp}"
 }
 
+http_status_ok_check() {
+  local check_name="$1"
+  local url="$2"
+  local expected_code="${3:-200}"
+  local retries="${4:-5}"
+  local tmp code attempt
+
+  if ! command -v curl >/dev/null 2>&1; then
+    failf "${check_name} (curl missing)"
+    return 0
+  fi
+
+  tmp="$(mktemp "/tmp/treed_verify_http_XXXXXX.body")"
+  code=""
+
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
+    if [ "${code}" = "${expected_code}" ]; then
+      pass "${check_name}"
+      rm -f "${tmp}"
+      return 0
+    fi
+    sleep 1
+  done
+
+  failf "${check_name} (http=${code:-n/a}, expected=${expected_code})"
+  rm -f "${tmp}"
+}
+
 # Блок 3: Подготовка boot-контекста и runtime-переменных.
 BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
@@ -452,6 +481,9 @@ INPUT_SHAPER_CFG="${PROFILE_DIR}/input_shaper.cfg"
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
 CAN_UNIT="treed-can-setup.service"
+TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-${PI_HOME}/mainsail}"
+MAINSAIL_HTTP_ROOT_URL="http://127.0.0.1/"
+MAINSAIL_MOONRAKER_PROXY_INFO_URL="http://127.0.0.1/server/info"
 
 KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
 KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
@@ -740,8 +772,20 @@ fi
 # Блок 7: Проверки сервисов, Moonraker API и CAN-интерфейса.
 check_required_service_active "klipper.service"
 check_required_service_active "moonraker.service"
+check_required_service_active "nginx.service"
 check_required_service_active "${CAN_UNIT}" "running exited"
+
+if [ -f "${TREED_MAINSAIL_WEB_PATH}/release_info.json" ]; then
+  pass "Mainsail web root release_info present (${TREED_MAINSAIL_WEB_PATH}/release_info.json)"
+else
+  failf "Mainsail web root release_info present (${TREED_MAINSAIL_WEB_PATH}/release_info.json)"
+fi
+
+http_status_ok_check "nginx HTTP root responds 200" "${MAINSAIL_HTTP_ROOT_URL}" "200" "8"
 moonraker_ready_check "moonraker api ready/klippy connected" "${MOONRAKER_SERVER_INFO_URL}"
+moonraker_ready_direct="${MOONRAKER_READY_OK}"
+moonraker_ready_check "nginx proxy moonraker api ready/klippy connected" "${MAINSAIL_MOONRAKER_PROXY_INFO_URL}"
+MOONRAKER_READY_OK="${moonraker_ready_direct}"
 klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
 klipper_ebb_connected_check "klipper startup connected EBBCan"
 

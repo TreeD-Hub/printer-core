@@ -202,6 +202,7 @@ STEPS=(
   "klipper-core"             # Раскладка staging -> runtime: ~/printer_data/config.
   "klipper-adxl-rpi"         # Обязательная интеграция ADXL345/Input Shaper (onboard EBB42).
   "klipper-anti-shutdown"    # Сброс MCU shutdown при обнаружении после раскладки.
+  "mainsail-web"             # Развертывание Mainsail web-layer + nginx reverse proxy.
   "moonraker-config"         # Деплой moonraker.conf/base/generated и shell-компонента.
   "crowsnest-webcam"         # Деплой камеры (crowsnest + moonraker webcam fragment).
   "treed-cam"                # Runtime-скрипты TreeD камеры в ~/treed/cam.

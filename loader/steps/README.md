@@ -25,15 +25,16 @@
 | 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 18 | `klipper-adxl-rpi.sh` | required | Проверка mandatory ADXL/Input Shaper через EBB42. |
 | 19 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
-| 20 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
-| 21 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
-| 22 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
-| 23 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 24 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
-| 25 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
-| 26 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
-| 27 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью, включая проверки sensorless X/Y. |
+| 20 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
+| 21 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
+| 22 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
+| 23 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
+| 24 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
+| 25 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
+| 26 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
+| 27 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
+| 28 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
+| 29 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью, включая проверки sensorless X/Y. |
 
 ## Контракт для step-скриптов
 
@@ -67,6 +68,9 @@
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
 - `TREED_CAN_RESTART_MS` (default `100`; значение `restart-ms` для auto-recovery CAN controller)
+- `TREED_CAN_IFACE_WAIT_SEC` (default `20`; ожидание появления `can0` после boot/USB init)
+- `TREED_CAN_REINIT_ATTEMPTS` (default `5`; число циклов down/up при инициализации CAN)
+- `TREED_CAN_REINIT_DELAY_SEC` (default `2`; пауза между циклами reinit CAN)
 - `TREED_CAN_AUTOBITRATE` (`0|1`, default `1`; при auto-detect EBB UUID допускает перебор типовых bitrate)
 - `TREED_CAN_AUTOBITRATE_LIST` (default `1000000 500000 250000 125000`)
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
@@ -107,7 +111,12 @@
 - `TREED_CAM_RESOLUTION` (default `1920x1080`)
 - `TREED_CAM_FPS` (default `10`)
 - `MOONRAKER_READY_RETRIES` (default `30`)
-- `TREED_MAINSAIL_WEB_PATH` (optional override пути к локальному web-клиенту Mainsail с `release_info.json`; если путь не найден, `moonraker-config.sh` отключает `[update_manager mainsail]` для исключения warning)
+- `TREED_MAINSAIL_WEB_PATH` (default `${PI_HOME}/mainsail`; целевой web-root Mainsail и путь для `[update_manager mainsail]`)
+- `TREED_MAINSAIL_ZIP_URL` (default `https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip`)
+- `TREED_MAINSAIL_MOONRAKER_PROXY_URL` (default `http://127.0.0.1:7125`; upstream Moonraker для nginx proxy)
+- `TREED_MAINSAIL_NGINX_SITE_AVAILABLE` (default `/etc/nginx/sites-available/mainsail`)
+- `TREED_MAINSAIL_NGINX_SITE_ENABLED` (default `/etc/nginx/sites-enabled/mainsail`)
+- `TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED` (default `/etc/nginx/sites-enabled/default`; удаляется при активации сайта Mainsail)
 
 ### KlipperScreen
 
@@ -157,7 +166,7 @@
 
 ## Практические замечания
 
-- `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen` и `restart-ms`.
+- `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen`, `restart-ms`, ждет появление интерфейса и выполняет reinit-циклы при старте.
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
@@ -167,5 +176,6 @@
 - `klipper-profiles.sh` включает Eddy include только при `TREED_EDDY_ENABLED=1`.
 - Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc2209_stepper_x/y:virtual_endstop`): перед deploy требуются UART/DIAG джамперы на TMC2209 и отключение X/Y механических endstop из логики.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
-- `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`), иначе безопасно отключает секцию `[update_manager mainsail]`.
-- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, ADXL и optional Eddy.
+- `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
+- `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
+- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, ADXL и optional Eddy.

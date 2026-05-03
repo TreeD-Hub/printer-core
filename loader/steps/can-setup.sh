@@ -21,6 +21,9 @@ TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
+TREED_CAN_IFACE_WAIT_SEC="${TREED_CAN_IFACE_WAIT_SEC:-20}"
+TREED_CAN_REINIT_ATTEMPTS="${TREED_CAN_REINIT_ATTEMPTS:-5}"
+TREED_CAN_REINIT_DELAY_SEC="${TREED_CAN_REINIT_DELAY_SEC:-2}"
 
 if ! printf '%s' "${TREED_CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then
   log_error "can-setup: TREED_CAN_IFACE has invalid format: ${TREED_CAN_IFACE}"
@@ -47,6 +50,24 @@ case "${TREED_CAN_RESTART_MS}" in
     exit 1
     ;;
 esac
+case "${TREED_CAN_IFACE_WAIT_SEC}" in
+  ''|*[!0-9]*)
+    log_error "can-setup: TREED_CAN_IFACE_WAIT_SEC must be a non-negative integer, got: ${TREED_CAN_IFACE_WAIT_SEC}"
+    exit 1
+    ;;
+esac
+case "${TREED_CAN_REINIT_ATTEMPTS}" in
+  ''|*[!0-9]*)
+    log_error "can-setup: TREED_CAN_REINIT_ATTEMPTS must be a positive integer, got: ${TREED_CAN_REINIT_ATTEMPTS}"
+    exit 1
+    ;;
+esac
+case "${TREED_CAN_REINIT_DELAY_SEC}" in
+  ''|*[!0-9]*)
+    log_error "can-setup: TREED_CAN_REINIT_DELAY_SEC must be a non-negative integer, got: ${TREED_CAN_REINIT_DELAY_SEC}"
+    exit 1
+    ;;
+esac
 
 if [ "${TREED_CAN_BITRATE}" -le 0 ] || [ "${TREED_CAN_TXQUEUE}" -le 0 ]; then
   log_error "can-setup: TREED_CAN_BITRATE and TREED_CAN_TXQUEUE must be > 0"
@@ -55,6 +76,10 @@ fi
 
 if [ "${TREED_CAN_RESTART_MS}" -lt 0 ]; then
   log_error "can-setup: TREED_CAN_RESTART_MS must be >= 0"
+  exit 1
+fi
+if [ "${TREED_CAN_REINIT_ATTEMPTS}" -le 0 ]; then
+  log_error "can-setup: TREED_CAN_REINIT_ATTEMPTS must be > 0"
   exit 1
 fi
 
@@ -80,6 +105,9 @@ TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
+TREED_CAN_IFACE_WAIT_SEC="${TREED_CAN_IFACE_WAIT_SEC:-20}"
+TREED_CAN_REINIT_ATTEMPTS="${TREED_CAN_REINIT_ATTEMPTS:-5}"
+TREED_CAN_REINIT_DELAY_SEC="${TREED_CAN_REINIT_DELAY_SEC:-2}"
 
 IP_BIN="$(command -v ip || true)"
 if [ -z "${IP_BIN}" ]; then
@@ -87,14 +115,34 @@ if [ -z "${IP_BIN}" ]; then
   exit 1
 fi
 
-if ! "${IP_BIN}" link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
-  echo "[can-setup] ERROR: interface not found: ${TREED_CAN_IFACE}" >&2
-  exit 1
-fi
+wait_iface_sec=0
+while ! "${IP_BIN}" link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; do
+  if [ "${wait_iface_sec}" -ge "${TREED_CAN_IFACE_WAIT_SEC}" ]; then
+    echo "[can-setup] ERROR: interface not found after wait (${TREED_CAN_IFACE_WAIT_SEC}s): ${TREED_CAN_IFACE}" >&2
+    exit 1
+  fi
+  sleep 1
+  wait_iface_sec=$((wait_iface_sec + 1))
+done
 
-"${IP_BIN}" link set "${TREED_CAN_IFACE}" down || true
-"${IP_BIN}" link set "${TREED_CAN_IFACE}" txqueuelen "${TREED_CAN_TXQUEUE}"
-"${IP_BIN}" link set "${TREED_CAN_IFACE}" up type can bitrate "${TREED_CAN_BITRATE}" restart-ms "${TREED_CAN_RESTART_MS}"
+apply_can_setup() {
+  "${IP_BIN}" link set "${TREED_CAN_IFACE}" down || true
+  "${IP_BIN}" link set "${TREED_CAN_IFACE}" txqueuelen "${TREED_CAN_TXQUEUE}"
+  "${IP_BIN}" link set "${TREED_CAN_IFACE}" up type can bitrate "${TREED_CAN_BITRATE}" restart-ms "${TREED_CAN_RESTART_MS}"
+}
+
+attempt=1
+while [ "${attempt}" -le "${TREED_CAN_REINIT_ATTEMPTS}" ]; do
+  apply_can_setup
+  if "${IP_BIN}" link show "${TREED_CAN_IFACE}" | grep -q '<[^>]*UP[^>]*>'; then
+    exit 0
+  fi
+  sleep "${TREED_CAN_REINIT_DELAY_SEC}"
+  attempt=$((attempt + 1))
+done
+
+echo "[can-setup] ERROR: interface did not become UP after ${TREED_CAN_REINIT_ATTEMPTS} attempts: ${TREED_CAN_IFACE}" >&2
+exit 1
 EOF
 chmod 0755 "${CAN_SCRIPT}"
 
@@ -105,6 +153,9 @@ TREED_CAN_IFACE=${TREED_CAN_IFACE}
 TREED_CAN_BITRATE=${TREED_CAN_BITRATE}
 TREED_CAN_TXQUEUE=${TREED_CAN_TXQUEUE}
 TREED_CAN_RESTART_MS=${TREED_CAN_RESTART_MS}
+TREED_CAN_IFACE_WAIT_SEC=${TREED_CAN_IFACE_WAIT_SEC}
+TREED_CAN_REINIT_ATTEMPTS=${TREED_CAN_REINIT_ATTEMPTS}
+TREED_CAN_REINIT_DELAY_SEC=${TREED_CAN_REINIT_DELAY_SEC}
 EOF
 chmod 0644 "${CAN_ENV_FILE}"
 
@@ -122,6 +173,8 @@ Type=oneshot
 EnvironmentFile=/etc/default/treed-can-setup
 ExecStart=/usr/local/sbin/treed-can-setup.sh
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target

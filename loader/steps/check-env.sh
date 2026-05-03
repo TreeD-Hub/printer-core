@@ -52,6 +52,9 @@ TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
+TREED_CAN_IFACE_WAIT_SEC="${TREED_CAN_IFACE_WAIT_SEC:-20}"
+TREED_CAN_REINIT_ATTEMPTS="${TREED_CAN_REINIT_ATTEMPTS:-5}"
+TREED_CAN_REINIT_DELAY_SEC="${TREED_CAN_REINIT_DELAY_SEC:-2}"
 TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
 TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-}"
@@ -201,12 +204,34 @@ case "${TREED_CAN_RESTART_MS}" in
     exit 1
     ;;
 esac
+case "${TREED_CAN_IFACE_WAIT_SEC}" in
+  ''|*[!0-9]*)
+    log_error "check-env: TREED_CAN_IFACE_WAIT_SEC must be a non-negative integer, got: ${TREED_CAN_IFACE_WAIT_SEC}"
+    exit 1
+    ;;
+esac
+case "${TREED_CAN_REINIT_ATTEMPTS}" in
+  ''|*[!0-9]*)
+    log_error "check-env: TREED_CAN_REINIT_ATTEMPTS must be a positive integer, got: ${TREED_CAN_REINIT_ATTEMPTS}"
+    exit 1
+    ;;
+esac
+case "${TREED_CAN_REINIT_DELAY_SEC}" in
+  ''|*[!0-9]*)
+    log_error "check-env: TREED_CAN_REINIT_DELAY_SEC must be a non-negative integer, got: ${TREED_CAN_REINIT_DELAY_SEC}"
+    exit 1
+    ;;
+esac
 if [ "${TREED_CAN_BITRATE}" -le 0 ] || [ "${TREED_CAN_TXQUEUE}" -le 0 ]; then
   log_error "check-env: TREED_CAN_BITRATE and TREED_CAN_TXQUEUE must be > 0"
   exit 1
 fi
 if [ "${TREED_CAN_RESTART_MS}" -lt 0 ]; then
   log_error "check-env: TREED_CAN_RESTART_MS must be >= 0"
+  exit 1
+fi
+if [ "${TREED_CAN_REINIT_ATTEMPTS}" -le 0 ]; then
+  log_error "check-env: TREED_CAN_REINIT_ATTEMPTS must be > 0"
   exit 1
 fi
 

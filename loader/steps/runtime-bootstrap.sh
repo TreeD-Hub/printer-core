@@ -162,7 +162,8 @@ ensure_python_venv "${KLIPPY_ENV_DIR}" "${KLIPPER_REQ_FILE}"
 cat > /etc/systemd/system/klipper.service <<EOF
 [Unit]
 Description=Klipper 3D Printer Firmware Host
-After=network.target
+After=network.target treed-can-setup.service
+Wants=treed-can-setup.service
 
 [Install]
 WantedBy=multi-user.target
