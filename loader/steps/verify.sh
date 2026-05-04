@@ -1063,7 +1063,9 @@ fi
 if [ -f "${EBB_CFG_RUNTIME}" ] \
   && grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${EBB_CFG_RUNTIME}" \
   && grep -qE '^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*EBBCan:PB12[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*spi_bus[[:space:]]*:[[:space:]]*spi2_PB2_PB11_PB10[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*spi_software_sclk_pin[[:space:]]*:[[:space:]]*EBBCan:PB10[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*spi_software_mosi_pin[[:space:]]*:[[:space:]]*EBBCan:PB11[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
+  && grep -qE '^[[:space:]]*spi_software_miso_pin[[:space:]]*:[[:space:]]*EBBCan:PB2[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
   && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${EBB_CFG_RUNTIME}" \
   && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${EBB_CFG_RUNTIME}"; then
   pass "EBB config contains onboard ADXL/resonance_tester"
