@@ -31,8 +31,9 @@ sudo rm -rf "${REPO_DIR}"
 git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
 
 cd "${REPO_DIR}"
-sudo bash install.sh
+sudo TREED_DEPLOY_MODE=clean TREED_NONINTERACTIVE=1 bash install.sh
 sudo reboot
+
 ```
 ## Карта слоев
 
