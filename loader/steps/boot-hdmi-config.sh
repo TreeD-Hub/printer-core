@@ -14,7 +14,7 @@ set -euo pipefail
 # - required (формирует boot-конфиг дисплея и параметры boot UI).
 
 . "${REPO_DIR}/loader/lib/common.sh"
-. "${REPO_DIR}/loader/lib/rpi.sh"
+. "${REPO_DIR}/loader/lib/boot-env.sh"
 
 remove_extraargs_tokens_by_prefix() {
   local extraargs="${1:-}"

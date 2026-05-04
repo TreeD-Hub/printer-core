@@ -66,11 +66,11 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
-- `TREED_CAN_AUTOBITRATE` — `0|1`, default `1`; при пустом UUID позволяет подобрать рабочий bitrate из `TREED_CAN_AUTOBITRATE_LIST`.
+- `TREED_CAN_AUTOBITRATE` — `0|1`, default `1`; при auto-detect CAN UUID позволяет подобрать рабочий bitrate из `TREED_CAN_AUTOBITRATE_LIST`.
 - `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
-- `TREED_EBB_CANBUS_UUID` — рекомендуется задавать явно; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` (успех только при единственном UUID на шине).
+- `TREED_EBB_CANBUS_UUID` — optional hex UUID; если пусто, `klipper-profiles.sh` выбирает единственный неизвестный CAN UUID как EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
+- `TREED_EDDY_CANBUS_UUID` — optional hex UUID при `TREED_EDDY_ENABLED=1`; если пусто, после резолва EBB используется единственный оставшийся неизвестный CAN UUID.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; disables apt/dpkg/needrestart prompts.
@@ -82,7 +82,7 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 ## Контракт железа
 
 - Host SBC: Rock Pi / Rock Pi 4 Plus.
-- Main MCU: Octopus Pro по USB serial.
+- Main MCU: Octopus family по USB serial.
 - CAN adapter: U2C V2.1 (USB -> CAN).
 - Toolhead MCU: EBB42 по CAN (required).
 - Probe: Eddy / Eddy Duo по CAN (optional).

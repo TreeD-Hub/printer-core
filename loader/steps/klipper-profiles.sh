@@ -6,7 +6,7 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Применяет фиксированный V2-профиль и runtime-идентификаторы MCU.
-# - Подставляет main USB serial, CAN UUID для EBB и optional UUID Eddy.
+# - Генерирует machine-specific include для main USB serial, EBB CAN UUID и optional Eddy UUID.
 # Контур:
 # - required (без корректных идентификаторов Klipper не стартует).
 
@@ -21,6 +21,8 @@ MAIN_MCU_CFG="${PROFILE_DIR}/mcu_main_octopus_usb.cfg"
 EBB_CFG="${PROFILE_DIR}/ebb42_can.cfg"
 EDDY_CFG="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
 STEPPERS_CFG="${PROFILE_DIR}/steppers.cfg"
+MACHINE_MCUS_CFG="${KLIPPER_DIR}/generated/treed_machine_mcus.cfg"
+MACHINE_MCUS_INCLUDE_PATH="generated/treed_machine_mcus.cfg"
 
 MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
 MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
@@ -58,11 +60,19 @@ for required_file in "${MAIN_MCU_CFG}" "${EBB_CFG}" "${EDDY_CFG}" "${STEPPERS_CF
   fi
 done
 
-# Блок 2a: Авто-резолв EBB UUID через canbus_query (если UUID не передан явно).
+# Блок 2a: CAN-инвентарь и резолв ролей через canbus_query.
 CAN_QUERY_OUTPUT=""
 CAN_QUERY_RC=0
 CAN_QUERY_UUID_COUNT=0
 CAN_QUERY_LAST_UUID=""
+CAN_QUERY_UUIDS=""
+CAN_QUERY_READY=0
+CAN_UNKNOWN_UUID_COUNT=0
+CAN_UNKNOWN_UUID_LAST=""
+
+normalize_uuid() {
+  printf '%s' "$1" | tr 'A-F' 'a-f'
+}
 
 query_canbus_candidates() {
   local query_python="$1"
@@ -71,6 +81,7 @@ query_canbus_candidates() {
   local query_rc=0
   local detected_count=0
   local detected_uuid=""
+  local detected_uuids=""
   local detected_line=""
 
   if query_output="$("${query_python}" "${query_script}" "${CAN_IFACE}" 2>&1)"; then
@@ -83,6 +94,11 @@ query_canbus_candidates() {
   while IFS= read -r detected_line; do
     detected_uuid="$(printf '%s\n' "${detected_line}" | sed -n -E 's/.*canbus_uuid=([0-9A-Fa-f]+).*/\1/p')"
     if [ -n "${detected_uuid}" ]; then
+      detected_uuid="$(normalize_uuid "${detected_uuid}")"
+      case " ${detected_uuids} " in
+        *" ${detected_uuid} "*) continue ;;
+      esac
+      detected_uuids="${detected_uuids}${detected_uuid} "
       detected_count=$((detected_count + 1))
       CAN_QUERY_LAST_UUID="${detected_uuid}"
       log_info "klipper-profiles: auto-detect candidate #${detected_count}: ${detected_uuid}"
@@ -94,6 +110,7 @@ EOF
   CAN_QUERY_OUTPUT="${query_output}"
   CAN_QUERY_RC="${query_rc}"
   CAN_QUERY_UUID_COUNT="${detected_count}"
+  CAN_QUERY_UUIDS="${detected_uuids% }"
 }
 
 setup_can_iface_bitrate() {
@@ -144,7 +161,7 @@ persist_can_setup_env() {
   fi
 }
 
-resolve_ebb_canbus_uuid_auto() {
+refresh_canbus_inventory() {
   local query_script=""
   local query_python=""
   local script_candidates=()
@@ -162,8 +179,6 @@ resolve_ebb_canbus_uuid_auto() {
   fi
   script_candidates+=(
     "${KLIPPER_SRC_DIR}/scripts/canbus_query.py"
-    "${PI_HOME}/klipper/scripts/canbus_query.py"
-    "/home/pi/klipper/scripts/canbus_query.py"
   )
 
   for candidate in "${script_candidates[@]}"; do
@@ -174,7 +189,7 @@ resolve_ebb_canbus_uuid_auto() {
   done
 
   if [ -z "${query_script}" ]; then
-    log_error "klipper-profiles: TREED_EBB_CANBUS_UUID is empty and canbus_query.py is not found"
+    log_error "klipper-profiles: canbus_query.py is not found"
     log_error "klipper-profiles: checked paths: ${script_candidates[*]}"
     return 1
   fi
@@ -203,7 +218,7 @@ resolve_ebb_canbus_uuid_auto() {
   done
 
   if [ -z "${query_python}" ]; then
-    log_error "klipper-profiles: TREED_EBB_CANBUS_UUID is empty and python interpreter for canbus_query is not available"
+    log_error "klipper-profiles: python interpreter for canbus_query is not available"
     log_error "klipper-profiles: checked interpreters: ${python_candidates[*]}"
     return 1
   fi
@@ -260,30 +275,109 @@ resolve_ebb_canbus_uuid_auto() {
     setup_can_iface_bitrate "${initial_bitrate}" || true
   fi
 
-  case "${CAN_QUERY_UUID_COUNT}" in
-    0)
-      log_error "klipper-profiles: TREED_EBB_CANBUS_UUID is empty and auto-detect found no UUID on ${CAN_IFACE}"
-      if [ -n "${CAN_QUERY_OUTPUT}" ]; then
-        log_error "klipper-profiles: canbus_query output follows:"
-        while IFS= read -r detected_line; do
-          log_error "  ${detected_line}"
-        done <<EOF
+  CAN_QUERY_READY=1
+  log_info "klipper-profiles: CAN inventory on ${CAN_IFACE}: ${CAN_QUERY_UUID_COUNT} candidate(s)"
+}
+
+ensure_canbus_inventory() {
+  if [ "${CAN_QUERY_READY}" = "1" ]; then
+    return 0
+  fi
+  refresh_canbus_inventory
+}
+
+uuid_is_visible_on_can() {
+  local uuid
+  uuid="$(normalize_uuid "$1")"
+  case " ${CAN_QUERY_UUIDS} " in
+    *" ${uuid} "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+select_single_unknown_can_uuid() {
+  local exclude_a="${1:-}"
+  local exclude_b="${2:-}"
+  local uuid=""
+
+  exclude_a="$(normalize_uuid "${exclude_a}")"
+  exclude_b="$(normalize_uuid "${exclude_b}")"
+  CAN_UNKNOWN_UUID_COUNT=0
+  CAN_UNKNOWN_UUID_LAST=""
+
+  for uuid in ${CAN_QUERY_UUIDS}; do
+    if [ -n "${exclude_a}" ] && [ "${uuid}" = "${exclude_a}" ]; then
+      continue
+    fi
+    if [ -n "${exclude_b}" ] && [ "${uuid}" = "${exclude_b}" ]; then
+      continue
+    fi
+    CAN_UNKNOWN_UUID_COUNT=$((CAN_UNKNOWN_UUID_COUNT + 1))
+    CAN_UNKNOWN_UUID_LAST="${uuid}"
+  done
+
+  [ "${CAN_UNKNOWN_UUID_COUNT}" -eq 1 ]
+}
+
+dump_canbus_query_output() {
+  local line=""
+
+  if [ -z "${CAN_QUERY_OUTPUT}" ]; then
+    return 0
+  fi
+
+  log_error "klipper-profiles: canbus_query output follows:"
+  while IFS= read -r line; do
+    log_error "  ${line}"
+  done <<EOF
 ${CAN_QUERY_OUTPUT}
 EOF
-      fi
-      return 1
-      ;;
-    1)
-      EBB_CANBUS_UUID="${CAN_QUERY_LAST_UUID}"
-      log_info "klipper-profiles: auto-detected EBB canbus_uuid=${EBB_CANBUS_UUID}"
-      return 0
-      ;;
-    *)
-      log_error "klipper-profiles: TREED_EBB_CANBUS_UUID is empty and auto-detect found multiple UUIDs on ${CAN_IFACE}"
-      log_error "klipper-profiles: set TREED_EBB_CANBUS_UUID explicitly"
-      return 1
-      ;;
-  esac
+}
+
+resolve_ebb_canbus_uuid_auto() {
+  if ! ensure_canbus_inventory; then
+    return 1
+  fi
+
+  if ! select_single_unknown_can_uuid "${EDDY_CANBUS_UUID}"; then
+    case "${CAN_UNKNOWN_UUID_COUNT}" in
+      0)
+        log_error "klipper-profiles: TREED_EBB_CANBUS_UUID is empty and no unknown CAN UUID is available on ${CAN_IFACE}"
+        ;;
+      *)
+        log_error "klipper-profiles: TREED_EBB_CANBUS_UUID is empty and ${CAN_UNKNOWN_UUID_COUNT} unknown CAN UUIDs are visible on ${CAN_IFACE}"
+        log_error "klipper-profiles: connect only EBB or set TREED_EBB_CANBUS_UUID explicitly"
+        ;;
+    esac
+    dump_canbus_query_output
+    return 1
+  fi
+
+  EBB_CANBUS_UUID="${CAN_UNKNOWN_UUID_LAST}"
+  log_info "klipper-profiles: auto-detected EBB canbus_uuid=${EBB_CANBUS_UUID}"
+}
+
+resolve_eddy_canbus_uuid_auto() {
+  if ! ensure_canbus_inventory; then
+    return 1
+  fi
+
+  if ! select_single_unknown_can_uuid "${EBB_CANBUS_UUID}"; then
+    case "${CAN_UNKNOWN_UUID_COUNT}" in
+      0)
+        log_error "klipper-profiles: TREED_EDDY_CANBUS_UUID is empty and no unknown CAN UUID remains after EBB=${EBB_CANBUS_UUID}"
+        ;;
+      *)
+        log_error "klipper-profiles: TREED_EDDY_CANBUS_UUID is empty and ${CAN_UNKNOWN_UUID_COUNT} unknown CAN UUIDs remain on ${CAN_IFACE}"
+        log_error "klipper-profiles: connect only Eddy as the new CAN device or set TREED_EDDY_CANBUS_UUID explicitly"
+        ;;
+    esac
+    dump_canbus_query_output
+    return 1
+  fi
+
+  EDDY_CANBUS_UUID="${CAN_UNKNOWN_UUID_LAST}"
+  log_info "klipper-profiles: auto-detected Eddy canbus_uuid=${EDDY_CANBUS_UUID}"
 }
 
 # Блок 3: Резолв main MCU serial (override -> auto by vendor-mask).
@@ -354,6 +448,38 @@ set_stepper_z_endstop() {
   mv "${tmp}" "${STEPPERS_CFG}"
 }
 
+write_machine_mcus_cfg() {
+  ensure_dir "$(dirname "${MACHINE_MCUS_CFG}")"
+
+  cat > "${MACHINE_MCUS_CFG}" <<EOF
+# ==========================================
+# GENERATED: TREE D MACHINE MCU IDS
+# ==========================================
+# Назначение:
+# - Machine-specific MCU identities for this printer.
+# - Generated by loader/steps/klipper-profiles.sh.
+# Контур:
+# - runtime-only; do not commit real values.
+
+[mcu]
+serial: ${MAIN_SERIAL_PATH}
+restart_method: command
+
+[mcu EBBCan]
+canbus_uuid: ${EBB_CANBUS_UUID}
+canbus_interface: ${CAN_IFACE}
+EOF
+
+  if [ "${EDDY_ENABLED}" = "1" ]; then
+    cat >> "${MACHINE_MCUS_CFG}" <<EOF
+
+[mcu eddy]
+canbus_uuid: ${EDDY_CANBUS_UUID}
+canbus_interface: ${CAN_IFACE}
+EOF
+  fi
+}
+
 MAIN_SERIAL_PATH=""
 if [ -n "${MAIN_MCU_SERIAL_BY_ID}" ]; then
   case "${MAIN_MCU_SERIAL_BY_ID}" in
@@ -392,19 +518,7 @@ else
   esac
 fi
 
-# Блок 4: Валидация и подстановка CAN UUID для EBB (required/auto-detect).
-if [ -z "${EBB_CANBUS_UUID}" ]; then
-  if ! resolve_ebb_canbus_uuid_auto; then
-    exit 1
-  fi
-fi
-case "${EBB_CANBUS_UUID}" in
-  *[!0-9A-Fa-f]*)
-    log_error "klipper-profiles: TREED_EBB_CANBUS_UUID must be hex, got: ${EBB_CANBUS_UUID}"
-    exit 1
-    ;;
-esac
-
+# Блок 4: Валидация CAN-контракта и интерфейса.
 if ! printf '%s' "${CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then
   log_error "klipper-profiles: TREED_CAN_IFACE has invalid format: ${CAN_IFACE}"
   exit 1
@@ -445,17 +559,58 @@ if ! grep -qE "^[[:space:]]*#?[[:space:]]*\\[include[[:space:]]+${EDDY_INCLUDE_P
   exit 1
 fi
 
-if [ "${EDDY_ENABLED}" = "1" ]; then
-  if [ -z "${EDDY_CANBUS_UUID}" ]; then
-    log_error "klipper-profiles: TREED_EDDY_CANBUS_UUID is required when TREED_EDDY_ENABLED=1"
-    exit 1
-  fi
-  case "${EDDY_CANBUS_UUID}" in
+if ! grep -qE "^[[:space:]]*\\[include[[:space:]]+${MACHINE_MCUS_INCLUDE_PATH//\//\\/}\\][[:space:]]*$" "${PRINTER_CFG}"; then
+  log_error "klipper-profiles: cannot find machine MCU include in ${PRINTER_CFG}: ${MACHINE_MCUS_INCLUDE_PATH}"
+  exit 1
+fi
+
+# Блок 6: Резолв и проверка CAN UUID по ролям.
+if [ -n "${EBB_CANBUS_UUID}" ]; then
+  case "${EBB_CANBUS_UUID}" in
     *[!0-9A-Fa-f]*)
-      log_error "klipper-profiles: TREED_EDDY_CANBUS_UUID must be hex, got: ${EDDY_CANBUS_UUID}"
+      log_error "klipper-profiles: TREED_EBB_CANBUS_UUID must be hex, got: ${EBB_CANBUS_UUID}"
       exit 1
       ;;
   esac
+  EBB_CANBUS_UUID="$(normalize_uuid "${EBB_CANBUS_UUID}")"
+else
+  if ! resolve_ebb_canbus_uuid_auto; then
+    exit 1
+  fi
+fi
+
+if ! ensure_canbus_inventory; then
+  exit 1
+fi
+if ! uuid_is_visible_on_can "${EBB_CANBUS_UUID}"; then
+  log_error "klipper-profiles: EBB UUID ${EBB_CANBUS_UUID} is not visible on ${CAN_IFACE}"
+  dump_canbus_query_output
+  exit 1
+fi
+
+if [ "${EDDY_ENABLED}" = "1" ]; then
+  if [ -z "${EDDY_CANBUS_UUID}" ]; then
+    if ! resolve_eddy_canbus_uuid_auto; then
+      exit 1
+    fi
+  else
+    case "${EDDY_CANBUS_UUID}" in
+      *[!0-9A-Fa-f]*)
+        log_error "klipper-profiles: TREED_EDDY_CANBUS_UUID must be hex, got: ${EDDY_CANBUS_UUID}"
+        exit 1
+        ;;
+    esac
+    EDDY_CANBUS_UUID="$(normalize_uuid "${EDDY_CANBUS_UUID}")"
+  fi
+  if [ "${EDDY_CANBUS_UUID}" = "${EBB_CANBUS_UUID}" ]; then
+    log_error "klipper-profiles: Eddy UUID must differ from EBB UUID (${EDDY_CANBUS_UUID})"
+    exit 1
+  fi
+  if ! uuid_is_visible_on_can "${EDDY_CANBUS_UUID}"; then
+    log_error "klipper-profiles: Eddy UUID ${EDDY_CANBUS_UUID} is not visible on ${CAN_IFACE}"
+    dump_canbus_query_output
+    exit 1
+  fi
 else
   if [ -z "${Z_ENDSTOP_PIN}" ] || ! printf '%s' "${Z_ENDSTOP_PIN}" | grep -Eq '^[!^~]*[A-Za-z0-9_.:-]+$'; then
     log_error "klipper-profiles: TREED_Z_ENDSTOP_PIN has invalid format: ${Z_ENDSTOP_PIN}"
@@ -471,41 +626,17 @@ else
   fi
 fi
 
-# Блок 6: Идемпотентная запись main serial и EBB UUID.
-if ! grep -qE '^[[:space:]]*serial:[[:space:]]*' "${MAIN_MCU_CFG}"; then
-  log_error "klipper-profiles: serial line not found in ${MAIN_MCU_CFG}"
-  exit 1
-fi
-sed -i -E "s|^([[:space:]]*serial:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${MAIN_SERIAL_PATH}\\2|" "${MAIN_MCU_CFG}"
+# Блок 7: Генерация machine-specific MCU include.
+write_machine_mcus_cfg
 log_info "klipper-profiles: main MCU serial -> ${MAIN_SERIAL_PATH}"
-
-if ! grep -qE '^[[:space:]]*canbus_uuid:[[:space:]]*' "${EBB_CFG}"; then
-  log_error "klipper-profiles: canbus_uuid line not found in ${EBB_CFG}"
-  exit 1
-fi
-sed -i -E "s|^([[:space:]]*canbus_uuid:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${EBB_CANBUS_UUID}\\2|" "${EBB_CFG}"
-if ! grep -qE '^[[:space:]]*canbus_interface:[[:space:]]*' "${EBB_CFG}"; then
-  log_error "klipper-profiles: canbus_interface line not found in ${EBB_CFG}"
-  exit 1
-fi
-sed -i -E "s|^([[:space:]]*canbus_interface:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${CAN_IFACE}\\2|" "${EBB_CFG}"
 log_info "klipper-profiles: EBB canbus_uuid -> ${EBB_CANBUS_UUID}"
 log_info "klipper-profiles: EBB canbus_interface -> ${CAN_IFACE}"
+log_info "klipper-profiles: machine MCU config -> ${MACHINE_MCUS_CFG}"
 
-# Блок 7: Управление optional-контуром Eddy и его UUID.
+# Блок 8: Управление optional-контуром Eddy.
 if [ "${EDDY_ENABLED}" = "1" ]; then
   sed -i -E "s|^[[:space:]]*#?[[:space:]]*\\[include[[:space:]]+${EDDY_INCLUDE_PATH//\//\\/}\\][[:space:]]*$|[include ${EDDY_INCLUDE_PATH}]|" "${PRINTER_CFG}"
 
-  if ! grep -qE '^[[:space:]]*canbus_uuid:[[:space:]]*' "${EDDY_CFG}"; then
-    log_error "klipper-profiles: canbus_uuid line not found in ${EDDY_CFG}"
-    exit 1
-  fi
-  sed -i -E "s|^([[:space:]]*canbus_uuid:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${EDDY_CANBUS_UUID}\\2|" "${EDDY_CFG}"
-  if ! grep -qE '^[[:space:]]*canbus_interface:[[:space:]]*' "${EDDY_CFG}"; then
-    log_error "klipper-profiles: canbus_interface line not found in ${EDDY_CFG}"
-    exit 1
-  fi
-  sed -i -E "s|^([[:space:]]*canbus_interface:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${CAN_IFACE}\\2|" "${EDDY_CFG}"
   set_stepper_z_endstop "probe:z_virtual_endstop" "" "0"
   log_info "klipper-profiles: Eddy enabled, canbus_uuid -> ${EDDY_CANBUS_UUID}"
   log_info "klipper-profiles: Eddy canbus_interface -> ${CAN_IFACE}"
@@ -517,7 +648,7 @@ else
   log_info "klipper-profiles: stepper_z endstop -> ${Z_ENDSTOP_PIN}, position_endstop=${Z_POSITION_ENDSTOP}"
 fi
 
-# Блок 8: Финализация владельца staging.
+# Блок 9: Финализация владельца staging.
 if [ -z "${PI_USER:-}" ]; then
   log_error "klipper-profiles: PI_USER is not set"
   exit 1
