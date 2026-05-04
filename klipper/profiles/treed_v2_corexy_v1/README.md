@@ -8,17 +8,16 @@
 ## Include-цепочка
 
 Основная include-цепочка задается в `klipper/printer.cfg`:
-1. `generated/treed_machine_mcus.cfg`
-2. `profiles/treed_v2_corexy_v1/mcu_main_octopus_usb.cfg`
-3. `profiles/treed_v2_corexy_v1/ebb42_can.cfg`
-4. `profiles/treed_v2_corexy_v1/printer_base.cfg`
-5. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
-6. `profiles/treed_v2_corexy_v1/steppers.cfg`
-7. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-8. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-9. `profiles/treed_v2_corexy_v1/macros.cfg`
-10. `profiles/treed_v2_corexy_v1/ui.cfg`
-11. `local_overrides.cfg`
+1. `profiles/treed_v2_corexy_v1/mcu_main_octopus_usb.cfg`
+2. `profiles/treed_v2_corexy_v1/ebb42_can.cfg`
+3. `profiles/treed_v2_corexy_v1/printer_base.cfg`
+4. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
+5. `profiles/treed_v2_corexy_v1/steppers.cfg`
+6. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+7. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+8. `profiles/treed_v2_corexy_v1/macros.cfg`
+9. `profiles/treed_v2_corexy_v1/ui.cfg`
+10. `local_overrides.cfg`
 
 Optional include:
 - `profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg` включается loader-шагом `klipper-profiles.sh` только при `TREED_EDDY_ENABLED=1`.
@@ -26,9 +25,9 @@ Optional include:
 ## Контракт loader
 
 Шаг `loader/steps/klipper-profiles.sh`:
-- генерирует `generated/treed_machine_mcus.cfg` с `[mcu]`, `[mcu EBBCan]` и optional `[mcu eddy]`;
-- резолвит main MCU по `/dev/serial/by-id/*` override или маске;
-- резолвит EBB/Eddy UUID через env или `canbus_query` по правилу единственного неизвестного UUID;
+- резолвит main MCU по `/dev/serial/by-id/*` override или маске и подставляет serial в `mcu_main_octopus_usb.cfg`;
+- требует явный `TREED_EBB_CANBUS_UUID` и подставляет его в `ebb42_can.cfg`;
+- при `TREED_EDDY_ENABLED=1` требует явный `TREED_EDDY_CANBUS_UUID` и подставляет его в `probe_eddy_duo_optional.cfg`;
 - управляет optional include Eddy в `printer.cfg`;
 - при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `probe:z_virtual_endstop` и убирает `position_endstop`;
 - при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
@@ -64,8 +63,8 @@ Optional include:
 
 - `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override для main MCU (`/dev/serial/by-id/*`).
 - `TREED_CAN_IFACE` — интерфейс CAN, default `can0`.
-- `TREED_EBB_CANBUS_UUID` — optional CAN UUID EBB; если пусто, нужен ровно один неизвестный CAN UUID для EBB.
+- `TREED_EBB_CANBUS_UUID` — required CAN UUID EBB; auto-detect временно отключен.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — optional при `TREED_EDDY_ENABLED=1`; если пусто, после EBB нужен ровно один неизвестный CAN UUID для Eddy.
+- `TREED_EDDY_CANBUS_UUID` — required при `TREED_EDDY_ENABLED=1`; auto-detect временно отключен.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.

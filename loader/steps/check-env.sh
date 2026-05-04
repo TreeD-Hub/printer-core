@@ -127,7 +127,8 @@ case "${TREED_KLIPPERSCREEN_START_AFTER_INSTALL}" in
 esac
 
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
-  log_warn "check-env: TREED_EBB_CANBUS_UUID is empty, klipper-profiles will try auto-detect via canbus_query"
+  log_error "check-env: TREED_EBB_CANBUS_UUID is required (auto-detect disabled)"
+  exit 1
 else
   case "${TREED_EBB_CANBUS_UUID}" in
     *[!0-9A-Fa-f]*)
@@ -147,7 +148,8 @@ esac
 
 if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
-    log_warn "check-env: TREED_EDDY_CANBUS_UUID is empty, klipper-profiles will try auto-detect from unknown CAN UUIDs"
+    log_error "check-env: TREED_EDDY_CANBUS_UUID is required when TREED_EDDY_ENABLED=1 (auto-detect disabled)"
+    exit 1
   else
     case "${TREED_EDDY_CANBUS_UUID}" in
       *[!0-9A-Fa-f]*)

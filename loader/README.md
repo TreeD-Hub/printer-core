@@ -65,11 +65,9 @@
 - `TREED_CAN_IFACE_WAIT_SEC` — default `20` (ожидание появления `can0` после boot/USB init).
 - `TREED_CAN_REINIT_ATTEMPTS` — default `5` (количество циклов down/up для восстановления CAN после reboot).
 - `TREED_CAN_REINIT_DELAY_SEC` — default `2` (пауза между reinit-циклами).
-- `TREED_CAN_AUTOBITRATE` — `0|1`, default `1` (перебор типовых bitrate при auto-detect CAN UUID).
-- `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
-- `TREED_EBB_CANBUS_UUID` — optional hex UUID; если пусто, `klipper-profiles.sh` выбирает единственный неизвестный CAN UUID как EBB.
+- `TREED_EBB_CANBUS_UUID` — required hex UUID; auto-detect временно отключен.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — optional hex UUID при `TREED_EDDY_ENABLED=1`; если пусто, после резолва EBB используется единственный оставшийся неизвестный CAN UUID.
+- `TREED_EDDY_CANBUS_UUID` — required hex UUID при `TREED_EDDY_ENABLED=1`; auto-detect временно отключен.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.

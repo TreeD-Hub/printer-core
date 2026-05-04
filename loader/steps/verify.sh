@@ -657,7 +657,6 @@ TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 
 PROFILE_DIR="${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1"
 PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
-MACHINE_MCUS_CFG_RUNTIME="${PI_HOME}/printer_data/config/generated/treed_machine_mcus.cfg"
 MAIN_CFG_RUNTIME="${PROFILE_DIR}/mcu_main_octopus_usb.cfg"
 EBB_CFG_RUNTIME="${PROFILE_DIR}/ebb42_can.cfg"
 EDDY_CFG_RUNTIME="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
@@ -1024,20 +1023,13 @@ else
 fi
 
 # Блок 8: Проверки runtime-профиля V2 и MCU binding.
-for required_file in "${PRINTER_CFG_RUNTIME}" "${MACHINE_MCUS_CFG_RUNTIME}" "${MAIN_CFG_RUNTIME}" "${EBB_CFG_RUNTIME}" "${EDDY_CFG_RUNTIME}" "${STEPPERS_CFG_RUNTIME}" "${INPUT_SHAPER_CFG}"; do
+for required_file in "${PRINTER_CFG_RUNTIME}" "${MAIN_CFG_RUNTIME}" "${EBB_CFG_RUNTIME}" "${EDDY_CFG_RUNTIME}" "${STEPPERS_CFG_RUNTIME}" "${INPUT_SHAPER_CFG}"; do
   if [ -f "${required_file}" ]; then
     pass "runtime file present (${required_file})"
   else
     failf "runtime file present (${required_file})"
   fi
 done
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qF "[include generated/treed_machine_mcus.cfg]" "${PRINTER_CFG_RUNTIME}"; then
-  pass "printer.cfg includes generated machine MCU config"
-else
-  failf "printer.cfg includes generated machine MCU config"
-fi
 
 if [ -f "${PRINTER_CFG_RUNTIME}" ] \
   && grep -qF "[include profiles/treed_v2_corexy_v1/mcu_main_octopus_usb.cfg]" "${PRINTER_CFG_RUNTIME}"; then
@@ -1054,8 +1046,8 @@ else
 fi
 
 runtime_main_serial=""
-if [ -f "${MACHINE_MCUS_CFG_RUNTIME}" ]; then
-  runtime_main_serial="$(extract_section_cfg_value "mcu" "serial" "${MACHINE_MCUS_CFG_RUNTIME}")"
+if [ -f "${MAIN_CFG_RUNTIME}" ]; then
+  runtime_main_serial="$(extract_section_cfg_value "mcu" "serial" "${MAIN_CFG_RUNTIME}")"
 fi
 if [ -n "${runtime_main_serial}" ] && printf '%s' "${runtime_main_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
   pass "main MCU serial format (/dev/serial/by-id/*)"
@@ -1070,8 +1062,8 @@ else
 fi
 
 runtime_ebb_uuid=""
-if [ -f "${MACHINE_MCUS_CFG_RUNTIME}" ]; then
-  runtime_ebb_uuid="$(extract_section_cfg_value "mcu EBBCan" "canbus_uuid" "${MACHINE_MCUS_CFG_RUNTIME}")"
+if [ -f "${EBB_CFG_RUNTIME}" ]; then
+  runtime_ebb_uuid="$(extract_section_cfg_value "mcu EBBCan" "canbus_uuid" "${EBB_CFG_RUNTIME}")"
 fi
 if [ -n "${runtime_ebb_uuid}" ] && ! printf '%s' "${runtime_ebb_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
   pass "EBB canbus_uuid is hex"
@@ -1079,8 +1071,8 @@ else
   failf "EBB canbus_uuid is hex"
 fi
 
-if [ -f "${MACHINE_MCUS_CFG_RUNTIME}" ] \
-  && [ "$(extract_section_cfg_value "mcu EBBCan" "canbus_interface" "${MACHINE_MCUS_CFG_RUNTIME}")" = "${TREED_CAN_IFACE}" ]; then
+if [ -f "${EBB_CFG_RUNTIME}" ] \
+  && [ "$(extract_section_cfg_value "mcu EBBCan" "canbus_interface" "${EBB_CFG_RUNTIME}")" = "${TREED_CAN_IFACE}" ]; then
   pass "EBB canbus_interface is ${TREED_CAN_IFACE}"
 else
   failf "EBB canbus_interface is ${TREED_CAN_IFACE}"
@@ -1205,8 +1197,8 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   fi
 
   runtime_eddy_uuid=""
-  if [ -f "${MACHINE_MCUS_CFG_RUNTIME}" ]; then
-    runtime_eddy_uuid="$(extract_section_cfg_value "mcu eddy" "canbus_uuid" "${MACHINE_MCUS_CFG_RUNTIME}")"
+  if [ -f "${EDDY_CFG_RUNTIME}" ]; then
+    runtime_eddy_uuid="$(extract_section_cfg_value "mcu eddy" "canbus_uuid" "${EDDY_CFG_RUNTIME}")"
   fi
   if [ -n "${runtime_eddy_uuid}" ] && ! printf '%s' "${runtime_eddy_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
     pass "Eddy canbus_uuid is hex"
@@ -1214,8 +1206,8 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
     failf "Eddy canbus_uuid is hex"
   fi
 
-  if [ -f "${MACHINE_MCUS_CFG_RUNTIME}" ] \
-    && [ "$(extract_section_cfg_value "mcu eddy" "canbus_interface" "${MACHINE_MCUS_CFG_RUNTIME}")" = "${TREED_CAN_IFACE}" ]; then
+  if [ -f "${EDDY_CFG_RUNTIME}" ] \
+    && [ "$(extract_section_cfg_value "mcu eddy" "canbus_interface" "${EDDY_CFG_RUNTIME}")" = "${TREED_CAN_IFACE}" ]; then
     pass "Eddy canbus_interface is ${TREED_CAN_IFACE}"
   else
     failf "Eddy canbus_interface is ${TREED_CAN_IFACE}"

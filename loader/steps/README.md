@@ -70,14 +70,11 @@
 - `TREED_CAN_IFACE_WAIT_SEC` (default `20`; ожидание появления `can0` после boot/USB init)
 - `TREED_CAN_REINIT_ATTEMPTS` (default `5`; число циклов down/up при инициализации CAN)
 - `TREED_CAN_REINIT_DELAY_SEC` (default `2`; пауза между циклами reinit CAN)
-- `TREED_CAN_AUTOBITRATE` (`0|1`, default `1`; при auto-detect CAN UUID допускает перебор типовых bitrate)
-- `TREED_CAN_AUTOBITRATE_LIST` (default `1000000 500000 250000 125000`)
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
 - `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
-- `TREED_EBB_CANBUS_UUID` (optional hex UUID; если пусто, `klipper-profiles.sh` сначала переиспользует runtime hint из `generated/treed_machine_mcus.cfg`, затем выбирает единственный неизвестный CAN UUID как EBB)
-- `TREED_CANBUS_QUERY_PYTHON` (optional override интерпретатора для `canbus_query.py`; по умолчанию используется `${TREED_KLIPPY_ENV_DIR}/bin/python*`)
+- `TREED_EBB_CANBUS_UUID` (required hex UUID; auto-detect временно отключен)
 - `TREED_EDDY_ENABLED` (`0|1`, default `0`)
-- `TREED_EDDY_CANBUS_UUID` (optional hex UUID when `TREED_EDDY_ENABLED=1`; если пусто, после резолва EBB используется единственный оставшийся неизвестный CAN UUID)
+- `TREED_EDDY_CANBUS_UUID` (required hex UUID when `TREED_EDDY_ENABLED=1`; auto-detect временно отключен)
 - `TREED_Z_ENDSTOP_PIN` (default `PG10`, used when `TREED_EDDY_ENABLED=0`)
 - `TREED_Z_POSITION_ENDSTOP` (default `0.5`, used when `TREED_EDDY_ENABLED=0`)
 
@@ -178,11 +175,10 @@
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
-- `klipper-profiles.sh` генерирует `generated/treed_machine_mcus.cfg` с `[mcu]`, `[mcu EBBCan]` и optional `[mcu eddy]`; реальные serial/UUID не хранятся в профильных cfg.
-- `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст, runtime hint отсутствует и через `canbus_query` (с авто-перебором bitrate при `TREED_CAN_AUTOBITRATE=1`) нельзя выбрать ровно один неизвестный UUID как EBB.
-- `klipper-profiles.sh` при `TREED_EDDY_ENABLED=1` и пустом `TREED_EDDY_CANBUS_UUID` выбирает Eddy только если после EBB остается ровно один неизвестный UUID.
-- Явно заданные `TREED_EBB_CANBUS_UUID`/`TREED_EDDY_CANBUS_UUID` проверяются на формат и наличие на `${TREED_CAN_IFACE}`.
-- При нахождении UUID на bitrate, отличном от `TREED_CAN_BITRATE`, `klipper-profiles.sh` обновляет `${TREED_CAN_SETUP_ENV_FILE}` и перезапускает `${TREED_CAN_SETUP_UNIT}`.
+- `klipper-profiles.sh` подставляет main serial, `TREED_EBB_CANBUS_UUID` и optional `TREED_EDDY_CANBUS_UUID` прямо в V2 profile cfg; auto-detect UUID временно отключен.
+- `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст.
+- `klipper-profiles.sh` при `TREED_EDDY_ENABLED=1` fail-fast, если `TREED_EDDY_CANBUS_UUID` пуст.
+- Явно заданные `TREED_EBB_CANBUS_UUID`/`TREED_EDDY_CANBUS_UUID` проверяются на hex-формат.
 - `klipper-profiles.sh` включает Eddy include только при `TREED_EDDY_ENABLED=1`.
 - Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются корректная SPI/DIAG обвязка на TMC5160 и отключение X/Y механических endstop из логики.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
