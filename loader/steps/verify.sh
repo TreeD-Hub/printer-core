@@ -1363,18 +1363,24 @@ case "${TREED_VERIFY_CAMERA}" in
     camera_checks_reason="disabled by TREED_VERIFY_CAMERA"
     ;;
   auto|AUTO|'')
-    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
+    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ] && systemctl cat crowsnest.service >/dev/null 2>&1; then
       camera_checks_enabled=1
-      camera_checks_reason="auto: webcam fragment present"
+      camera_checks_reason="auto: webcam fragment and crowsnest.service present"
+    elif [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
+      camera_checks_enabled=0
+      camera_checks_reason="auto: crowsnest.service missing"
     else
       camera_checks_enabled=0
       camera_checks_reason="auto: webcam fragment missing"
     fi
     ;;
   *)
-    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
+    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ] && systemctl cat crowsnest.service >/dev/null 2>&1; then
       camera_checks_enabled=1
-      camera_checks_reason="auto fallback: webcam fragment present"
+      camera_checks_reason="auto fallback: webcam fragment and crowsnest.service present"
+    elif [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
+      camera_checks_enabled=0
+      camera_checks_reason="auto fallback: crowsnest.service missing"
     else
       camera_checks_enabled=0
       camera_checks_reason="auto fallback: webcam fragment missing"
@@ -1382,6 +1388,15 @@ case "${TREED_VERIFY_CAMERA}" in
     log_warn "VERIFY invalid TREED_VERIFY_CAMERA='${TREED_VERIFY_CAMERA}', using ${camera_checks_reason}"
     ;;
 esac
+
+if [ "${camera_checks_enabled}" = "1" ]; then
+  if systemctl cat crowsnest.service >/dev/null 2>&1; then
+    pass "crowsnest.service present for camera checks"
+  else
+    failf "crowsnest.service present for camera checks"
+    camera_checks_enabled=0
+  fi
+fi
 
 if [ "${camera_checks_enabled}" = "1" ]; then
   byid_index0_available=0

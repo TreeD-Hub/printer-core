@@ -102,12 +102,18 @@
 - `TREED_MOONRAKER_POLKIT_SETUP` (`0|1`, default `1`; авто-установка PolicyKit правил Moonraker через `set-policykit-rules.sh`)
 - `TREED_MOONRAKER_POLKIT_REQUIRED` (`0|1`, default `0`; при `1` делает неуспех PolicyKit setup блокирующей ошибкой)
 - `TREED_MOONRAKER_RECREATE` (`0|1`, default `0`; при `1` принудительно пересоздает `${PI_HOME}/moonraker` и `${PI_HOME}/moonraker-env` в `runtime-bootstrap`)
+- `TREED_CROWSNEST_SRC_DIR` (default `${PI_HOME}/crowsnest`)
+- `TREED_CROWSNEST_REPO` (default `https://github.com/mainsail-crew/crowsnest.git`)
+- `TREED_CROWSNEST_REF` (optional, empty by default)
+- `TREED_CROWSNEST_INSTALL` (`0|1`, default `1`; при `1` `runtime-bootstrap` устанавливает/обновляет Crowsnest и `crowsnest.service`)
+- `TREED_CROWSNEST_RECREATE` (`0|1`, default `0`; при `1` принудительно пересоздает `${PI_HOME}/crowsnest`)
+- `TREED_CROWSNEST_UPDATE` (`0|1`, default `1`; при `1` подтягивает Crowsnest repo и повторно запускает unattended installer)
 
 ### Moonraker / Camera
 
 - `CAM_DEVICE`
 - `CAM_ALLOW_VIDEO0_FALLBACK` (`1` разрешает fallback на `/dev/video0`)
-- `TREED_CAMERA_REQUIRED` (`1` переводит шаг камеры в fail-fast)
+- `TREED_CAMERA_REQUIRED` (`1` переводит шаг камеры в fail-fast; при `0` отсутствие `crowsnest.service` очищает webcam-fragment и не блокирует loader)
 - `TREED_CAM_RESOLUTION` (default `1920x1080`)
 - `TREED_CAM_FPS` (default `10`)
 - `MOONRAKER_READY_RETRIES` (default `30`)
@@ -139,7 +145,7 @@
 - `TREED_TIMEZONE` (default `Europe/Moscow`)
 - `TREED_ENABLE_NTP` (default `1`)
 - `TREED_MASK_TTY1` (default `1`)
-- `TREED_VERIFY_CAMERA` (`auto|0|1`, default `auto`)
+- `TREED_VERIFY_CAMERA` (`auto|0|1`, default `auto`; в `auto` HTTP-проверки камеры запускаются только при наличии webcam-fragment и `crowsnest.service`)
 - `TREED_CAM_HTTP_RETRIES` (default `3`)
 - `TREED_CAM_HTTP_TIMEOUT` (default `8`)
 - `TREED_MOONRAKER_HTTP_RETRIES` (default `30`)

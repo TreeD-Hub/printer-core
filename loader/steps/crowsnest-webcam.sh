@@ -109,15 +109,19 @@ resolve_cam_device() {
 }
 
 skip_webcam_deploy() {
-  local removed_fragment=0
+  local reason="${1:-camera is not resolved}"
 
-  # Если камера не определена, очищаем ранее развернутый контур и корректно выходим.
-  log_warn "crowsnest-webcam: camera is not resolved, skipping webcam deployment (set TREED_CAMERA_REQUIRED=1 for fail-fast)"
+  # Если webcam-контур недоступен, очищаем ранее развернутые runtime-артефакты.
+  log_warn "crowsnest-webcam: ${reason}, skipping webcam deployment (set TREED_CAMERA_REQUIRED=1 for fail-fast)"
 
   if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
     rm -f "${MOONRAKER_WEBCAM_FRAGMENT}"
-    removed_fragment=1
     log_info "Removed stale Moonraker webcam fragment: ${MOONRAKER_WEBCAM_FRAGMENT}"
+  fi
+
+  if [ -f "${CROWSNEST_CONF}" ]; then
+    rm -f "${CROWSNEST_CONF}"
+    log_info "Removed stale crowsnest config: ${CROWSNEST_CONF}"
   fi
 
   if systemctl cat crowsnest.service >/dev/null 2>&1; then
@@ -125,12 +129,16 @@ skip_webcam_deploy() {
     log_info "Stopped crowsnest.service (no camera deployed)"
   fi
 
-  if [ "${removed_fragment}" -eq 1 ] && systemctl cat moonraker.service >/dev/null 2>&1; then
+  if systemctl cat moonraker.service >/dev/null 2>&1; then
     systemctl restart moonraker.service || true
-    log_info "Restarted moonraker.service after removing webcam fragment"
+    log_info "Restarted moonraker.service after skipping webcam deployment"
   fi
 
   log_info "crowsnest-webcam: SKIPPED"
+}
+
+crowsnest_service_available() {
+  systemctl cat crowsnest.service >/dev/null 2>&1
 }
 
 ensure_moonraker_generated_include() {
@@ -198,7 +206,7 @@ ensure_crowsnest_allowed_service() {
 
 apply_services() {
   # Применяем изменения через перезапуск crowsnest и moonraker с коротким readiness-циклом API.
-  if systemctl cat crowsnest.service >/dev/null 2>&1; then
+  if crowsnest_service_available; then
     log_info "Enabling and restarting crowsnest"
     systemctl enable crowsnest.service >/dev/null 2>&1 || true
     systemctl restart crowsnest.service
@@ -242,7 +250,15 @@ else
     log_error "crowsnest-webcam: camera is required (TREED_CAMERA_REQUIRED=1), aborting"
     exit 1
   fi
-  skip_webcam_deploy
+  skip_webcam_deploy "camera is not resolved"
+  exit 0
+fi
+if ! crowsnest_service_available; then
+  if [ "${CAM_REQUIRED}" = "1" ]; then
+    log_error "crowsnest-webcam: crowsnest.service is missing and camera is required (TREED_CAMERA_REQUIRED=1)"
+    exit 1
+  fi
+  skip_webcam_deploy "crowsnest.service is missing"
   exit 0
 fi
 write_moonraker_webcam_fragment

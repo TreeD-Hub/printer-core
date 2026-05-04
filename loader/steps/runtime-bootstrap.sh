@@ -40,6 +40,12 @@ MOONRAKER_REF="${TREED_MOONRAKER_REF:-}"
 MOONRAKER_POLKIT_SETUP="${TREED_MOONRAKER_POLKIT_SETUP:-1}"
 MOONRAKER_POLKIT_REQUIRED="${TREED_MOONRAKER_POLKIT_REQUIRED:-0}"
 MOONRAKER_RECREATE="${TREED_MOONRAKER_RECREATE:-0}"
+CROWSNEST_DIR="${TREED_CROWSNEST_SRC_DIR:-${PI_HOME}/crowsnest}"
+CROWSNEST_REPO="${TREED_CROWSNEST_REPO:-https://github.com/mainsail-crew/crowsnest.git}"
+CROWSNEST_REF="${TREED_CROWSNEST_REF:-}"
+CROWSNEST_INSTALL="${TREED_CROWSNEST_INSTALL:-1}"
+CROWSNEST_RECREATE="${TREED_CROWSNEST_RECREATE:-0}"
+CROWSNEST_UPDATE="${TREED_CROWSNEST_UPDATE:-1}"
 
 PRINTER_DATA_DIR="${PI_HOME}/printer_data"
 PRINTER_CFG_DIR="${PRINTER_DATA_DIR}/config"
@@ -61,6 +67,11 @@ ensure_repo_present() {
 
   if [ "${repo_dir}" = "${MOONRAKER_DIR}" ] && [ "${MOONRAKER_RECREATE}" = "1" ]; then
     log_warn "runtime-bootstrap: forcing moonraker repo recreate (${repo_dir})"
+    rm -rf "${repo_dir}"
+  fi
+
+  if [ "${repo_dir}" = "${CROWSNEST_DIR}" ] && [ "${CROWSNEST_RECREATE}" = "1" ]; then
+    log_warn "runtime-bootstrap: forcing crowsnest repo recreate (${repo_dir})"
     rm -rf "${repo_dir}"
   fi
 
@@ -152,6 +163,84 @@ install_moonraker_policykit_rules() {
     fi
     log_warn "runtime-bootstrap: failed to install moonraker policykit rules, continuing"
   fi
+}
+
+update_crowsnest_repo() {
+  if [ "${CROWSNEST_UPDATE}" != "1" ] || [ -n "${CROWSNEST_REF}" ]; then
+    return 0
+  fi
+
+  run_as_pi "set -euo pipefail; cd '${CROWSNEST_DIR}'; branch=\"\$(git rev-parse --abbrev-ref HEAD)\"; if [ \"\${branch}\" != HEAD ]; then git pull --ff-only origin \"\${branch}\"; fi"
+}
+
+ensure_crowsnest_runtime() {
+  local installer_log="${PRINTER_LOG_DIR}/crowsnest-install.log"
+  local service_missing=0
+  local bin_missing=0
+
+  case "${CROWSNEST_INSTALL}" in
+    0)
+      log_info "runtime-bootstrap: crowsnest install skipped (TREED_CROWSNEST_INSTALL=0)"
+      return 0
+      ;;
+    1) ;;
+    *)
+      log_error "runtime-bootstrap: TREED_CROWSNEST_INSTALL must be 0 or 1, got: ${CROWSNEST_INSTALL}"
+      exit 1
+      ;;
+  esac
+
+  ensure_repo_present "${CROWSNEST_DIR}" "${CROWSNEST_REPO}" "${CROWSNEST_REF}"
+  update_crowsnest_repo
+
+  if [ ! -f "${CROWSNEST_DIR}/Makefile" ] || [ ! -f "${CROWSNEST_DIR}/tools/install.sh" ]; then
+    log_error "runtime-bootstrap: Crowsnest installer not found in ${CROWSNEST_DIR}"
+    exit 1
+  fi
+
+  if ! systemctl cat crowsnest.service >/dev/null 2>&1; then
+    service_missing=1
+  fi
+  if ! command -v crowsnest >/dev/null 2>&1; then
+    bin_missing=1
+  fi
+
+  if [ "${service_missing}" = "0" ] && [ "${bin_missing}" = "0" ] && [ "${CROWSNEST_UPDATE}" != "1" ]; then
+    log_info "runtime-bootstrap: crowsnest.service and crowsnest binary present"
+    return 0
+  fi
+
+  log_info "runtime-bootstrap: installing/updating Crowsnest (log=${installer_log})"
+  (
+    cd "${CROWSNEST_DIR}"
+    env \
+      SUDO_USER="${PI_USER}" \
+      BASE_USER="${PI_USER}" \
+      CROWSNEST_UNATTENDED=1 \
+      CROWSNEST_ADD_CROWSNEST_MOONRAKER=0 \
+      CROWSNEST_SKIP_REBOOT_PROMPT=1 \
+      CROWSNEST_CONFIG_PATH="${PRINTER_CFG_DIR}" \
+      CROWSNEST_LOG_PATH="${PRINTER_LOG_DIR}" \
+      CROWSNEST_ENV_PATH="${PRINTER_DATA_DIR}/systemd" \
+      DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" \
+      make install
+  ) > "${installer_log}" 2>&1 || {
+    log_error "runtime-bootstrap: Crowsnest install failed (see ${installer_log})"
+    exit 1
+  }
+
+  systemctl daemon-reload
+
+  if ! systemctl cat crowsnest.service >/dev/null 2>&1; then
+    log_error "runtime-bootstrap: crowsnest.service is missing after install"
+    exit 1
+  fi
+  if ! command -v crowsnest >/dev/null 2>&1; then
+    log_error "runtime-bootstrap: crowsnest binary is missing after install"
+    exit 1
+  fi
+
+  log_info "runtime-bootstrap: crowsnest runtime ready"
 }
 
 # Блок 5: Минимальные runtime-каталоги и права.
@@ -262,11 +351,18 @@ EOF
 
 install_moonraker_policykit_rules
 
-# Блок 8: Активация systemd unit-файлов.
+# Блок 8: Crowsnest repo/service (required для webcam-контура, управляется loader).
+ensure_crowsnest_runtime
+
+# Блок 9: Активация systemd unit-файлов.
 systemctl daemon-reload
 systemctl enable klipper.service >/dev/null
 systemctl enable moonraker.service >/dev/null
+systemctl enable crowsnest.service >/dev/null 2>&1 || true
 
 chown -R "${PI_USER}:${PI_GROUP}" "${KLIPPER_DIR}" "${KLIPPY_ENV_DIR}" "${MOONRAKER_DIR}" "${MOONRAKER_ENV_DIR}" "${PRINTER_DATA_DIR}"
+if [ -d "${CROWSNEST_DIR}" ]; then
+  chown -R "${PI_USER}:${PI_GROUP}" "${CROWSNEST_DIR}"
+fi
 
 log_info "runtime-bootstrap: OK"

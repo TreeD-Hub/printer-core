@@ -30,7 +30,7 @@
 | 3 | `timezone-sync` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop` | required | Контролируемая остановка runtime-сервисов. |
 | 5 | `packages-core` | required | Установка базовых пакетов. |
-| 6 | `runtime-bootstrap` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов. |
+| 6 | `runtime-bootstrap` | required | Bootstrap Klipper/Moonraker/Crowsnest unit-файлов, venv и runtime-каталогов. |
 | 7 | `can-setup` | required | Подъем `can0` через systemd oneshot + `ip link`. |
 | 8 | `firmware-build` | required | Сборка firmware main+EBB(+Eddy) и публикация build-отчета. |
 | 9 | `boot-hdmi-config` | required | RPi: `config.txt`; Armbian: `armbianEnv.txt`; Extlinux: `append video=...`. |
@@ -78,6 +78,12 @@
 - `TREED_FIRMWARE_ARTIFACTS_DIR` — default `${PI_HOME}/treed/firmware-artifacts/treed-v2`.
 - `TREED_FW_MAIN_CONFIG` / `TREED_FW_EBB_CONFIG` / `TREED_FW_EDDY_CONFIG` — пути к Kconfig target-файлам сборки.
 - `TREED_RUNTIME_BOOTSTRAP` — `0|1`, default `1` (создание/проверка unit-файлов и venv Klipper/Moonraker).
+- `TREED_CROWSNEST_SRC_DIR` — default `${PI_HOME}/crowsnest`, upstream checkout Crowsnest.
+- `TREED_CROWSNEST_REPO` — default `https://github.com/mainsail-crew/crowsnest.git`.
+- `TREED_CROWSNEST_REF` — optional pin branch/tag/commit для Crowsnest.
+- `TREED_CROWSNEST_INSTALL` — `0|1`, default `1`; установка/обновление Crowsnest в `runtime-bootstrap`.
+- `TREED_CROWSNEST_RECREATE` — `0|1`, default `0`; пересоздание `${PI_HOME}/crowsnest`.
+- `TREED_CROWSNEST_UPDATE` — `0|1`, default `1`; `git pull` и повторный unattended install Crowsnest.
 - `TREED_MAINSAIL_WEB_PATH` — default `/var/www/mainsail`, путь web-root Mainsail (используется в `mainsail-web` и `moonraker-config`).
 - `TREED_MAINSAIL_ZIP_URL` — URL архива Mainsail для `mainsail-web`.
 - `TREED_MAINSAIL_MOONRAKER_PROXY_URL` — upstream Moonraker для nginx reverse-proxy в `mainsail-web` (default `http://127.0.0.1:7125`).

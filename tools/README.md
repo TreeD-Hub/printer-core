@@ -5,6 +5,7 @@
 ## Состав
 
 - `tools/validate_klipper_configs.py` — статический валидатор include-цепочки Klipper.
+- `tools/tests/` — локальные контрактные проверки loader/steps.
 - `tools/skills/` — локальные skills для Codex, используемые в этом репозитории.
 
 ## `validate_klipper_configs.py`
@@ -33,6 +34,16 @@
 Для `comment-style` и `readme-coverage` source of truth:
 
 - `C:/Users/Yawllen/Documents/GitHub/codex-shared-skills`
+
+## `tools/tests/`
+
+Содержит легкие контрактные проверки, которые можно запускать локально на Windows без WSL.
+
+Команда:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_loader_contracts.ps1"
+```
 
 ## Запуск
 
