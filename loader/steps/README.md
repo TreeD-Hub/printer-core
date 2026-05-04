@@ -101,6 +101,7 @@
 - `TREED_MOONRAKER_REF` (optional, empty by default)
 - `TREED_MOONRAKER_POLKIT_SETUP` (`0|1`, default `1`; авто-установка PolicyKit правил Moonraker через `set-policykit-rules.sh`)
 - `TREED_MOONRAKER_POLKIT_REQUIRED` (`0|1`, default `0`; при `1` делает неуспех PolicyKit setup блокирующей ошибкой)
+- `TREED_MOONRAKER_RECREATE` (`0|1`, default `0`; при `1` принудительно пересоздает `${PI_HOME}/moonraker` и `${PI_HOME}/moonraker-env` в `runtime-bootstrap`)
 
 ### Moonraker / Camera
 

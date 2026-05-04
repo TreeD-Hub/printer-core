@@ -39,6 +39,7 @@ MOONRAKER_REPO="${TREED_MOONRAKER_REPO:-https://github.com/Arksine/moonraker.git
 MOONRAKER_REF="${TREED_MOONRAKER_REF:-}"
 MOONRAKER_POLKIT_SETUP="${TREED_MOONRAKER_POLKIT_SETUP:-1}"
 MOONRAKER_POLKIT_REQUIRED="${TREED_MOONRAKER_POLKIT_REQUIRED:-0}"
+MOONRAKER_RECREATE="${TREED_MOONRAKER_RECREATE:-0}"
 
 PRINTER_DATA_DIR="${PI_HOME}/printer_data"
 PRINTER_CFG_DIR="${PRINTER_DATA_DIR}/config"
@@ -57,6 +58,26 @@ ensure_repo_present() {
   local repo_dir="$1"
   local repo_url="$2"
   local repo_ref="$3"
+
+  if [ "${repo_dir}" = "${MOONRAKER_DIR}" ] && [ "${MOONRAKER_RECREATE}" = "1" ]; then
+    log_warn "runtime-bootstrap: forcing moonraker repo recreate (${repo_dir})"
+    rm -rf "${repo_dir}"
+  fi
+
+  if [ -d "${repo_dir}" ] && [ ! -d "${repo_dir}/.git" ]; then
+    log_warn "runtime-bootstrap: ${repo_dir} exists without .git, recreating from ${repo_url}"
+    rm -rf "${repo_dir}"
+  fi
+
+  if [ -d "${repo_dir}/.git" ]; then
+    if ! run_as_pi "set -euo pipefail; cd '${repo_dir}'; git remote get-url origin >/dev/null 2>&1"; then
+      log_warn "runtime-bootstrap: ${repo_dir} has no origin remote, recreating from ${repo_url}"
+      rm -rf "${repo_dir}"
+    else
+      # Подтягиваем теги даже без repo_ref, чтобы Moonraker не оставался в inferred-версии.
+      run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --tags --prune origin >/dev/null 2>&1 || true"
+    fi
+  fi
 
   if [ -d "${repo_dir}/.git" ]; then
     if [ -n "${repo_ref}" ]; then
@@ -181,6 +202,11 @@ EOF
 
 # Блок 7: Moonraker repo/env/service (clone при отсутствии).
 ensure_repo_present "${MOONRAKER_DIR}" "${MOONRAKER_REPO}" "${MOONRAKER_REF}"
+
+if [ "${MOONRAKER_RECREATE}" = "1" ] && [ -d "${MOONRAKER_ENV_DIR}" ]; then
+  log_warn "runtime-bootstrap: forcing moonraker venv recreate (${MOONRAKER_ENV_DIR})"
+  rm -rf "${MOONRAKER_ENV_DIR}"
+fi
 
 MOONRAKER_REQ_FILE=""
 for candidate in \
