@@ -20,7 +20,7 @@ Rock Pi (Armbian Debian 12)
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/TreeD-Hub/treed-mainshellOS.git}"
-INSTALL_REF="${INSTALL_REF:-treed-v2}"
+INSTALL_REF="${INSTALL_REF:-treed-v2_main}"
 BASE="${BASE:-/home/pi/treed}"
 REPO_DIR="${REPO_DIR:-${BASE}/treed-mainshellOS}"
 
