@@ -18,7 +18,6 @@ TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
 TREED_CAN_AUTOBITRATE="${TREED_CAN_AUTOBITRATE:-1}"
 TREED_CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST:-1000000 500000 250000 125000}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
-TREED_EBB_CANBUS_AUTODETECT="${TREED_EBB_CANBUS_AUTODETECT:-0}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
@@ -48,7 +47,6 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
      TREED_CAN_AUTOBITRATE="${TREED_CAN_AUTOBITRATE}" \
      TREED_CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST}" \
      TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID}" \
-     TREED_EBB_CANBUS_AUTODETECT="${TREED_EBB_CANBUS_AUTODETECT}" \
      TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED}" \
      TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID}" \
      TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN}" \
@@ -70,8 +68,7 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 - `TREED_CAN_TXQUEUE` — default `1024`.
 - `TREED_CAN_AUTOBITRATE` — `0|1`, default `1`; при auto-detect CAN UUID позволяет подобрать рабочий bitrate из `TREED_CAN_AUTOBITRATE_LIST`.
 - `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
-- `TREED_EBB_CANBUS_UUID` — optional hex UUID; если пусто, `klipper-profiles.sh` использует runtime hint, либо требует `TREED_EBB_CANBUS_AUTODETECT=1` для первичного provisioning.
-- `TREED_EBB_CANBUS_AUTODETECT` — `0|1`, default `0`; при `1` разрешает выбрать единственный видимый CAN UUID как EBB, использовать только когда на шине оставлена одна EBB.
+- `TREED_EBB_CANBUS_UUID` — optional hex UUID; если пусто, `klipper-profiles.sh` выбирает единственный неизвестный CAN UUID как EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
 - `TREED_EDDY_CANBUS_UUID` — optional hex UUID при `TREED_EDDY_ENABLED=1`; если пусто, после резолва EBB используется единственный оставшийся неизвестный CAN UUID.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.

@@ -74,8 +74,7 @@
 - `TREED_CAN_AUTOBITRATE_LIST` (default `1000000 500000 250000 125000`)
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
 - `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
-- `TREED_EBB_CANBUS_UUID` (optional hex UUID; если пусто, `klipper-profiles.sh` сначала переиспользует runtime hint из `generated/treed_machine_mcus.cfg`; первичный auto-detect EBB доступен только при `TREED_EBB_CANBUS_AUTODETECT=1`)
-- `TREED_EBB_CANBUS_AUTODETECT` (`0|1`, default `0`; при `1` разрешает первичный выбор единственного видимого CAN UUID как EBB, использовать только в provisioning-режиме с одной подключенной EBB)
+- `TREED_EBB_CANBUS_UUID` (optional hex UUID; если пусто, `klipper-profiles.sh` сначала переиспользует runtime hint из `generated/treed_machine_mcus.cfg`, затем выбирает единственный неизвестный CAN UUID как EBB)
 - `TREED_CANBUS_QUERY_PYTHON` (optional override интерпретатора для `canbus_query.py`; по умолчанию используется `${TREED_KLIPPY_ENV_DIR}/bin/python*`)
 - `TREED_EDDY_ENABLED` (`0|1`, default `0`)
 - `TREED_EDDY_CANBUS_UUID` (optional hex UUID when `TREED_EDDY_ENABLED=1`; если пусто, после резолва EBB используется единственный оставшийся неизвестный CAN UUID)
@@ -180,7 +179,7 @@
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
 - `klipper-profiles.sh` генерирует `generated/treed_machine_mcus.cfg` с `[mcu]`, `[mcu EBBCan]` и optional `[mcu eddy]`; реальные serial/UUID не хранятся в профильных cfg.
-- `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст, runtime hint отсутствует и `TREED_EBB_CANBUS_AUTODETECT!=1`; UUID сам по себе не кодирует роль платы, поэтому первичный auto-detect EBB должен включаться явно.
+- `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст, runtime hint отсутствует и через `canbus_query` (с авто-перебором bitrate при `TREED_CAN_AUTOBITRATE=1`) нельзя выбрать ровно один неизвестный UUID как EBB.
 - `klipper-profiles.sh` при `TREED_EDDY_ENABLED=1` и пустом `TREED_EDDY_CANBUS_UUID` выбирает Eddy только если после EBB остается ровно один неизвестный UUID.
 - Явно заданные `TREED_EBB_CANBUS_UUID`/`TREED_EDDY_CANBUS_UUID` проверяются на формат и наличие на `${TREED_CAN_IFACE}`.
 - При нахождении UUID на bitrate, отличном от `TREED_CAN_BITRATE`, `klipper-profiles.sh` обновляет `${TREED_CAN_SETUP_ENV_FILE}` и перезапускает `${TREED_CAN_SETUP_UNIT}`.

@@ -67,8 +67,7 @@
 - `TREED_CAN_REINIT_DELAY_SEC` — default `2` (пауза между reinit-циклами).
 - `TREED_CAN_AUTOBITRATE` — `0|1`, default `1` (перебор типовых bitrate при auto-detect CAN UUID).
 - `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
-- `TREED_EBB_CANBUS_UUID` — optional hex UUID; если пусто, `klipper-profiles.sh` использует runtime hint, либо требует явный `TREED_EBB_CANBUS_AUTODETECT=1` для первичного provisioning.
-- `TREED_EBB_CANBUS_AUTODETECT` — `0|1`, default `0`; при `1` разрешает выбрать единственный видимый CAN UUID как EBB, использовать только когда на шине оставлена одна EBB.
+- `TREED_EBB_CANBUS_UUID` — optional hex UUID; если пусто, `klipper-profiles.sh` выбирает единственный неизвестный CAN UUID как EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
 - `TREED_EDDY_CANBUS_UUID` — optional hex UUID при `TREED_EDDY_ENABLED=1`; если пусто, после резолва EBB используется единственный оставшийся неизвестный CAN UUID.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
