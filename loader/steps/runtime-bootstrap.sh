@@ -53,6 +53,8 @@ PRINTER_LOG_DIR="${PRINTER_DATA_DIR}/logs"
 PRINTER_GCODE_DIR="${PRINTER_DATA_DIR}/gcodes"
 PRINTER_COMMS_DIR="${PRINTER_DATA_DIR}/comms"
 KLIPPY_API_SOCK="${PRINTER_COMMS_DIR}/klippy.sock"
+CROWSNEST_ENV_FILE="${PRINTER_DATA_DIR}/systemd/crowsnest.env"
+CROWSNEST_VENV_DIR="${PI_HOME}/crowsnest-env"
 
 # Блок 4: Вспомогательные функции (run-as-user, clone/update, venv, requirements).
 run_as_pi() {
@@ -173,10 +175,29 @@ update_crowsnest_repo() {
   run_as_pi "set -euo pipefail; cd '${CROWSNEST_DIR}'; branch=\"\$(git rev-parse --abbrev-ref HEAD)\"; if [ \"\${branch}\" != HEAD ]; then git pull --ff-only origin \"\${branch}\"; fi"
 }
 
+crowsnest_runtime_ready() {
+  local unit_dump=""
+
+  unit_dump="$(systemctl cat crowsnest.service 2>/dev/null || true)"
+  if [ -z "${unit_dump}" ]; then
+    return 1
+  fi
+  if ! printf '%s\n' "${unit_dump}" | grep -F "EnvironmentFile=${CROWSNEST_ENV_FILE}" >/dev/null; then
+    return 1
+  fi
+  if ! printf '%s\n' "${unit_dump}" | grep -F "ExecStart=${CROWSNEST_VENV_DIR}/bin/python3" >/dev/null; then
+    return 1
+  fi
+  if [ ! -f "${CROWSNEST_ENV_FILE}" ]; then
+    return 1
+  fi
+  if [ ! -x "${CROWSNEST_VENV_DIR}/bin/python3" ]; then
+    return 1
+  fi
+}
+
 ensure_crowsnest_runtime() {
   local installer_log="${PRINTER_LOG_DIR}/crowsnest-install.log"
-  local service_missing=0
-  local bin_missing=0
 
   case "${CROWSNEST_INSTALL}" in
     0)
@@ -198,15 +219,8 @@ ensure_crowsnest_runtime() {
     exit 1
   fi
 
-  if ! systemctl cat crowsnest.service >/dev/null 2>&1; then
-    service_missing=1
-  fi
-  if ! command -v crowsnest >/dev/null 2>&1; then
-    bin_missing=1
-  fi
-
-  if [ "${service_missing}" = "0" ] && [ "${bin_missing}" = "0" ] && [ "${CROWSNEST_UPDATE}" != "1" ]; then
-    log_info "runtime-bootstrap: crowsnest.service and crowsnest binary present"
+  if crowsnest_runtime_ready && [ "${CROWSNEST_UPDATE}" != "1" ]; then
+    log_info "runtime-bootstrap: crowsnest systemd runtime present"
     return 0
   fi
 
@@ -235,8 +249,8 @@ ensure_crowsnest_runtime() {
     log_error "runtime-bootstrap: crowsnest.service is missing after install"
     exit 1
   fi
-  if ! command -v crowsnest >/dev/null 2>&1; then
-    log_error "runtime-bootstrap: crowsnest binary is missing after install"
+  if ! crowsnest_runtime_ready; then
+    log_error "runtime-bootstrap: crowsnest systemd runtime is incomplete after install (expected service/env/venv)"
     exit 1
   fi
 
