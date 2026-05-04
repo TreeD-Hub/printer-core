@@ -7,7 +7,7 @@ set -euo pipefail
 # Назначение:
 # - Выполняет финальные post-configuration проверки provisioning-контура.
 # - Сохраняет паритет dev-отчета (boot/time/camera/ui/services) в V2-модели.
-# - Валидирует V2 runtime: main MCU USB, CAN EBB(required), Eddy(optional), ADXL.
+# - Валидирует V2 runtime: main MCU USB, CAN EBB(required), Eddy(optional), Input Shaper.
 # Контур:
 # - required (непрошедшие проверки завершают loader с ошибкой).
 
@@ -1060,19 +1060,6 @@ else
   failf "EBB canbus_interface is ${TREED_CAN_IFACE}"
 fi
 
-if [ -f "${EBB_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[adxl345\][[:space:]]*$' "${EBB_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*EBBCan:PB12[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*spi_software_sclk_pin[[:space:]]*:[[:space:]]*EBBCan:PB10[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*spi_software_mosi_pin[[:space:]]*:[[:space:]]*EBBCan:PB11[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*spi_software_miso_pin[[:space:]]*:[[:space:]]*EBBCan:PB2[[:space:]]*$' "${EBB_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*\[resonance_tester\][[:space:]]*$' "${EBB_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*accel_chip[[:space:]]*:[[:space:]]*adxl345[[:space:]]*$' "${EBB_CFG_RUNTIME}"; then
-  pass "EBB config contains onboard ADXL/resonance_tester"
-else
-  failf "EBB config contains onboard ADXL/resonance_tester"
-fi
-
 if [ -f "${PRINTER_CFG_RUNTIME}" ] \
   && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
   pass "Input Shaper include enabled in printer.cfg"
@@ -1172,12 +1159,6 @@ if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
   pass "sensorless Y: homing_retract_dist=0"
 else
   failf "sensorless Y: homing_retract_dist=0"
-fi
-
-if [ "${MOONRAKER_READY_OK}" = "1" ]; then
-  moonraker_gcode_ok_check "ADXL ACCELEROMETER_QUERY via Moonraker" "ACCELEROMETER_QUERY CHIP=adxl345"
-else
-  log_info "VERIFY ADXL ACCELEROMETER_QUERY via Moonraker skipped (moonraker/klippy not ready)"
 fi
 
 # Блок 9: Optional Eddy-контур.

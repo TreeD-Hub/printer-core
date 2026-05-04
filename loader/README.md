@@ -42,18 +42,17 @@
 | 15 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
 | 16 | `klipper-profiles` | required | Профиль V2: main USB serial + CAN UUID EBB/Eddy. |
 | 17 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
-| 18 | `klipper-adxl-rpi` | required | Проверка mandatory ADXL/Input Shaper через EBB. |
-| 19 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
-| 20 | `mainsail-web` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
-| 21 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
-| 22 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
-| 23 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
-| 24 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
-| 25 | `klipperscreen-install` | optional | Установка/проверка KlipperScreen. |
-| 26 | `klipperscreen-theme` | optional | Деплой темы/шрифта KlipperScreen. |
-| 27 | `klipperscreen-integr` | optional | Systemd override KlipperScreen. |
-| 28 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
-| 29 | `verify` | required | Финальная валидация V2-контура с паритетной отчетностью. |
+| 18 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
+| 19 | `mainsail-web` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
+| 20 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
+| 21 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
+| 22 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
+| 23 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
+| 24 | `klipperscreen-install` | optional | Установка/проверка KlipperScreen. |
+| 25 | `klipperscreen-theme` | optional | Деплой темы/шрифта KlipperScreen. |
+| 26 | `klipperscreen-integr` | optional | Systemd override KlipperScreen. |
+| 27 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
+| 28 | `verify` | required | Финальная валидация V2-контура с паритетной отчетностью. |
 
 ## Ключевые переменные
 

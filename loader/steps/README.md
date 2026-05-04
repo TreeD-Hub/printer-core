@@ -23,18 +23,17 @@
 | 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
 | 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID, контур X/Y sensorless (tmc5160 virtual endstop). |
 | 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 18 | `klipper-adxl-rpi.sh` | required | Проверка mandatory ADXL/Input Shaper через EBB42. |
-| 19 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
-| 20 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
-| 21 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
-| 22 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
-| 23 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
-| 24 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 25 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
-| 26 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
-| 27 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
-| 28 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 29 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью, включая проверки sensorless X/Y. |
+| 18 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
+| 19 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
+| 20 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
+| 21 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
+| 22 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
+| 23 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
+| 24 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
+| 25 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
+| 26 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
+| 27 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
+| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью, включая проверки sensorless X/Y и Input Shaper. |
 
 ## Контракт для step-скриптов
 
@@ -179,4 +178,4 @@
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
-- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, ADXL и optional Eddy; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.
+- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, Input Shaper и optional Eddy; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.

@@ -26,8 +26,8 @@ Entrypoint:
 15. `klipper-sync`
 16. `klipper-profiles`
 17. `klipper-core`
-18. `klipper-adxl-rpi`
-19. `klipper-anti-shutdown`
+18. `klipper-anti-shutdown`
+19. `mainsail-web`
 20. `moonraker-config`
 21. `crowsnest-webcam`
 22. `treed-cam`
