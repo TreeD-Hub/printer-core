@@ -23,6 +23,7 @@ EDDY_CFG="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
 STEPPERS_CFG="${PROFILE_DIR}/steppers.cfg"
 MACHINE_MCUS_CFG="${KLIPPER_DIR}/generated/treed_machine_mcus.cfg"
 MACHINE_MCUS_INCLUDE_PATH="generated/treed_machine_mcus.cfg"
+RUNTIME_MACHINE_MCUS_CFG="${PI_HOME}/printer_data/config/generated/treed_machine_mcus.cfg"
 
 MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
 MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
@@ -72,6 +73,61 @@ CAN_UNKNOWN_UUID_LAST=""
 
 normalize_uuid() {
   printf '%s' "$1" | tr 'A-F' 'a-f'
+}
+
+cfg_section_value() {
+  local file="$1"
+  local section="$2"
+  local key="$3"
+
+  [ -f "${file}" ] || return 1
+
+  awk -v section="${section}" -v key="${key}" '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    BEGIN {
+      want_section = "[" section "]"
+      want_key = key ":"
+      in_section = 0
+    }
+    /^[[:space:]]*\[/ {
+      in_section = (trim($0) == want_section)
+      next
+    }
+    in_section {
+      line = trim($0)
+      if (index(line, want_key) == 1) {
+        sub(/^[^:]+:[[:space:]]*/, "", line)
+        print trim(line)
+        exit
+      }
+    }
+  ' "${file}"
+}
+
+apply_runtime_mcu_hints() {
+  local hint=""
+
+  if [ -z "${EBB_CANBUS_UUID}" ]; then
+    hint="$(cfg_section_value "${RUNTIME_MACHINE_MCUS_CFG}" "mcu EBBCan" "canbus_uuid" 2>/dev/null || true)"
+    hint="$(normalize_uuid "${hint}")"
+    if [ -n "${hint}" ]; then
+      EBB_CANBUS_UUID="${hint}"
+      log_info "klipper-profiles: using runtime EBB canbus_uuid hint from ${RUNTIME_MACHINE_MCUS_CFG}: ${EBB_CANBUS_UUID}"
+    fi
+  fi
+
+  if [ "${EDDY_ENABLED}" = "1" ] && [ -z "${EDDY_CANBUS_UUID}" ]; then
+    hint="$(cfg_section_value "${RUNTIME_MACHINE_MCUS_CFG}" "mcu eddy" "canbus_uuid" 2>/dev/null || true)"
+    hint="$(normalize_uuid "${hint}")"
+    if [ -n "${hint}" ]; then
+      EDDY_CANBUS_UUID="${hint}"
+      log_info "klipper-profiles: using runtime Eddy canbus_uuid hint from ${RUNTIME_MACHINE_MCUS_CFG}: ${EDDY_CANBUS_UUID}"
+    fi
+  fi
 }
 
 query_canbus_candidates() {
@@ -563,6 +619,8 @@ if ! grep -qE "^[[:space:]]*\\[include[[:space:]]+${MACHINE_MCUS_INCLUDE_PATH//\
   log_error "klipper-profiles: cannot find machine MCU include in ${PRINTER_CFG}: ${MACHINE_MCUS_INCLUDE_PATH}"
   exit 1
 fi
+
+apply_runtime_mcu_hints
 
 # Блок 6: Резолв и проверка CAN UUID по ролям.
 if [ -n "${EBB_CANBUS_UUID}" ]; then
