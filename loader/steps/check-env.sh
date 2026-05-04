@@ -46,6 +46,7 @@ fi
 TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
 TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
+TREED_EBB_CANBUS_AUTODETECT="${TREED_EBB_CANBUS_AUTODETECT:-0}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
@@ -127,7 +128,7 @@ case "${TREED_KLIPPERSCREEN_START_AFTER_INSTALL}" in
 esac
 
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
-  log_warn "check-env: TREED_EBB_CANBUS_UUID is empty, klipper-profiles will try auto-detect via canbus_query"
+  log_warn "check-env: TREED_EBB_CANBUS_UUID is empty, klipper-profiles requires runtime hint or TREED_EBB_CANBUS_AUTODETECT=1"
 else
   case "${TREED_EBB_CANBUS_UUID}" in
     *[!0-9A-Fa-f]*)
@@ -136,6 +137,14 @@ else
       ;;
   esac
 fi
+
+case "${TREED_EBB_CANBUS_AUTODETECT}" in
+  0|1) ;;
+  *)
+    log_error "check-env: TREED_EBB_CANBUS_AUTODETECT must be 0 or 1, got: ${TREED_EBB_CANBUS_AUTODETECT}"
+    exit 1
+    ;;
+esac
 
 case "${TREED_EDDY_ENABLED}" in
   0|1) ;;

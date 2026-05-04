@@ -28,6 +28,7 @@ RUNTIME_MACHINE_MCUS_CFG="${PI_HOME}/printer_data/config/generated/treed_machine
 MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
 MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
 EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
+EBB_CANBUS_AUTODETECT="${TREED_EBB_CANBUS_AUTODETECT:-0}"
 EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
 EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
@@ -610,6 +611,14 @@ case "${EDDY_ENABLED}" in
     ;;
 esac
 
+case "${EBB_CANBUS_AUTODETECT}" in
+  0|1) ;;
+  *)
+    log_error "klipper-profiles: TREED_EBB_CANBUS_AUTODETECT must be 0 or 1, got: ${EBB_CANBUS_AUTODETECT}"
+    exit 1
+    ;;
+esac
+
 if ! grep -qE "^[[:space:]]*#?[[:space:]]*\\[include[[:space:]]+${EDDY_INCLUDE_PATH//\//\\/}\\][[:space:]]*$" "${PRINTER_CFG}"; then
   log_error "klipper-profiles: cannot find Eddy include toggle in ${PRINTER_CFG}"
   exit 1
@@ -632,7 +641,12 @@ if [ -n "${EBB_CANBUS_UUID}" ]; then
   esac
   EBB_CANBUS_UUID="$(normalize_uuid "${EBB_CANBUS_UUID}")"
 else
-  if ! resolve_ebb_canbus_uuid_auto; then
+  if [ "${EBB_CANBUS_AUTODETECT}" != "1" ]; then
+    log_error "klipper-profiles: EBB UUID is unresolved"
+    log_error "klipper-profiles: set TREED_EBB_CANBUS_UUID, keep generated runtime hint, or explicitly set TREED_EBB_CANBUS_AUTODETECT=1"
+    log_error "klipper-profiles: blind first-run EBB auto-detect is disabled because CAN UUIDs do not encode board role"
+    exit 1
+  elif ! resolve_ebb_canbus_uuid_auto; then
     exit 1
   fi
 fi

@@ -64,7 +64,8 @@ Optional include:
 
 - `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override для main MCU (`/dev/serial/by-id/*`).
 - `TREED_CAN_IFACE` — интерфейс CAN, default `can0`.
-- `TREED_EBB_CANBUS_UUID` — optional CAN UUID EBB; если пусто, нужен ровно один неизвестный CAN UUID для EBB.
+- `TREED_EBB_CANBUS_UUID` — optional CAN UUID EBB; если пусто, loader использует runtime hint, либо требует `TREED_EBB_CANBUS_AUTODETECT=1` для первичного provisioning.
+- `TREED_EBB_CANBUS_AUTODETECT` — `0|1`, default `0`; включать только когда на CAN-шине оставлена одна EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
 - `TREED_EDDY_CANBUS_UUID` — optional при `TREED_EDDY_ENABLED=1`; если пусто, после EBB нужен ровно один неизвестный CAN UUID для Eddy.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
