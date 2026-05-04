@@ -33,7 +33,6 @@ git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
 cd "${REPO_DIR}"
 sudo TREED_DEPLOY_MODE=clean TREED_NONINTERACTIVE=1 bash install.sh
 sudo reboot
-
 ```
 ## Карта слоев
 
