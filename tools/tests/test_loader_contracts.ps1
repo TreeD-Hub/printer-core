@@ -99,7 +99,7 @@ Assert-NotContains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?m)^\[tm
 Assert-NotContains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?m)^\[tmc5160 stepper_y\]' "repo stepper_y no longer uses TMC5160 SPI"
 Assert-Contains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?s)\[stepper_z\][^\[]*endstop_pin:\s*probe:z_virtual_endstop' "repo stepper_z uses Eddy virtual endstop"
 Assert-NotContains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?s)\[stepper_z\][^\[]*position_endstop:' "repo stepper_z has no physical Z position_endstop when Eddy is enabled"
-Assert-Contains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?s)\[stepper_z\][^\[]*step_pin:\s*PF11[^\[]*dir_pin:\s*PG3[^\[]*enable_pin:\s*!PG5' "repo stepper_z is mapped to Octopus Pro MOTOR2_1"
+Assert-Contains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?s)\[stepper_z\][^\[]*step_pin:\s*PF11[^\[]*dir_pin:\s*!PG3[^\[]*enable_pin:\s*!PG5' "repo stepper_z is mapped to Octopus Pro MOTOR2_1 with inverted direction"
 Assert-Contains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?s)\[tmc5160 stepper_z\][^\[]*cs_pin:\s*PC6' "repo stepper_z uses TMC5160 SPI on MOTOR2_1"
 Assert-Contains "loader/steps/plymouth-initramfs-config.sh" 'OK \(extlinux backend, no config\.txt rewrite\)' "Plymouth initramfs config logs extlinux backend accurately"
 Assert-Contains "loader/steps/crowsnest-webcam.sh" 'if \[ -f "\$\{MOONRAKER_ASVC\}" \]; then\s+chown "\$\{PI_USER\}:\$\{grp\}" "\$\{MOONRAKER_ASVC\}"' "Crowsnest webcam only chowns moonraker.asvc when it exists"
