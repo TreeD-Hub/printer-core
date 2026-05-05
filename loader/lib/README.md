@@ -5,7 +5,7 @@
 ## Состав
 
 - `loader/lib/common.sh`
-- `loader/lib/boot-env.sh`
+- `loader/lib/rpi.sh`
 - `loader/lib/plymouth.sh`
 
 ## `common.sh`
@@ -23,14 +23,14 @@
 - перед `source` должен быть определен `REPO_DIR`;
 - при отсутствии `REPO_DIR` библиотека завершает выполнение с ошибкой.
 
-## `boot-env.sh`
+## `rpi.sh`
 
-Функции для boot-детекта:
+Функции для boot-детекта (историческое имя файла сохранено):
 
-- `detect_host_model` — best-effort идентификатор платформы.
+- `detect_host_model` / `detect_rpi_model` — best-effort идентификатор платформы.
 - `is_mounted` — проверка монтирования каталога.
 - `detect_boot_dir` — выбор актуального boot-каталога.
-- `detect_boot_backend` — определение backend (`rpi|armbian|extlinux`).
+- `detect_boot_backend` — определение backend (`rpi|armbian`).
 - `detect_cmdline_file` — поиск `cmdline.txt`.
 - `detect_config_file` — поиск `config.txt`.
 - `detect_armbian_env_file` — поиск `armbianEnv.txt`.

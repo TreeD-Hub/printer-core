@@ -2,22 +2,22 @@
 set -euo pipefail
 
 # ==========================================
-# ШАГ LOADER: DETECT BOOT ENV
+# ШАГ LOADER: DETECT RPI
 # ==========================================
 # Назначение:
 # - Определяет host boot-backend и boot-пути конфигурации.
-# - Логирует согласованный boot-контур для последующих шагов.
+# - Логирует согласованный контур RPi/Armbian для последующих шагов.
 # Контур:
 # - required (используется последующими шагами boot/plymouth).
 
 # Блок 1: Библиотеки и функции определения платформы.
 . "${REPO_DIR}/loader/lib/common.sh"
-. "${REPO_DIR}/loader/lib/boot-env.sh"
+. "${REPO_DIR}/loader/lib/rpi.sh"
 
 # Блок 2: Первичное определение модели host и boot-файлов.
-log_info "Step detect-boot-env: detecting host boot environment"
+log_info "Step detect-rpi: detecting host boot environment"
 
-HOST_MODEL="$(detect_host_model)"
+RPI_MODEL="$(detect_host_model)"
 BOOT_DIR="$(detect_boot_dir)"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
 CMDLINE_FILE="$(detect_cmdline_file "${BOOT_DIR}")"
@@ -50,7 +50,7 @@ if [ -n "${BOOT_DIR}" ]; then
 fi
 
 # Блок 5: Экспорт переменных (только в пределах шага) и логирование контракта.
-export HOST_MODEL
+export RPI_MODEL
 export BOOT_DIR
 export TREED_BOOT_BACKEND
 export CMDLINE_FILE
@@ -58,7 +58,7 @@ export CONFIG_FILE
 export ARMBIAN_ENV_FILE
 export EXTLINUX_FILE
 
-log_info "HOST_MODEL=${HOST_MODEL}"
+log_info "HOST_MODEL=${RPI_MODEL}"
 log_info "TREED_BOOT_BACKEND=${TREED_BOOT_BACKEND}"
 log_info "BOOT_DIR=${BOOT_DIR:-<empty>}"
 
@@ -67,13 +67,13 @@ case "${TREED_BOOT_BACKEND}" in
     if [ -n "${CMDLINE_FILE}" ] && [ -f "${CMDLINE_FILE}" ]; then
       log_info "CMDLINE_FILE=${CMDLINE_FILE}"
     else
-      log_error "detect-boot-env: rpi backend requires cmdline.txt"
+      log_error "detect-rpi: rpi backend requires cmdline.txt"
       exit 1
     fi
     if [ -n "${CONFIG_FILE}" ] && [ -f "${CONFIG_FILE}" ]; then
       log_info "CONFIG_FILE=${CONFIG_FILE}"
     else
-      log_error "detect-boot-env: rpi backend requires config.txt"
+      log_error "detect-rpi: rpi backend requires config.txt"
       exit 1
     fi
     ;;
@@ -81,7 +81,7 @@ case "${TREED_BOOT_BACKEND}" in
     if [ -n "${ARMBIAN_ENV_FILE}" ] && [ -f "${ARMBIAN_ENV_FILE}" ]; then
       log_info "ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE}"
     else
-      log_error "detect-boot-env: armbian backend requires /boot/armbianEnv.txt"
+      log_error "detect-rpi: armbian backend requires /boot/armbianEnv.txt"
       exit 1
     fi
     log_info "CMDLINE_FILE=${CMDLINE_FILE:-<not used by armbian backend>}"
@@ -91,7 +91,7 @@ case "${TREED_BOOT_BACKEND}" in
     if [ -n "${EXTLINUX_FILE}" ] && [ -f "${EXTLINUX_FILE}" ]; then
       log_info "EXTLINUX_FILE=${EXTLINUX_FILE}"
     else
-      log_error "detect-boot-env: extlinux backend requires /boot/extlinux/extlinux.conf"
+      log_error "detect-rpi: extlinux backend requires /boot/extlinux/extlinux.conf"
       exit 1
     fi
     log_info "CMDLINE_FILE=${CMDLINE_FILE:-<not used by extlinux backend>}"
@@ -99,9 +99,9 @@ case "${TREED_BOOT_BACKEND}" in
     log_info "ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE:-<not used by extlinux backend>}"
     ;;
   *)
-    log_error "detect-boot-env: unsupported TREED_BOOT_BACKEND=${TREED_BOOT_BACKEND}"
+    log_error "detect-rpi: unsupported TREED_BOOT_BACKEND=${TREED_BOOT_BACKEND}"
     exit 1
     ;;
 esac
 
-log_info "detect-boot-env: OK"
+log_info "detect-rpi: OK"

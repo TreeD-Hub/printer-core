@@ -21,6 +21,7 @@ cd treed-mainshellOS
 ## 3. Минимальные переменные для V2
 
 ```bash
+export TREED_EBB_CANBUS_UUID="<hex_uuid>"
 export TREED_EDDY_ENABLED=0
 ```
 
@@ -28,8 +29,6 @@ export TREED_EDDY_ENABLED=0
 
 ```bash
 export TREED_MAIN_MCU_SERIAL_BY_ID="/dev/serial/by-id/usb-..."
-export TREED_EBB_CANBUS_UUID="<hex_uuid>"
-export TREED_EDDY_CANBUS_UUID="<hex_uuid>"
 export TREED_CAN_IFACE="can0"
 export TREED_CAN_BITRATE="1000000"
 export TREED_CAN_TXQUEUE="1024"
@@ -49,4 +48,4 @@ sudo bash loader/loader.sh
 - `ip -details link show can0`
 - `ls -l /dev/serial/by-id/`
 
-При `TREED_EDDY_ENABLED=1` без `TREED_EDDY_CANBUS_UUID` на CAN-шине должен остаться ровно один неизвестный UUID после резолва EBB.
+При `TREED_EDDY_ENABLED=1` также проверьте, что задан `TREED_EDDY_CANBUS_UUID`.

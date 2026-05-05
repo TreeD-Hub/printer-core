@@ -10,7 +10,7 @@ Entrypoint:
 
 Порядок шагов:
 1. `check-env`
-2. `detect-boot-env`
+2. `detect-rpi`
 3. `timezone-sync`
 4. `maintenance-stop`
 5. `packages-core`
@@ -79,9 +79,8 @@ CAN-host слой:
 
 ## 4. Контракт V2: main/CAN/Eddy
 
-Generated:
-- `mcu_main_octopus_usb.cfg`, `ebb42_can.cfg` и optional `probe_eddy_duo_optional.cfg` содержат MCU-секции; loader подставляет runtime serial/UUID в staging перед деплоем.
-- Реальные serial/UUID не хранятся в репозиторных профильных cfg.
+Required:
+- `TREED_EBB_CANBUS_UUID` (или успешный auto-detect через `canbus_query` при единственном UUID на шине)
 
 Optional:
 - `TREED_MAIN_MCU_SERIAL_BY_ID`
@@ -90,17 +89,14 @@ Optional:
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
 - `TREED_EDDY_ENABLED` (`0|1`, default `0`)
-- `TREED_EBB_CANBUS_UUID` (required; auto-detect временно отключен)
-- `TREED_EDDY_CANBUS_UUID` (required при `TREED_EDDY_ENABLED=1`; auto-detect временно отключен)
+- `TREED_EDDY_CANBUS_UUID` (обязателен только при `TREED_EDDY_ENABLED=1`)
 - `TREED_Z_ENDSTOP_PIN` (default `PG10`, используется при `TREED_EDDY_ENABLED=0`)
 - `TREED_Z_POSITION_ENDSTOP` (default `0.5`, используется при `TREED_EDDY_ENABLED=0`)
 
 Fail-fast сценарии:
 - auto-resolve main MCU: `0` кандидатов -> fail;
 - auto-resolve main MCU: `>1` кандидатов -> fail;
-- пустой `TREED_EBB_CANBUS_UUID` -> fail;
-- `TREED_EDDY_ENABLED=1` и пустой `TREED_EDDY_CANBUS_UUID` -> fail;
-- EBB/Eddy UUID не hex -> fail.
+- `TREED_EDDY_ENABLED=1` и пустой `TREED_EDDY_CANBUS_UUID` -> fail.
 
 ## 5. Что не используется в `treed-v2`
 

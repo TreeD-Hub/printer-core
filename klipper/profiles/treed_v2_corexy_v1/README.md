@@ -25,10 +25,10 @@ Optional include:
 ## Контракт loader
 
 Шаг `loader/steps/klipper-profiles.sh`:
-- резолвит main MCU по `/dev/serial/by-id/*` override или маске и подставляет serial в `mcu_main_octopus_usb.cfg`;
-- требует явный `TREED_EBB_CANBUS_UUID` и подставляет его в `ebb42_can.cfg`;
-- при `TREED_EDDY_ENABLED=1` требует явный `TREED_EDDY_CANBUS_UUID` и подставляет его в `probe_eddy_duo_optional.cfg`;
+- подставляет `serial` main MCU в `mcu_main_octopus_usb.cfg`;
+- подставляет `canbus_uuid` и `canbus_interface` EBB в `ebb42_can.cfg`;
 - управляет optional include Eddy в `printer.cfg`;
+- при `TREED_EDDY_ENABLED=1` подставляет `canbus_uuid` и `canbus_interface` Eddy в `probe_eddy_duo_optional.cfg`;
 - при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `probe:z_virtual_endstop` и убирает `position_endstop`;
 - при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
 
@@ -63,8 +63,8 @@ Optional include:
 
 - `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override для main MCU (`/dev/serial/by-id/*`).
 - `TREED_CAN_IFACE` — интерфейс CAN, default `can0`.
-- `TREED_EBB_CANBUS_UUID` — required CAN UUID EBB; auto-detect временно отключен.
+- `TREED_EBB_CANBUS_UUID` — required CAN UUID EBB42.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — required при `TREED_EDDY_ENABLED=1`; auto-detect временно отключен.
+- `TREED_EDDY_CANBUS_UUID` — required только если `TREED_EDDY_ENABLED=1`.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.

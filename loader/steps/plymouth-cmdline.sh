@@ -12,7 +12,7 @@ set -euo pipefail
 
 # Блок 1: Библиотеки и старт шага.
 . "${REPO_DIR}/loader/lib/common.sh"
-. "${REPO_DIR}/loader/lib/boot-env.sh"
+. "${REPO_DIR}/loader/lib/rpi.sh"
 
 log_info "Step plymouth-cmdline: updating kernel cmdline for plymouth"
 

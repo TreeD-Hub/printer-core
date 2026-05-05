@@ -38,7 +38,7 @@ export PI_USER
 export PI_HOME
 
 . "${REPO_DIR}/loader/lib/common.sh"
-. "${REPO_DIR}/loader/lib/boot-env.sh"
+. "${REPO_DIR}/loader/lib/rpi.sh"
 
 # Блок 5: Определение boot-backend и путей (RPi/Armbian/Extlinux aware).
 BOOT_DIR="$(detect_boot_dir)"
@@ -180,7 +180,7 @@ trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BAS
 STEPS=(
   # Предварительные проверки и подготовка окружения.
   "check-env"                # Контракт окружения: root, PI_USER/PI_HOME, OS sanity.
-  "detect-boot-env"          # Host-aware определение boot backend и boot-файлов.
+  "detect-rpi"               # Host-aware определение boot backend и boot-файлов.
   "timezone-sync"            # Синхронизация timezone/NTP для корректного времени UI/логов.
   "maintenance-stop"         # Остановка runtime-сервисов перед изменением конфигов.
 
