@@ -45,8 +45,8 @@ Z работает через Eddy probe (`probe:z_virtual_endstop`) и упра
 - на Z-драйвере корректно заведены SPI-линии и `CS`.
 
 База пинов (Octopus Pro):
-- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `uart_pin=PC4`, `diag_pin=^!PG6`;
-- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `uart_pin=PD11`, `diag_pin=^!PG9`;
+- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `uart_pin=PC4`, `diag_pin=^PG6`;
+- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `uart_pin=PD11`, `diag_pin=^PG9`;
 - `stepper_z`: `step_pin=PF11`, `dir_pin=!PG3`, `enable_pin=!PG5`, `cs_pin=PC6`;
 - общая Z software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
 
