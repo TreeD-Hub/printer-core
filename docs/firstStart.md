@@ -11,11 +11,19 @@
 ## 2. Подготовка репозитория
 
 ```bash
-cd /home/pi
-mkdir -p treed
-cd treed
-git clone --branch treed-v2 https://github.com/TreeD-Hub/treed-mainshellOS.git
-cd treed-mainshellOS
+set -euo pipefail
+
+REPO_URL="${REPO_URL:-https://github.com/TreeD-Hub/treed-mainshellOS.git}"
+INSTALL_REF="${INSTALL_REF:-treed-v2}"
+BASE="${BASE:-/home/pi/treed}"
+REPO_DIR="${REPO_DIR:-${BASE}/treed-mainshellOS}"
+
+sudo mkdir -p "${BASE}"
+sudo chown "$(id -u):$(id -g)" "${BASE}"
+
+sudo rm -rf "${REPO_DIR}"
+git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
+cd "${REPO_DIR}"
 ```
 
 ## 3. Минимальные переменные для V2
@@ -39,7 +47,8 @@ export TREED_Z_POSITION_ENDSTOP="0.5"
 ## 4. Запуск loader
 
 ```bash
-sudo bash loader/loader.sh
+sudo TREED_DEPLOY_MODE=clean TREED_NONINTERACTIVE=1 bash install.sh
+sudo reboot
 ```
 
 ## 5. Что проверить после запуска

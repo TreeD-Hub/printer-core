@@ -30,7 +30,8 @@ TREED_KLIPPERSCREEN_START_AFTER_INSTALL="${TREED_KLIPPERSCREEN_START_AFTER_INSTA
 
 sudo systemctl stop klipper moonraker KlipperScreen crowsnest 2>/dev/null || true
 
-mkdir -p "${BASE}"
+sudo mkdir -p "${BASE}"
+sudo chown "$(id -u):$(id -g)" "${BASE}"
 sudo rm -rf "${REPO_DIR}"
 git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
 
