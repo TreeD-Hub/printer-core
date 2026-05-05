@@ -10,7 +10,7 @@
 
 ## Структура
 
-- `treed_v2/` — дефолтные конфиги для контура Rock Pi + Octopus + U2C + EBB + optional Eddy.
+- `treed_v2/` — дефолтные конфиги для контура Rock Pi + Octopus + U2C + EBB + Eddy.
 
 ## Контракт
 

@@ -21,7 +21,7 @@
 | 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, optional Eddy UUID, контур X/Y sensorless (tmc5160 virtual endstop). |
+| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, Eddy UUID, контур X/Y sensorless (tmc5160 virtual endstop). |
 | 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 18 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
 | 19 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
@@ -61,7 +61,7 @@
 
 ### Main MCU / CAN / Eddy
 
-- `TREED_MAIN_MCU_SERIAL_BY_ID` (optional, `/dev/serial/by-id/*`)
+- `TREED_MAIN_MCU_SERIAL_BY_ID` (default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`)
 - `TREED_MAIN_MCU_SERIAL_MASK` (default `/dev/serial/by-id/*stm32*`)
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
@@ -70,14 +70,11 @@
 - `TREED_CAN_IFACE_WAIT_SEC` (default `20`; ожидание появления `can0` после boot/USB init)
 - `TREED_CAN_REINIT_ATTEMPTS` (default `5`; число циклов down/up при инициализации CAN)
 - `TREED_CAN_REINIT_DELAY_SEC` (default `2`; пауза между циклами reinit CAN)
-- `TREED_CAN_AUTOBITRATE` (`0|1`, default `1`; при auto-detect EBB UUID допускает перебор типовых bitrate)
-- `TREED_CAN_AUTOBITRATE_LIST` (default `1000000 500000 250000 125000`)
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
 - `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
-- `TREED_EBB_CANBUS_UUID` (рекомендуемый hex UUID; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` при единственном UUID на шине)
-- `TREED_CANBUS_QUERY_PYTHON` (optional override интерпретатора для `canbus_query.py`; по умолчанию используется `${TREED_KLIPPY_ENV_DIR}/bin/python*`)
-- `TREED_EDDY_ENABLED` (`0|1`, default `0`)
-- `TREED_EDDY_CANBUS_UUID` (required hex UUID when `TREED_EDDY_ENABLED=1`)
+- `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
+- `TREED_EDDY_ENABLED` (`0|1`, default `1`)
+- `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
 - `TREED_Z_ENDSTOP_PIN` (default `PG10`, used when `TREED_EDDY_ENABLED=0`)
 - `TREED_Z_POSITION_ENDSTOP` (default `0.5`, used when `TREED_EDDY_ENABLED=0`)
 
@@ -192,11 +189,10 @@
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
-- `klipper-profiles.sh` fail-fast, если `TREED_EBB_CANBUS_UUID` пуст и auto-detect через `canbus_query` (с авто-перебором bitrate при `TREED_CAN_AUTOBITRATE=1`) не смог однозначно определить UUID.
-- При нахождении UUID на bitrate, отличном от `TREED_CAN_BITRATE`, `klipper-profiles.sh` обновляет `${TREED_CAN_SETUP_ENV_FILE}` и перезапускает `${TREED_CAN_SETUP_UNIT}`.
-- `klipper-profiles.sh` включает Eddy include только при `TREED_EDDY_ENABLED=1`.
+- `klipper-profiles.sh` подставляет зафиксированный EBB UUID и fail-fast при невалидном hex-формате.
+- `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).
 - Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются корректная SPI/DIAG обвязка на TMC5160 и отключение X/Y механических endstop из логики.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
-- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, Input Shaper и optional Eddy; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.
+- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, Input Shaper и Eddy; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.

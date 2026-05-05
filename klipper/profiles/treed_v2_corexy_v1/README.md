@@ -3,7 +3,7 @@
 Профиль задает V2-контур Klipper для ветки `treed-v2`:
 - host: Rock Pi (Armbian Debian 12);
 - main MCU: Octopus Pro по USB serial;
-- CAN: U2C -> EBB42 (required), Eddy Duo (optional).
+- CAN: U2C -> EBB42 (required), Eddy Duo (enabled by default).
 
 ## Include-цепочка
 
@@ -27,7 +27,7 @@ Optional include:
 Шаг `loader/steps/klipper-profiles.sh`:
 - подставляет `serial` main MCU в `mcu_main_octopus_usb.cfg`;
 - подставляет `canbus_uuid` и `canbus_interface` EBB в `ebb42_can.cfg`;
-- управляет optional include Eddy в `printer.cfg`;
+- управляет include Eddy в `printer.cfg` (по умолчанию включен);
 - при `TREED_EDDY_ENABLED=1` подставляет `canbus_uuid` и `canbus_interface` Eddy в `probe_eddy_duo_optional.cfg`;
 - при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `probe:z_virtual_endstop` и убирает `position_endstop`;
 - при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
@@ -61,10 +61,10 @@ Optional include:
 
 ## Переменные окружения
 
-- `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override для main MCU (`/dev/serial/by-id/*`).
+- `TREED_MAIN_MCU_SERIAL_BY_ID` — Octopus Pro serial, default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`.
 - `TREED_CAN_IFACE` — интерфейс CAN, default `can0`.
-- `TREED_EBB_CANBUS_UUID` — required CAN UUID EBB42.
-- `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — required только если `TREED_EDDY_ENABLED=1`.
+- `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`.
+- `TREED_EDDY_ENABLED` — `0|1`, default `1`.
+- `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.

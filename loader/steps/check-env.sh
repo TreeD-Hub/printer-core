@@ -43,11 +43,11 @@ else
 fi
 
 # Блок 6: Контракт V2 для main MCU / CAN / Eddy.
-TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
+TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00}"
 TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
-TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
-TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
-TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
+TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-efaf957ab20f}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
+TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
@@ -127,15 +127,15 @@ case "${TREED_KLIPPERSCREEN_START_AFTER_INSTALL}" in
 esac
 
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
-  log_warn "check-env: TREED_EBB_CANBUS_UUID is empty, klipper-profiles will try auto-detect via canbus_query"
-else
-  case "${TREED_EBB_CANBUS_UUID}" in
-    *[!0-9A-Fa-f]*)
-      log_error "check-env: TREED_EBB_CANBUS_UUID must be hex, got: ${TREED_EBB_CANBUS_UUID}"
-      exit 1
-      ;;
-  esac
+  log_error "check-env: TREED_EBB_CANBUS_UUID is required; set explicit EBB42 CAN UUID"
+  exit 1
 fi
+case "${TREED_EBB_CANBUS_UUID}" in
+  *[!0-9A-Fa-f]*)
+    log_error "check-env: TREED_EBB_CANBUS_UUID must be hex, got: ${TREED_EBB_CANBUS_UUID}"
+    exit 1
+    ;;
+esac
 
 case "${TREED_EDDY_ENABLED}" in
   0|1) ;;

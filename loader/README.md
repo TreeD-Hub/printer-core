@@ -56,7 +56,7 @@
 
 ## Ключевые переменные
 
-- `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override `/dev/serial/by-id/*`.
+- `TREED_MAIN_MCU_SERIAL_BY_ID` — Octopus Pro serial, default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`.
 - `TREED_MAIN_MCU_SERIAL_MASK` — маска автопоиска main MCU (`/dev/serial/by-id/*stm32*` по умолчанию).
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
@@ -65,11 +65,9 @@
 - `TREED_CAN_IFACE_WAIT_SEC` — default `20` (ожидание появления `can0` после boot/USB init).
 - `TREED_CAN_REINIT_ATTEMPTS` — default `5` (количество циклов down/up для восстановления CAN после reboot).
 - `TREED_CAN_REINIT_DELAY_SEC` — default `2` (пауза между reinit-циклами).
-- `TREED_CAN_AUTOBITRATE` — `0|1`, default `1` (перебор типовых bitrate при auto-detect UUID).
-- `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
-- `TREED_EBB_CANBUS_UUID` — рекомендуется задавать явно; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` (только при единственном UUID на шине).
-- `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
+- `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
+- `TREED_EDDY_ENABLED` — `0|1`, default `1`.
+- `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.

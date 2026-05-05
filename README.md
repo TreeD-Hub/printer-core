@@ -9,7 +9,7 @@ Rock Pi (Armbian Debian 12)
  ├─ USB -> Octopus Pro (main MCU, Klipper serial)
  └─ USB -> U2C V2.1
           ├─ CAN -> EBB42 (required)
-          └─ CAN -> Eddy Duo (optional)
+          └─ CAN -> Eddy Duo (enabled by default)
 ```
 
 Ветка `treed-v2` не поддерживает RN12/RPi/UART legacy-контур.

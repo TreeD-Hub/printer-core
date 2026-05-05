@@ -80,16 +80,16 @@ CAN-host слой:
 ## 4. Контракт V2: main/CAN/Eddy
 
 Required:
-- `TREED_EBB_CANBUS_UUID` (или успешный auto-detect через `canbus_query` при единственном UUID на шине)
+- `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется)
 
 Optional:
-- `TREED_MAIN_MCU_SERIAL_BY_ID`
+- `TREED_MAIN_MCU_SERIAL_BY_ID` (default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`)
 - `TREED_MAIN_MCU_SERIAL_MASK` (default `/dev/serial/by-id/*stm32*`)
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
-- `TREED_EDDY_ENABLED` (`0|1`, default `0`)
-- `TREED_EDDY_CANBUS_UUID` (обязателен только при `TREED_EDDY_ENABLED=1`)
+- `TREED_EDDY_ENABLED` (`0|1`, default `1`)
+- `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
 - `TREED_Z_ENDSTOP_PIN` (default `PG10`, используется при `TREED_EDDY_ENABLED=0`)
 - `TREED_Z_POSITION_ENDSTOP` (default `0.5`, используется при `TREED_EDDY_ENABLED=0`)
 

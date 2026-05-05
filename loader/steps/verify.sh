@@ -7,7 +7,7 @@ set -euo pipefail
 # Назначение:
 # - Выполняет финальные post-configuration проверки provisioning-контура.
 # - Сохраняет паритет dev-отчета (boot/time/camera/ui/services) в V2-модели.
-# - Валидирует V2 runtime: main MCU USB, CAN EBB(required), Eddy(optional), Input Shaper.
+# - Валидирует V2 runtime: main MCU USB, CAN EBB(required), Eddy, Input Shaper.
 # Контур:
 # - required (непрошедшие проверки завершают loader с ошибкой).
 
@@ -633,7 +633,7 @@ TREED_CAN_IFACE="${TREED_CAN_IFACE:-${CAN_ENV_IFACE:-can0}}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-1000000}}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-${CAN_ENV_TXQUEUE:-1024}}"
 TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-${CAN_ENV_RESTART_MS:-100}}"
-TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
 TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
 TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 

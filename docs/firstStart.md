@@ -28,20 +28,18 @@ cd "${REPO_DIR}"
 
 ## 3. Минимальные переменные для V2
 
-```bash
-export TREED_EBB_CANBUS_UUID="<hex_uuid>"
-export TREED_EDDY_ENABLED=0
-```
+Для текущей платы значения зафиксированы в `loader/bootstrap.sh`:
+- Octopus Pro: `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`;
+- EBB42: `efaf957ab20f`;
+- Eddy: `95485b93332a`;
+- Eddy включен по умолчанию (`TREED_EDDY_ENABLED=1`).
 
 Опционально:
 
 ```bash
-export TREED_MAIN_MCU_SERIAL_BY_ID="/dev/serial/by-id/usb-..."
 export TREED_CAN_IFACE="can0"
 export TREED_CAN_BITRATE="1000000"
 export TREED_CAN_TXQUEUE="1024"
-export TREED_Z_ENDSTOP_PIN="PG10"
-export TREED_Z_POSITION_ENDSTOP="0.5"
 ```
 
 ## 4. Запуск loader
@@ -56,5 +54,3 @@ sudo reboot
 - `systemctl is-active klipper moonraker treed-can-setup`
 - `ip -details link show can0`
 - `ls -l /dev/serial/by-id/`
-
-При `TREED_EDDY_ENABLED=1` также проверьте, что задан `TREED_EDDY_CANBUS_UUID`.

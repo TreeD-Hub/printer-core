@@ -10,16 +10,14 @@ INSTALL_REF="${INSTALL_REF:-treed-v2}"
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
 
-TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
+TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00}"
 TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
-TREED_CAN_AUTOBITRATE="${TREED_CAN_AUTOBITRATE:-1}"
-TREED_CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST:-1000000 500000 250000 125000}"
-TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
-TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-0}"
-TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
+TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-efaf957ab20f}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
+TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
 TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
 TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 TREED_NONINTERACTIVE="${TREED_NONINTERACTIVE:-1}"
@@ -45,8 +43,6 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
      TREED_CAN_IFACE="${TREED_CAN_IFACE}" \
      TREED_CAN_BITRATE="${TREED_CAN_BITRATE}" \
      TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE}" \
-     TREED_CAN_AUTOBITRATE="${TREED_CAN_AUTOBITRATE}" \
-     TREED_CAN_AUTOBITRATE_LIST="${TREED_CAN_AUTOBITRATE_LIST}" \
      TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID}" \
      TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED}" \
      TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID}" \
@@ -62,16 +58,14 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 
 ## Контракт переменных
 
-- `TREED_MAIN_MCU_SERIAL_BY_ID` — optional override `/dev/serial/by-id/*`.
+- `TREED_MAIN_MCU_SERIAL_BY_ID` — Octopus Pro serial, default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`.
 - `TREED_MAIN_MCU_SERIAL_MASK` — маска для auto-resolve main MCU, default `/dev/serial/by-id/*stm32*`.
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
-- `TREED_CAN_AUTOBITRATE` — `0|1`, default `1`; при пустом UUID позволяет подобрать рабочий bitrate из `TREED_CAN_AUTOBITRATE_LIST`.
-- `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
-- `TREED_EBB_CANBUS_UUID` — рекомендуется задавать явно; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` (успех только при единственном UUID на шине).
-- `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
+- `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
+- `TREED_EDDY_ENABLED` — `0|1`, default `1`.
+- `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; disables apt/dpkg/needrestart prompts.
@@ -86,6 +80,6 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 - Main MCU: Octopus Pro по USB serial.
 - CAN adapter: U2C V2.1 (USB -> CAN).
 - Toolhead MCU: EBB42 по CAN (required).
-- Probe: Eddy / Eddy Duo по CAN (optional).
+- Probe: Eddy / Eddy Duo по CAN (enabled by default).
 
 Ветка `treed-v2` не поддерживает RN12/RPi/UART-миграции.
