@@ -87,8 +87,14 @@
 - `TREED_MAINSAIL_WEB_PATH` — default `/var/www/mainsail`, путь web-root Mainsail (используется в `mainsail-web` и `moonraker-config`).
 - `TREED_MAINSAIL_ZIP_URL` — URL архива Mainsail для `mainsail-web`.
 - `TREED_MAINSAIL_MOONRAKER_PROXY_URL` — upstream Moonraker для nginx reverse-proxy в `mainsail-web` (default `http://127.0.0.1:7125`).
+- `TREED_MAINSAIL_LOCAL_ZIP` — local fallback archive, default `${REPO_DIR}/mainsail/web/mainsail.zip`.
+- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` — `0|1`, default `1`; использовать bundled archive вместо live-download.
+- `TREED_MAINSAIL_WGET_TIMEOUT` / `TREED_MAINSAIL_WGET_CONNECT_TIMEOUT` / `TREED_MAINSAIL_WGET_READ_TIMEOUT` — таймауты загрузки `mainsail.zip`.
+- `TREED_MAINSAIL_WGET_TRIES` — число попыток загрузки `mainsail.zip` (default `3`).
+- `TREED_MAINSAIL_ALLOW_EXISTING_FALLBACK` — `0|1`, default `1`; при недоступном GitHub разрешает использовать существующий валидный web-root Mainsail.
 - `TREED_KLIPPERSCREEN_REF` — pin branch/tag/commit для managed checkout KlipperScreen; если установленный checkout той же версии или новее, переустановка пропускается.
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` принудительно пересоздает managed checkout KlipperScreen.
+- `TREED_KLIPPERSCREEN_ENV` — путь venv KlipperScreen, default `${PI_HOME}/.KlipperScreen-env`.
 - `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; управляет строгостью проверок KlipperScreen в `verify`.
 - `TREED_REQUIRE_KLIPPER_READY` — `0|1`, default `0`; управляет тем, будет ли `Klippy state!=ready` блокировать `verify`.
 

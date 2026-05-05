@@ -165,6 +165,12 @@ klipperscreen_needs_install() {
     return 0
   fi
 
+  if [ ! -x "${KS_ENV}/bin/python" ]; then
+    log_warn "klipperscreen-install: runtime venv incomplete or missing at ${KS_ENV}"
+    KLIPPERSCREEN_INSTALL_REASON="runtime-incomplete"
+    return 0
+  fi
+
   if ! klipperscreen_is_same_or_newer "${package_dir}" "${target_commit}"; then
     log_info "klipperscreen-install: installed KlipperScreen is older than target ${target_commit}"
     KLIPPERSCREEN_INSTALL_REASON="package-older"
@@ -185,10 +191,12 @@ patch_klipperscreen_installer_noninteractive() {
   local installer="$1"
 
   sed -i \
+    -e '/^if \[ "\$EUID" == 0 \]$/,+3d' \
     -e 's|sudo apt update|sudo env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a apt-get update|g' \
     -e 's|sudo apt install -y|sudo env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install|g' \
     -e 's|sudo apt install |sudo env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install |g' \
     -e 's|sudo apt -f install|sudo env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -f install|g' \
+    -e 's|sudo ||g' \
     "${installer}"
 }
 
@@ -198,6 +206,9 @@ PI_HOME="${PI_HOME:-$(getent passwd "${PI_USER}" | cut -d: -f6 || true)}"
 
 if [ -z "${PI_HOME}" ] || [ ! -d "${PI_HOME}" ]; then
   log_error "klipperscreen-install: cannot determine home for user ${PI_USER}"
+  exit 1
+fi
+if ! PI_GROUP="$(pi_primary_group "${PI_USER}")"; then
   exit 1
 fi
 
@@ -211,12 +222,14 @@ KS_REPO_URL="${TREED_KLIPPERSCREEN_REPO:-https://github.com/jordanruthe/KlipperS
 KS_PINNED_REF_DEFAULT="35c26ba4d452043695d73fa8ec2acd25bbc8911d"
 KS_REPO_REF="${TREED_KLIPPERSCREEN_REF:-${KS_PINNED_REF_DEFAULT}}"
 KS_STAGING_DIR="${PI_HOME}/treed/.staging/KlipperScreen"
+KS_STAGING_PARENT="$(dirname "${KS_STAGING_DIR}")"
 KS_HOME_DEFAULT="${PI_HOME}/KlipperScreen"
 if [ -n "${TREED_KLIPPERSCREEN_HOME:-}" ]; then
   KS_HOME="${TREED_KLIPPERSCREEN_HOME}"
 else
   KS_HOME="${KS_HOME_DEFAULT}"
 fi
+KS_ENV="${TREED_KLIPPERSCREEN_ENV:-${PI_HOME}/.KlipperScreen-env}"
 KS_INSTALL_SERVICE="${TREED_KLIPPERSCREEN_INSTALL_SERVICE:-1}"
 KS_BACKEND="${TREED_KLIPPERSCREEN_BACKEND:-X}"
 KS_NETWORK="${TREED_KLIPPERSCREEN_NETWORK_MANAGER:-N}"
@@ -235,6 +248,13 @@ case "${KS_NETWORK}" in
   1|y|Y) KS_NETWORK="Y" ;;
   *) KS_NETWORK="N" ;;
 esac
+
+# На пустой системе эти каталоги могут отсутствовать, а после старых запусков
+# могут принадлежать root. Checkout выполняется от deploy-пользователя.
+ensure_dir "${PI_HOME}/treed"
+chown "${PI_USER}:${PI_GROUP}" "${PI_HOME}/treed"
+ensure_dir "${KS_STAGING_PARENT}"
+chown "${PI_USER}:${PI_GROUP}" "${KS_STAGING_PARENT}"
 
 # Всегда пересобираем staging-клон, чтобы не наследовать старое состояние checkout.
 rm -rf "${KS_STAGING_DIR}"
@@ -256,8 +276,8 @@ if klipperscreen_needs_install "${KS_HOME}" "${KS_COMMIT_FULL}"; then
       rm -rf "${KS_HOME}"
       checkout_klipperscreen_ref "${KS_REPO_URL}" "${KS_HOME}" "${KS_REPO_REF}"
       ;;
-    service-missing)
-      log_info "klipperscreen-install: package is same-or-newer; running installer to restore service wiring"
+    runtime-incomplete|service-missing)
+      log_info "klipperscreen-install: package is same-or-newer; running installer to restore runtime wiring"
       ;;
     *)
       log_error "klipperscreen-install: unexpected install reason '${KLIPPERSCREEN_INSTALL_REASON}'"
@@ -266,15 +286,27 @@ if klipperscreen_needs_install "${KS_HOME}" "${KS_COMMIT_FULL}"; then
   esac
   patch_klipperscreen_installer_noninteractive "${KS_HOME}/scripts/KlipperScreen-install.sh"
 
-  sudo -u "${PI_USER}" -H env \
+  env \
+    USER="${PI_USER}" \
+    LOGNAME="${PI_USER}" \
+    HOME="${PI_HOME}" \
     SERVICE="${KS_INSTALL_SERVICE}" \
     BACKEND="${KS_BACKEND}" \
     NETWORK="${KS_NETWORK}" \
     START="${KS_START}" \
+    KLIPPERSCREEN_VENV="${KS_ENV}" \
     DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" \
     APT_LISTCHANGES_FRONTEND="${APT_LISTCHANGES_FRONTEND:-none}" \
     NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" \
-    bash -lc "'${KS_HOME}/scripts/KlipperScreen-install.sh'"
+    bash "${KS_HOME}/scripts/KlipperScreen-install.sh"
+
+  chown -R "${PI_USER}:${PI_GROUP}" "${KS_HOME}"
+  if [ -d "${KS_ENV}" ]; then
+    chown -R "${PI_USER}:${PI_GROUP}" "${KS_ENV}"
+  fi
+  if [ -d "${PI_HOME}/.local" ]; then
+    chown -R "${PI_USER}:${PI_GROUP}" "${PI_HOME}/.local"
+  fi
 else
   log_info "klipperscreen-install: reinstall skipped"
 fi

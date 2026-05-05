@@ -123,6 +123,14 @@
 - `TREED_MAINSAIL_NGINX_SITE_AVAILABLE` (default `/etc/nginx/sites-available/mainsail`)
 - `TREED_MAINSAIL_NGINX_SITE_ENABLED` (default `/etc/nginx/sites-enabled/mainsail`)
 - `TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED` (default `/etc/nginx/sites-enabled/default`; удаляется при активации сайта Mainsail)
+- `TREED_MAINSAIL_LOCAL_ZIP` (default `${REPO_DIR}/mainsail/web/mainsail.zip`; bundled archive для offline install)
+- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` (`0|1`, default `1`; предпочитать bundled archive)
+- `TREED_MAINSAIL_WGET_TIMEOUT` (default `30`; общий timeout `wget` для `mainsail.zip`)
+- `TREED_MAINSAIL_WGET_DNS_TIMEOUT` (default `10`)
+- `TREED_MAINSAIL_WGET_CONNECT_TIMEOUT` (default `10`)
+- `TREED_MAINSAIL_WGET_READ_TIMEOUT` (default `30`)
+- `TREED_MAINSAIL_WGET_TRIES` (default `3`; число попыток загрузки)
+- `TREED_MAINSAIL_ALLOW_EXISTING_FALLBACK` (`0|1`, default `1`; использовать существующий валидный web-root при ошибке загрузки)
 
 ### KlipperScreen
 
@@ -135,6 +143,7 @@
 - `TREED_KLIPPERSCREEN_REF` (pin branch/tag/commit; checkout той же версии или новее не переустанавливается)
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` (default `45`)
 - `TREED_KLIPPERSCREEN_HOME`
+- `TREED_KLIPPERSCREEN_ENV` (default `${PI_HOME}/.KlipperScreen-env`)
 - `TREED_KS_THEME` (`treed-oled|...|keep`, default `treed-oled`)
 - `TREED_KS_LANGUAGE` (`ru|...|keep`, default `ru`)
 - `TREED_KLIPPERSCREEN_REQUIRED` (`0|1`, default `1`; управляет строгостью проверок UI в `verify`)
@@ -169,6 +178,7 @@
   - `preserve`: `backup_file_once` перед перезаписью.
 - `klipperscreen-install.sh`
   - managed checkout находится в `${TREED_KLIPPERSCREEN_HOME:-${PI_HOME}/KlipperScreen}`;
+  - venv находится в `${TREED_KLIPPERSCREEN_ENV:-${PI_HOME}/.KlipperScreen-env}`;
   - если checkout полный и его commit равен target или новее target, package-переустановка не выполняется;
   - если service отсутствует/указывает в другой каталог, installer запускается для восстановления systemd wiring без пересоздания same-or-newer checkout.
 - `klipperscreen-theme.sh`
