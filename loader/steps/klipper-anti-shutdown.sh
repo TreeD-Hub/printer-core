@@ -20,24 +20,24 @@ ensure_root
 STEP="klipper-anti-shutdown"
 log_info "Step ${STEP}: clearing MCU shutdown if present"
 
-PI_USER="${PI_USER:-${SUDO_USER:-$(id -un)}}"
-PI_HOME="${PI_HOME:-$(getent passwd "${PI_USER}" | cut -d: -f6 || true)}"
-if [ -z "${PI_HOME}" ] || [ ! -d "${PI_HOME}" ]; then
-  log_error "${STEP}: cannot determine home for user ${PI_USER}"
+DEPLOY_USER="${SUDO_USER:-$(id -un)}"
+DEPLOY_HOME="$(getent passwd "${DEPLOY_USER}" | cut -d: -f6 || true)"
+if [ -z "${DEPLOY_HOME}" ] || [ ! -d "${DEPLOY_HOME}" ]; then
+  log_error "${STEP}: cannot determine home for user ${DEPLOY_USER}"
   exit 1
 fi
 
 KLIPPER_SERVICE="${KLIPPER_SERVICE:-klipper}"
 
-SOCK="${PI_HOME}/printer_data/comms/klippy.sock"
-LOG="${PI_HOME}/printer_data/logs/klippy.log"
+SOCK="${DEPLOY_HOME}/printer_data/comms/klippy.sock"
+LOG="${DEPLOY_HOME}/printer_data/logs/klippy.log"
 
 # Блок 3: Вспомогательные функции работы с Klippy Unix-сокетом.
-query_klippy_state() {
+query_klippy_info() {
   local sock_path="$1"
   local timeout="${2:-2}"
 
-  # Читаем state через Unix-сокет Klippy API (метод info).
+  # Читаем state/state_message через Unix-сокет Klippy API (метод info).
   python3 - "${sock_path}" "${timeout}" <<'PY'
 import json
 import socket
@@ -75,15 +75,18 @@ raw = data.split(b"\x03", 1)[0]
 msg = json.loads(raw.decode("utf-8", errors="replace"))
 
 state = ""
+state_message = ""
 if isinstance(msg, dict):
     result = msg.get("result")
     if isinstance(result, dict):
         state = str(result.get("state", "")).strip().lower()
+        state_message = str(result.get("state_message", "")).strip()
 
 if not state:
     raise SystemExit(4)
 
 print(state)
+print(" ".join(state_message.split()))
 PY
 }
 
@@ -141,6 +144,43 @@ if "error" in msg:
 PY
 }
 
+poll_klippy_info() {
+  local klippy_info=""
+
+  klippy_state=""
+  klippy_state_message=""
+
+  # Даем Klippy время поднять API после рестарта сервиса.
+  for _ in $(seq 1 "${TREED_ANTI_SHUTDOWN_STATE_RETRIES:-15}"); do
+    klippy_info="$(query_klippy_info "${SOCK}" "${TREED_ANTI_SHUTDOWN_INFO_TIMEOUT:-2}" 2>/dev/null || true)"
+    if [ -n "${klippy_info}" ]; then
+      klippy_state="${klippy_info%%$'\n'*}"
+      if [ "${klippy_info}" != "${klippy_state}" ]; then
+        klippy_state_message="${klippy_info#*$'\n'}"
+      fi
+      [ -n "${klippy_state}" ] && return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+klippy_needs_firmware_restart() {
+  case "${klippy_state}" in
+    shutdown)
+      return 0
+      ;;
+    error)
+      printf '%s\n' "${klippy_state_message}" | grep -Eiq "mcu .*shutdown|FIRMWARE_RESTART|reset the firmware"
+      return $?
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # Блок 4: Основной сценарий — проверка сокета, state и FIRMWARE_RESTART.
 # Гарантируем, что Klipper запущен; рестарт нефатален, но обязательно логируется.
 if ! systemctl is-active --quiet "${KLIPPER_SERVICE}"; then
@@ -175,14 +215,15 @@ if [ ! -S "$SOCK" ]; then
 fi
 
 klippy_state=""
+klippy_state_message=""
 if command -v python3 >/dev/null 2>&1; then
-  klippy_state="$(query_klippy_state "${SOCK}" "${TREED_ANTI_SHUTDOWN_INFO_TIMEOUT:-2}" 2>/dev/null || true)"
+  poll_klippy_info || true
 else
   log_warn "${STEP}: python3 not found; cannot query klippy state"
 fi
 
-if [ "${klippy_state}" = "shutdown" ]; then
-  log_info "${STEP}: MCU state=shutdown; sending FIRMWARE_RESTART"
+if klippy_needs_firmware_restart; then
+  log_info "${STEP}: klippy state=${klippy_state}, state_message=${klippy_state_message:-missing}; sending FIRMWARE_RESTART"
   if command -v python3 >/dev/null 2>&1; then
     if send_klippy_gcode "${SOCK}" "${TREED_ANTI_SHUTDOWN_INFO_TIMEOUT:-2}" "FIRMWARE_RESTART" >/dev/null 2>&1
     then
@@ -192,6 +233,10 @@ if [ "${klippy_state}" = "shutdown" ]; then
       log_warn "${STEP}: failed to send FIRMWARE_RESTART via klippy API rc=${rc}"
     fi
     sleep 2
+    poll_klippy_info || true
+    if [ -n "${klippy_state}" ]; then
+      log_info "${STEP}: state after FIRMWARE_RESTART -> ${klippy_state}"
+    fi
   else
     log_warn "${STEP}: cannot send FIRMWARE_RESTART (python3 required); skipping"
   fi

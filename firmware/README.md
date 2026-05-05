@@ -5,7 +5,6 @@
 ## Состав
 
 - `firmware/configs/` — Kconfig-файлы target-ов для auto build шага `loader/steps/firmware-build.sh`.
-- `firmware/rn12/` — legacy артефакт RN12 (не используется в `treed-v2` pipeline).
 
 ## Runtime/Deploy контракт (`treed-v2`)
 

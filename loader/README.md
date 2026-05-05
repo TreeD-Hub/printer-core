@@ -26,7 +26,7 @@
 | # | Шаг | Тип | Назначение |
 |---|---|---|---|
 | 1 | `check-env` | required | Проверка контракта V2 переменных и окружения. |
-| 2 | `detect-rpi` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-файлов. |
+| 2 | `detect-boot-env` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-файлов. |
 | 3 | `timezone-sync` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop` | required | Контролируемая остановка runtime-сервисов. |
 | 5 | `packages-core` | required | Установка базовых пакетов. |
@@ -65,11 +65,9 @@
 - `TREED_CAN_IFACE_WAIT_SEC` — default `20` (ожидание появления `can0` после boot/USB init).
 - `TREED_CAN_REINIT_ATTEMPTS` — default `5` (количество циклов down/up для восстановления CAN после reboot).
 - `TREED_CAN_REINIT_DELAY_SEC` — default `2` (пауза между reinit-циклами).
-- `TREED_CAN_AUTOBITRATE` — `0|1`, default `1` (перебор типовых bitrate при auto-detect UUID).
-- `TREED_CAN_AUTOBITRATE_LIST` — default `1000000 500000 250000 125000`.
-- `TREED_EBB_CANBUS_UUID` — рекомендуется задавать явно; если пусто, `klipper-profiles.sh` пробует auto-detect через `canbus_query` (только при единственном UUID на шине).
+- `TREED_EBB_CANBUS_UUID` — required hex UUID; auto-detect временно отключен.
 - `TREED_EDDY_ENABLED` — `0|1`, default `0`.
-- `TREED_EDDY_CANBUS_UUID` — required только при `TREED_EDDY_ENABLED=1`.
+- `TREED_EDDY_CANBUS_UUID` — required hex UUID при `TREED_EDDY_ENABLED=1`; auto-detect временно отключен.
 - `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
 - `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.

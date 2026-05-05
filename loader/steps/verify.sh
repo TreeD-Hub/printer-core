@@ -15,7 +15,7 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 # Блок 1: Библиотеки и базовая инициализация шага.
 . "${REPO_DIR}/loader/lib/common.sh"
-. "${REPO_DIR}/loader/lib/rpi.sh"
+. "${REPO_DIR}/loader/lib/boot-env.sh"
 
 log_info "Step verify: running V2 post-configuration checks (parity mode)"
 
@@ -51,6 +51,24 @@ extract_cfg_value() {
   local key_regex="$1"
   local file="$2"
   sed -nE "s|^[[:space:]]*${key_regex}[[:space:]]*:[[:space:]]*([^[:space:]#]+).*|\\1|p" "${file}" | head -n 1 || true
+}
+
+extract_section_cfg_value() {
+  local section="$1"
+  local key="$2"
+  local file="$3"
+
+  awk -v section="${section}" -v key="${key}" '
+    $0 ~ "^[[:space:]]*\\[" section "\\][[:space:]]*$" { in_section = 1; next }
+    in_section && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_section = 0 }
+    in_section && $0 ~ "^[[:space:]]*" key "[[:space:]]*:" {
+      value = $0
+      sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "", value)
+      sub("[[:space:]]*(#.*)?$", "", value)
+      print value
+      exit
+    }
+  ' "${file}" || true
 }
 
 read_klipperscreen_main_theme() {
@@ -1029,7 +1047,7 @@ fi
 
 runtime_main_serial=""
 if [ -f "${MAIN_CFG_RUNTIME}" ]; then
-  runtime_main_serial="$(extract_cfg_value "serial" "${MAIN_CFG_RUNTIME}")"
+  runtime_main_serial="$(extract_section_cfg_value "mcu" "serial" "${MAIN_CFG_RUNTIME}")"
 fi
 if [ -n "${runtime_main_serial}" ] && printf '%s' "${runtime_main_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
   pass "main MCU serial format (/dev/serial/by-id/*)"
@@ -1045,7 +1063,7 @@ fi
 
 runtime_ebb_uuid=""
 if [ -f "${EBB_CFG_RUNTIME}" ]; then
-  runtime_ebb_uuid="$(extract_cfg_value "canbus_uuid" "${EBB_CFG_RUNTIME}")"
+  runtime_ebb_uuid="$(extract_section_cfg_value "mcu EBBCan" "canbus_uuid" "${EBB_CFG_RUNTIME}")"
 fi
 if [ -n "${runtime_ebb_uuid}" ] && ! printf '%s' "${runtime_ebb_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
   pass "EBB canbus_uuid is hex"
@@ -1054,7 +1072,7 @@ else
 fi
 
 if [ -f "${EBB_CFG_RUNTIME}" ] \
-  && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${EBB_CFG_RUNTIME}"; then
+  && [ "$(extract_section_cfg_value "mcu EBBCan" "canbus_interface" "${EBB_CFG_RUNTIME}")" = "${TREED_CAN_IFACE}" ]; then
   pass "EBB canbus_interface is ${TREED_CAN_IFACE}"
 else
   failf "EBB canbus_interface is ${TREED_CAN_IFACE}"
@@ -1180,7 +1198,7 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
 
   runtime_eddy_uuid=""
   if [ -f "${EDDY_CFG_RUNTIME}" ]; then
-    runtime_eddy_uuid="$(extract_cfg_value "canbus_uuid" "${EDDY_CFG_RUNTIME}")"
+    runtime_eddy_uuid="$(extract_section_cfg_value "mcu eddy" "canbus_uuid" "${EDDY_CFG_RUNTIME}")"
   fi
   if [ -n "${runtime_eddy_uuid}" ] && ! printf '%s' "${runtime_eddy_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
     pass "Eddy canbus_uuid is hex"
@@ -1189,7 +1207,7 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   fi
 
   if [ -f "${EDDY_CFG_RUNTIME}" ] \
-    && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${EDDY_CFG_RUNTIME}"; then
+    && [ "$(extract_section_cfg_value "mcu eddy" "canbus_interface" "${EDDY_CFG_RUNTIME}")" = "${TREED_CAN_IFACE}" ]; then
     pass "Eddy canbus_interface is ${TREED_CAN_IFACE}"
   else
     failf "Eddy canbus_interface is ${TREED_CAN_IFACE}"

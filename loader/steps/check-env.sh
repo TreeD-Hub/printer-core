@@ -127,7 +127,8 @@ case "${TREED_KLIPPERSCREEN_START_AFTER_INSTALL}" in
 esac
 
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
-  log_warn "check-env: TREED_EBB_CANBUS_UUID is empty, klipper-profiles will try auto-detect via canbus_query"
+  log_error "check-env: TREED_EBB_CANBUS_UUID is required (auto-detect disabled)"
+  exit 1
 else
   case "${TREED_EBB_CANBUS_UUID}" in
     *[!0-9A-Fa-f]*)
@@ -147,15 +148,16 @@ esac
 
 if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
-    log_error "check-env: TREED_EDDY_CANBUS_UUID is required when TREED_EDDY_ENABLED=1"
+    log_error "check-env: TREED_EDDY_CANBUS_UUID is required when TREED_EDDY_ENABLED=1 (auto-detect disabled)"
     exit 1
+  else
+    case "${TREED_EDDY_CANBUS_UUID}" in
+      *[!0-9A-Fa-f]*)
+        log_error "check-env: TREED_EDDY_CANBUS_UUID must be hex, got: ${TREED_EDDY_CANBUS_UUID}"
+        exit 1
+        ;;
+    esac
   fi
-  case "${TREED_EDDY_CANBUS_UUID}" in
-    *[!0-9A-Fa-f]*)
-      log_error "check-env: TREED_EDDY_CANBUS_UUID must be hex, got: ${TREED_EDDY_CANBUS_UUID}"
-      exit 1
-      ;;
-  esac
 else
   if [ -z "${TREED_Z_ENDSTOP_PIN}" ] || ! printf '%s' "${TREED_Z_ENDSTOP_PIN}" | grep -Eq '^[!^~]*[A-Za-z0-9_.:-]+$'; then
     log_error "check-env: TREED_Z_ENDSTOP_PIN has invalid format: ${TREED_Z_ENDSTOP_PIN}"
