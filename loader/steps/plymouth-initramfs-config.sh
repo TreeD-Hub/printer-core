@@ -13,7 +13,7 @@ set -euo pipefail
 
 # Блок 1: Библиотеки и RPi helper-функции.
 . "${REPO_DIR}/loader/lib/common.sh"
-. "${REPO_DIR}/loader/lib/rpi.sh"
+. "${REPO_DIR}/loader/lib/boot-env.sh"
 
 # Блок 2: Старт шага и root-права.
 log_info "Step plymouth-initramfs-config: wiring initramfs into config.txt"

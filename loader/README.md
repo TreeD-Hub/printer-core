@@ -26,7 +26,7 @@
 | # | Шаг | Тип | Назначение |
 |---|---|---|---|
 | 1 | `check-env` | required | Проверка контракта V2 переменных и окружения. |
-| 2 | `detect-rpi` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-файлов. |
+| 2 | `detect-boot-env` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-файлов. |
 | 3 | `timezone-sync` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop` | required | Контролируемая остановка runtime-сервисов. |
 | 5 | `packages-core` | required | Установка базовых пакетов. |

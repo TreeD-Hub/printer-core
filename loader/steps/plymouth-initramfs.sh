@@ -13,7 +13,7 @@ set -euo pipefail
 # Блок 1: Библиотеки и root-права.
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/plymouth.sh"
-. "${REPO_DIR}/loader/lib/rpi.sh"
+. "${REPO_DIR}/loader/lib/boot-env.sh"
 
 ensure_root
 

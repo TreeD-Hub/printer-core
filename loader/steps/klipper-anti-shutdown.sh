@@ -20,17 +20,17 @@ ensure_root
 STEP="klipper-anti-shutdown"
 log_info "Step ${STEP}: clearing MCU shutdown if present"
 
-PI_USER="${PI_USER:-${SUDO_USER:-$(id -un)}}"
-PI_HOME="${PI_HOME:-$(getent passwd "${PI_USER}" | cut -d: -f6 || true)}"
-if [ -z "${PI_HOME}" ] || [ ! -d "${PI_HOME}" ]; then
-  log_error "${STEP}: cannot determine home for user ${PI_USER}"
+DEPLOY_USER="${SUDO_USER:-$(id -un)}"
+DEPLOY_HOME="$(getent passwd "${DEPLOY_USER}" | cut -d: -f6 || true)"
+if [ -z "${DEPLOY_HOME}" ] || [ ! -d "${DEPLOY_HOME}" ]; then
+  log_error "${STEP}: cannot determine home for user ${DEPLOY_USER}"
   exit 1
 fi
 
 KLIPPER_SERVICE="${KLIPPER_SERVICE:-klipper}"
 
-SOCK="${PI_HOME}/printer_data/comms/klippy.sock"
-LOG="${PI_HOME}/printer_data/logs/klippy.log"
+SOCK="${DEPLOY_HOME}/printer_data/comms/klippy.sock"
+LOG="${DEPLOY_HOME}/printer_data/logs/klippy.log"
 
 # Блок 3: Вспомогательные функции работы с Klippy Unix-сокетом.
 query_klippy_state() {

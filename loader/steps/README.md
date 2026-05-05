@@ -7,7 +7,7 @@
 | # | Шаг | Тип | Назначение |
 |---|---|---|---|
 | 1 | `check-env.sh` | required | Проверка V2-контракта переменных и базового окружения loader. |
-| 2 | `detect-rpi.sh` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-путей. |
+| 2 | `detect-boot-env.sh` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-путей. |
 | 3 | `timezone-sync.sh` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop.sh` | required | Остановка runtime-сервисов перед provisioning. |
 | 5 | `packages-core.sh` | required | Базовые системные пакеты. |

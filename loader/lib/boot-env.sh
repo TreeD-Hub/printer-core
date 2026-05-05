@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # ==========================================
-# БИБЛИОТЕКА LOADER: RPI
+# БИБЛИОТЕКА LOADER: BOOT ENV
 # ==========================================
 # Назначение:
-# - Определяет host boot-backend (RPi/Armbian) и boot-пути.
-# - Дает helper-функции для безопасной работы с boot-файлами и armbianEnv.txt.
+# - Определяет host boot-backend и boot-пути.
+# - Дает helper-функции для безопасной работы с boot-файлами и armbianEnv.txt/extlinux.
 
 # Блок 1: Подключение общей библиотеки loader.
 . "${REPO_DIR}/loader/lib/common.sh"
@@ -31,12 +31,7 @@ detect_host_model() {
   echo "${model}"
 }
 
-# Блок 4: Backward-compatible alias для старых шагов.
-detect_rpi_model() {
-  detect_host_model
-}
-
-# Блок 5: Проверка факта монтирования каталога.
+# Блок 4: Проверка факта монтирования каталога.
 is_mounted() {
   local dir="$1"
   if [ -r /proc/mounts ]; then
@@ -46,7 +41,7 @@ is_mounted() {
   fi
 }
 
-# Блок 6: Поиск актуального boot-каталога с учетом mounted/наличия файлов.
+# Блок 5: Поиск актуального boot-каталога с учетом mounted/наличия файлов.
 detect_boot_dir() {
   local candidates=()
   local dir
@@ -59,7 +54,7 @@ detect_boot_dir() {
     return 0
   fi
 
-  # Приоритет 1: смонтированный каталог, где есть boot-файлы RPi/Armbian.
+  # Приоритет 1: смонтированный каталог, где есть boot-файлы.
   for dir in "${candidates[@]}"; do
     if [ -d "${dir}" ] && is_mounted "${dir}" && {
       [ -f "${dir}/armbianEnv.txt" ] || [ -f "${dir}/config.txt" ] || [ -f "${dir}/cmdline.txt" ];
@@ -69,7 +64,7 @@ detect_boot_dir() {
     fi
   done
 
-  # Приоритет 2: каталог с boot-файлами RPi/Armbian, даже если mount не виден.
+  # Приоритет 2: каталог с boot-файлами, даже если mount не виден.
   for dir in "${candidates[@]}"; do
     if [ -d "${dir}" ] && {
       [ -f "${dir}/armbianEnv.txt" ] || [ -f "${dir}/config.txt" ] || [ -f "${dir}/cmdline.txt" ];
@@ -104,7 +99,7 @@ detect_boot_dir() {
   echo "/boot"
 }
 
-# Блок 7: Поиск cmdline.txt с учетом приоритетного boot_dir.
+# Блок 6: Поиск cmdline.txt с учетом приоритетного boot_dir.
 detect_cmdline_file() {
   local boot_dir="${1:-}"
   local candidates=()
@@ -125,7 +120,7 @@ detect_cmdline_file() {
   echo ""
 }
 
-# Блок 8: Поиск config.txt с учетом приоритетного boot_dir.
+# Блок 7: Поиск config.txt с учетом приоритетного boot_dir.
 detect_config_file() {
   local boot_dir="${1:-}"
   local candidates=()
@@ -146,7 +141,7 @@ detect_config_file() {
   echo ""
 }
 
-# Блок 9: Поиск /boot/armbianEnv.txt с учетом boot_dir.
+# Блок 8: Поиск /boot/armbianEnv.txt с учетом boot_dir.
 detect_armbian_env_file() {
   local boot_dir="${1:-}"
   local candidates=()
@@ -167,7 +162,7 @@ detect_armbian_env_file() {
   echo ""
 }
 
-# Блок 9a: Поиск extlinux.conf с учетом boot_dir.
+# Блок 8a: Поиск extlinux.conf с учетом boot_dir.
 detect_extlinux_file() {
   local boot_dir="${1:-}"
   local candidates=()
@@ -188,7 +183,7 @@ detect_extlinux_file() {
   echo ""
 }
 
-# Блок 10: Определение boot-backend.
+# Блок 9: Определение boot-backend.
 detect_boot_backend() {
   local boot_dir="${1:-}"
   local cmdline_file=""
@@ -238,7 +233,7 @@ detect_boot_backend() {
   echo "unknown"
 }
 
-# Блок 11: Чтение значения ключа key=value из armbianEnv.
+# Блок 10: Чтение значения ключа key=value из armbianEnv.
 get_armbian_env_value() {
   local env_file="$1"
   local key="$2"
@@ -253,7 +248,7 @@ get_armbian_env_value() {
     | tail -n 1
 }
 
-# Блок 12: Идемпотентная запись ключа key=value в armbianEnv.
+# Блок 11: Идемпотентная запись ключа key=value в armbianEnv.
 set_armbian_env_value() {
   local env_file="$1"
   local key="$2"
