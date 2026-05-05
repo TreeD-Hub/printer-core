@@ -10,7 +10,7 @@ Entrypoint:
 
 Порядок шагов:
 1. `check-env`
-2. `detect-rpi`
+2. `detect-boot-env`
 3. `timezone-sync`
 4. `maintenance-stop`
 5. `packages-core`

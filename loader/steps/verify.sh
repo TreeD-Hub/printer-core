@@ -15,7 +15,7 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 # Блок 1: Библиотеки и базовая инициализация шага.
 . "${REPO_DIR}/loader/lib/common.sh"
-. "${REPO_DIR}/loader/lib/rpi.sh"
+. "${REPO_DIR}/loader/lib/boot-env.sh"
 
 log_info "Step verify: running V2 post-configuration checks (parity mode)"
 
