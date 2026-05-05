@@ -32,32 +32,35 @@ Optional include:
 - при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `probe:z_virtual_endstop` и убирает `position_endstop`;
 - при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
 
-## X/Y sensorless (TMC5160 SPI)
+## X/Y sensorless (TMC2209 UART) и Z (TMC5160 SPI)
 
-Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
+Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc2209_*:virtual_endstop`.
+Z работает через Eddy probe (`probe:z_virtual_endstop`) и управляется TMC5160 на слоте `MOTOR2_1`.
 
 Обязательные аппаратные предпосылки перед запуском loader:
-- на X/Y драйверах корректно заведены SPI-линии и `CS`;
+- на X/Y стоят TMC2209 в UART-режиме;
 - на X/Y включены DIAG-джамперы в линии endstop;
 - X/Y механические концевики не участвуют в логике хоуминга;
-- драйверы соответствуют рабочему режиму TMC5160/TMC5160T Pro.
+- Z-драйвер TMC5160/TMC5160T Pro стоит в слоте `MOTOR2_1`;
+- на Z-драйвере корректно заведены SPI-линии и `CS`.
 
-База пинов X/Y (Octopus Pro):
-- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
-- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
-- общая software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
+База пинов (Octopus Pro):
+- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `uart_pin=PC4`, `diag_pin=^!PG6`;
+- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `uart_pin=PD11`, `diag_pin=^!PG9`;
+- `stepper_z`: `step_pin=PF11`, `dir_pin=PG3`, `enable_pin=!PG5`, `cs_pin=PC6`;
+- общая Z software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
 
 Стартовые параметры sensorless:
 - `homing_speed: 20`, `homing_retract_dist: 0` (второй проход отключен);
-- `run_current: 0.90`, `sense_resistor: 0.075`, `stealthchop_threshold: 0`, `driver_SGT: -64`;
+- `run_current: 0.90`, `sense_resistor: 0.110`, `stealthchop_threshold: 0`, `driver_SGTHRS: 90`;
 - `hold_current` для X/Y не используется.
 
-## Тюн `driver_SGT` (обязательный после внедрения)
+## Тюн `driver_SGTHRS` (обязательный после внедрения)
 
-1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x` и `DUMP_TMC STEPPER=stepper_y`.
-2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD ... FIELD=SGT VALUE=...`.
-3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний.
-4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний.
+1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
+2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGTHRS VALUE=...` и аналогично для Y.
+3. Зафиксировать финальные `driver_SGTHRS` в рабочем диапазоне без ложных срабатываний.
+4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний; затем `G28 Z` через Eddy probe.
 
 ## Переменные окружения
 

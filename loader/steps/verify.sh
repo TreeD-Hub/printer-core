@@ -1073,20 +1073,15 @@ else
   failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
 fi
 
-# Проверки sensorless X/Y: tmc5160/tmc2209 + virtual endstop + retract=0.
+# Проверки sensorless X/Y: tmc2209 UART + virtual endstop + retract=0.
 SENSORLESS_XY_TMC_DRIVER=""
 if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_x\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_y\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
-  SENSORLESS_XY_TMC_DRIVER="tmc5160"
-  pass "sensorless X/Y: tmc5160 sections present"
-elif [ -f "${STEPPERS_CFG_RUNTIME}" ] \
   && grep -qE '^[[:space:]]*\[tmc2209[[:space:]]+stepper_x\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}" \
   && grep -qE '^[[:space:]]*\[tmc2209[[:space:]]+stepper_y\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
   SENSORLESS_XY_TMC_DRIVER="tmc2209"
   pass "sensorless X/Y: tmc2209 sections present"
 else
-  failf "sensorless X/Y: tmc5160/tmc2209 sections present"
+  failf "sensorless X/Y: tmc2209 sections present"
 fi
 
 if [ -n "${SENSORLESS_XY_TMC_DRIVER}" ] \
@@ -1159,6 +1154,31 @@ if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
   pass "sensorless Y: homing_retract_dist=0"
 else
   failf "sensorless Y: homing_retract_dist=0"
+fi
+
+# Проверки Z-драйвера: TMC5160 SPI на слоте MOTOR2_1.
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_z\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "stepper_z: tmc5160 section present"
+else
+  failf "stepper_z: tmc5160 section present"
+fi
+
+if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+  && awk '
+    /^\[tmc5160[[:space:]]+stepper_z\][[:space:]]*$/ { in_z = 1; next }
+    in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+    in_z && /^[[:space:]]*cs_pin[[:space:]]*:/ {
+      value = $0
+      sub(/^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*/, "", value)
+      sub(/[[:space:]]*(#.*)?$/, "", value)
+      found = (value == "PC6")
+    }
+    END { exit found ? 0 : 1 }
+  ' "${STEPPERS_CFG_RUNTIME}"; then
+  pass "stepper_z: tmc5160 cs_pin=PC6"
+else
+  failf "stepper_z: tmc5160 cs_pin=PC6"
 fi
 
 # Блок 9: Optional Eddy-контур.
