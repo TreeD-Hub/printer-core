@@ -37,6 +37,13 @@ wait_service_active() {
   return 1
 }
 
+print_klipperscreen_service_diagnostics() {
+  local unit="$1"
+
+  systemctl --no-pager -l status "${unit}" || true
+  journalctl -u "${unit}" -n 80 --no-pager || true
+}
+
 # Блок 4: Основной сценарий применения override и перезапуска сервиса.
 ensure_root
 ensure_dir "${OVERRIDE_DIR}"
@@ -59,12 +66,19 @@ if ! systemctl cat "${KS_UNIT}" >/dev/null 2>&1; then
   exit 1
 fi
 
-systemctl restart "${KS_UNIT}"
+if err="$(systemctl restart "${KS_UNIT}" 2>&1)"; then
+  :
+else
+  rc=$?
+  log_error "klipperscreen-integr: ${KS_UNIT} restart failed rc=${rc}: ${err}"
+  print_klipperscreen_service_diagnostics "${KS_UNIT}"
+  exit 1
+fi
 
 # После изменения unit-файлов проверяем, что сервис реально поднялся.
 if ! wait_service_active "${KS_UNIT}" "${KS_TIMEOUT}"; then
   log_error "klipperscreen-integr: ${KS_UNIT} failed to become active within ${KS_TIMEOUT}s"
-  systemctl --no-pager -l status "${KS_UNIT}" || true
+  print_klipperscreen_service_diagnostics "${KS_UNIT}"
   exit 1
 fi
 

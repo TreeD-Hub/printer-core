@@ -271,7 +271,8 @@ if [ -d "${KS_STYLES_DIR}" ]; then
   chown -R "${PI_USER}:${grp}" "${THEME_DST}" || true
   THEME_DEPLOYED=1
 else
-  log_warn "klipperscreen-theme: styles dir not found (${KS_STYLES_DIR}), theme files deploy skipped"
+  log_error "klipperscreen-theme: styles dir not found (${KS_STYLES_DIR}); managed KlipperScreen install is incomplete"
+  exit 1
 fi
 
 # Блок 6: Строгая проверка и запись theme/language в KlipperScreen.conf.

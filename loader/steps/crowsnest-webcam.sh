@@ -266,7 +266,9 @@ write_crowsnest_conf
 ensure_crowsnest_allowed_service
 chown "${PI_USER}:${grp}" "${CROWSNEST_CONF}" || true
 chown "${PI_USER}:${grp}" "${MOONRAKER_WEBCAM_FRAGMENT}" || true
-chown "${PI_USER}:${grp}" "${MOONRAKER_ASVC}" || true
+if [ -f "${MOONRAKER_ASVC}" ]; then
+  chown "${PI_USER}:${grp}" "${MOONRAKER_ASVC}" || true
+fi
 
 apply_services
 

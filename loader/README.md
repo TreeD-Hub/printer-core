@@ -48,9 +48,9 @@
 | 21 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
 | 22 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
 | 23 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
-| 24 | `klipperscreen-install` | optional | Установка/проверка KlipperScreen. |
-| 25 | `klipperscreen-theme` | optional | Деплой темы/шрифта KlipperScreen. |
-| 26 | `klipperscreen-integr` | optional | Systemd override KlipperScreen. |
+| 24 | `klipperscreen-install` | required | Managed-установка/проверка KlipperScreen. |
+| 25 | `klipperscreen-theme` | required | Деплой темы/шрифта KlipperScreen. |
+| 26 | `klipperscreen-integr` | required | Systemd override KlipperScreen. |
 | 27 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
 | 28 | `verify` | required | Финальная валидация V2-контура с паритетной отчетностью. |
 
@@ -87,6 +87,9 @@
 - `TREED_MAINSAIL_WEB_PATH` — default `/var/www/mainsail`, путь web-root Mainsail (используется в `mainsail-web` и `moonraker-config`).
 - `TREED_MAINSAIL_ZIP_URL` — URL архива Mainsail для `mainsail-web`.
 - `TREED_MAINSAIL_MOONRAKER_PROXY_URL` — upstream Moonraker для nginx reverse-proxy в `mainsail-web` (default `http://127.0.0.1:7125`).
+- `TREED_KLIPPERSCREEN_REF` — pin branch/tag/commit для managed checkout KlipperScreen; если установленный checkout той же версии или новее, переустановка пропускается.
+- `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` принудительно пересоздает managed checkout KlipperScreen.
+- `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; управляет строгостью проверок KlipperScreen в `verify`.
 - `TREED_REQUIRE_KLIPPER_READY` — `0|1`, default `0`; управляет тем, будет ли `Klippy state!=ready` блокировать `verify`.
 
 ## Запуск

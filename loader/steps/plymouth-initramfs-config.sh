@@ -25,6 +25,7 @@ BOOT_DIR="${BOOT_DIR:-$(detect_boot_dir)}"
 CONFIG_FILE="${CONFIG_FILE:-$(detect_config_file "${BOOT_DIR}")}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-$(detect_boot_backend "${BOOT_DIR}")}"
 ARMBIAN_ENV_FILE="${ARMBIAN_ENV_FILE:-$(detect_armbian_env_file "${BOOT_DIR}")}"
+EXTLINUX_FILE="${EXTLINUX_FILE:-$(detect_extlinux_file "${BOOT_DIR}")}"
 
 kver="$(uname -r)"
 initrd_name="initrd.img-${kver}"
@@ -37,23 +38,32 @@ if [ ! -f "${initrd_path}" ]; then
   exit 0
 fi
 
-# Блок 4a: Armbian/Extlinux backend — initrd управляется boot scripts/extlinux.
-if [ "${TREED_BOOT_BACKEND}" = "armbian" ] || [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
+# Блок 4a: Armbian backend — initrd управляется boot scripts.
+if [ "${TREED_BOOT_BACKEND}" = "armbian" ]; then
   if [ -n "${ARMBIAN_ENV_FILE}" ] && [ -f "${ARMBIAN_ENV_FILE}" ]; then
     log_info "plymouth-initramfs-config: armbian backend uses ${ARMBIAN_ENV_FILE}"
   else
     log_warn "plymouth-initramfs-config: armbian backend detected, but armbianEnv.txt is missing"
   fi
 
-  if [ -f /boot/extlinux/extlinux.conf ]; then
-    if grep -qiE "initrd[[:space:]]+/?.*${initrd_name}" /boot/extlinux/extlinux.conf; then
-      log_info "plymouth-initramfs-config: extlinux has initrd entry for ${initrd_name}"
-    else
-      log_warn "plymouth-initramfs-config: extlinux.conf has no explicit initrd entry for ${initrd_name}"
-    fi
+  log_info "plymouth-initramfs-config: OK (armbian backend, no config.txt rewrite)"
+  exit 0
+fi
+
+# Блок 4b: Extlinux backend — initrd задается строкой INITRD в extlinux.conf.
+if [ "${TREED_BOOT_BACKEND}" = "extlinux" ]; then
+  if [ -z "${EXTLINUX_FILE}" ] || [ ! -f "${EXTLINUX_FILE}" ]; then
+    log_error "plymouth-initramfs-config: extlinux backend requires extlinux.conf"
+    exit 1
   fi
 
-  log_info "plymouth-initramfs-config: OK (armbian backend, no config.txt rewrite)"
+  if grep -qiE "initrd[[:space:]]+/?.*${initrd_name}" "${EXTLINUX_FILE}"; then
+    log_info "plymouth-initramfs-config: extlinux has initrd entry for ${initrd_name}"
+  else
+    log_warn "plymouth-initramfs-config: extlinux.conf has no explicit initrd entry for ${initrd_name}"
+  fi
+
+  log_info "plymouth-initramfs-config: OK (extlinux backend, no config.txt rewrite)"
   exit 0
 fi
 

@@ -218,9 +218,6 @@ STEPS=(
 # Блок 14: Явный список optional-шагов (не прерывают provisioning при ошибке).
 OPTIONAL_STEPS=(
   "crowsnest-webcam"         # Камера может быть недоступна на конкретном хосте.
-  "klipperscreen-install"    # UI-слой допускается как best-effort.
-  "klipperscreen-theme"      # Темизация UI не блокирует базовый запуск принтера.
-  "klipperscreen-integr"     # Integr override применяется по возможности.
 )
 
 # Блок 15: Helper-проверка принадлежности шага к optional-контуру.

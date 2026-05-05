@@ -29,9 +29,9 @@
 | 21 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
 | 22 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
 | 23 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 24 | `klipperscreen-install.sh` | optional | Установка/проверка KlipperScreen. |
-| 25 | `klipperscreen-theme.sh` | optional | Деплой темы/шрифта KlipperScreen. |
-| 26 | `klipperscreen-integr.sh` | optional | Systemd override KlipperScreen. |
+| 24 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
+| 25 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
+| 26 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
 | 27 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
 | 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью, включая проверки sensorless X/Y и Input Shaper. |
 
@@ -126,18 +126,18 @@
 
 ### KlipperScreen
 
-- `TREED_FORCE_KLIPPERSCREEN_INSTALL` (`1` — принудительная установка)
+- `TREED_FORCE_KLIPPERSCREEN_INSTALL` (`1` — принудительная переустановка managed checkout)
 - `TREED_KLIPPERSCREEN_INSTALL_SERVICE` (default `1`, ответ installer-у на установку service)
 - `TREED_KLIPPERSCREEN_BACKEND` (default `X`, ответ installer-у на выбор Xserver/Wayland)
 - `TREED_KLIPPERSCREEN_NETWORK_MANAGER` (default `N`, ответ installer-у на установку NetworkManager)
 - `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` (default `0`, внешний installer не стартует сервис сам)
 - `TREED_KLIPPERSCREEN_REPO`
-- `TREED_KLIPPERSCREEN_REF`
+- `TREED_KLIPPERSCREEN_REF` (pin branch/tag/commit; checkout той же версии или новее не переустанавливается)
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` (default `45`)
 - `TREED_KLIPPERSCREEN_HOME`
 - `TREED_KS_THEME` (`treed-oled|...|keep`, default `treed-oled`)
 - `TREED_KS_LANGUAGE` (`ru|...|keep`, default `ru`)
-- `TREED_KLIPPERSCREEN_REQUIRED` (`1` делает проверки UI обязательными в `verify`)
+- `TREED_KLIPPERSCREEN_REQUIRED` (`0|1`, default `1`; управляет строгостью проверок UI в `verify`)
 
 ### Time / systemd / verify
 
@@ -167,6 +167,10 @@
 - `moonraker-config.sh`
   - `clean`: `moonraker.conf` без `.bak`.
   - `preserve`: `backup_file_once` перед перезаписью.
+- `klipperscreen-install.sh`
+  - managed checkout находится в `${TREED_KLIPPERSCREEN_HOME:-${PI_HOME}/KlipperScreen}`;
+  - если checkout полный и его commit равен target или новее target, package-переустановка не выполняется;
+  - если service отсутствует/указывает в другой каталог, installer запускается для восстановления systemd wiring без пересоздания same-or-newer checkout.
 - `klipperscreen-theme.sh`
   - `clean`: `KlipperScreen.conf` без `.bak`.
   - `preserve`: `backup_file_once` перед изменением.

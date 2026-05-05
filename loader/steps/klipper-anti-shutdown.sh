@@ -33,11 +33,11 @@ SOCK="${DEPLOY_HOME}/printer_data/comms/klippy.sock"
 LOG="${DEPLOY_HOME}/printer_data/logs/klippy.log"
 
 # Блок 3: Вспомогательные функции работы с Klippy Unix-сокетом.
-query_klippy_state() {
+query_klippy_info() {
   local sock_path="$1"
   local timeout="${2:-2}"
 
-  # Читаем state через Unix-сокет Klippy API (метод info).
+  # Читаем state/state_message через Unix-сокет Klippy API (метод info).
   python3 - "${sock_path}" "${timeout}" <<'PY'
 import json
 import socket
@@ -75,16 +75,86 @@ raw = data.split(b"\x03", 1)[0]
 msg = json.loads(raw.decode("utf-8", errors="replace"))
 
 state = ""
+state_message = ""
 if isinstance(msg, dict):
     result = msg.get("result")
     if isinstance(result, dict):
         state = str(result.get("state", "")).strip().lower()
+        state_message = str(result.get("state_message", "")).replace("\n", " ").strip()
 
 if not state:
     raise SystemExit(4)
 
-print(state)
+print(state + "\t" + state_message)
 PY
+}
+
+wait_klippy_state() {
+  local sock_path="$1"
+  local timeout="${2:-20}"
+  local info=""
+  local state=""
+  local tab=""
+  local i
+  tab="$(printf '\t')"
+
+  # Klippy часто сначала отвечает startup, а затем переходит в ready/error/shutdown.
+  for i in $(seq 1 "${timeout}"); do
+    info="$(query_klippy_info "${sock_path}" "${TREED_ANTI_SHUTDOWN_INFO_TIMEOUT:-2}" 2>/dev/null || true)"
+    state="${info%%${tab}*}"
+    case "${state}" in
+      ready|error|shutdown)
+        printf '%s\n' "${info}"
+        return 0
+        ;;
+      startup)
+        sleep 1
+        ;;
+      *)
+        sleep 1
+        ;;
+    esac
+  done
+
+  if [ -n "${info}" ]; then
+    printf '%s\n' "${info}"
+    return 0
+  fi
+
+  return 1
+}
+
+klippy_info_state() {
+  local info="$1"
+  local tab=""
+  tab="$(printf '\t')"
+  printf '%s\n' "${info%%${tab}*}"
+}
+
+klippy_info_state_message() {
+  local info="$1"
+  local tab=""
+  tab="$(printf '\t')"
+  if [ "${info}" = "${info#*${tab}}" ]; then
+    printf '\n'
+  else
+    printf '%s\n' "${info#*${tab}}"
+  fi
+}
+
+klippy_state_is_shutdown() {
+  local state="$1"
+  local state_message="$2"
+
+  if [ "${state}" = "shutdown" ]; then
+    return 0
+  fi
+
+  if printf '%s\n' "${state_message}" | grep -Eiq 'shutdown|Can not update MCU .* as it is shutdown|MCU .* shutdown'; then
+    return 0
+  fi
+
+  return 1
 }
 
 send_klippy_gcode() {
@@ -174,15 +244,19 @@ if [ ! -S "$SOCK" ]; then
   exit 0
 fi
 
+klippy_info=""
 klippy_state=""
+klippy_state_message=""
 if command -v python3 >/dev/null 2>&1; then
-  klippy_state="$(query_klippy_state "${SOCK}" "${TREED_ANTI_SHUTDOWN_INFO_TIMEOUT:-2}" 2>/dev/null || true)"
+  klippy_info="$(wait_klippy_state "${SOCK}" "${TREED_ANTI_SHUTDOWN_STATE_TIMEOUT:-20}" 2>/dev/null || true)"
+  klippy_state="$(klippy_info_state "${klippy_info}" | tr -d '\r\n')"
+  klippy_state_message="$(klippy_info_state_message "${klippy_info}" | tr -d '\r\n')"
 else
   log_warn "${STEP}: python3 not found; cannot query klippy state"
 fi
 
-if [ "${klippy_state}" = "shutdown" ]; then
-  log_info "${STEP}: MCU state=shutdown; sending FIRMWARE_RESTART"
+if klippy_state_is_shutdown "${klippy_state}" "${klippy_state_message}"; then
+  log_info "${STEP}: Klippy state=${klippy_state:-unknown}, shutdown detected; sending FIRMWARE_RESTART"
   if command -v python3 >/dev/null 2>&1; then
     if send_klippy_gcode "${SOCK}" "${TREED_ANTI_SHUTDOWN_INFO_TIMEOUT:-2}" "FIRMWARE_RESTART" >/dev/null 2>&1
     then
@@ -191,7 +265,14 @@ if [ "${klippy_state}" = "shutdown" ]; then
       rc=$?
       log_warn "${STEP}: failed to send FIRMWARE_RESTART via klippy API rc=${rc}"
     fi
-    sleep 2
+    klippy_info="$(wait_klippy_state "${SOCK}" "${TREED_ANTI_SHUTDOWN_STATE_TIMEOUT:-20}" 2>/dev/null || true)"
+    klippy_state="$(klippy_info_state "${klippy_info}" | tr -d '\r\n')"
+    klippy_state_message="$(klippy_info_state_message "${klippy_info}" | tr -d '\r\n')"
+    if klippy_state_is_shutdown "${klippy_state}" "${klippy_state_message}"; then
+      log_warn "${STEP}: shutdown remains after FIRMWARE_RESTART (state=${klippy_state:-unknown}, state_message=${klippy_state_message:-missing})"
+    else
+      log_info "${STEP}: state after FIRMWARE_RESTART=${klippy_state:-unknown}"
+    fi
   else
     log_warn "${STEP}: cannot send FIRMWARE_RESTART (python3 required); skipping"
   fi
