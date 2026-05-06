@@ -82,6 +82,7 @@ checkout_klipperscreen_ref() {
   local repo_url="$1"
   local dst_dir="$2"
   local ref="$3"
+  local target_commit=""
 
   sudo -u "${PI_USER}" -H mkdir -p "$(dirname "${dst_dir}")"
   if ! sudo -u "${PI_USER}" -H git clone "${repo_url}" "${dst_dir}" >/dev/null 2>&1; then
@@ -89,11 +90,21 @@ checkout_klipperscreen_ref() {
     exit 1
   fi
 
-  if ! sudo -u "${PI_USER}" -H git -C "${dst_dir}" checkout "${ref}" >/dev/null 2>&1; then
+  sudo -u "${PI_USER}" -H git -C "${dst_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
+  if ! sudo -u "${PI_USER}" -H git -C "${dst_dir}" rev-parse --verify "origin/${KS_PRIMARY_BRANCH}^{commit}" >/dev/null 2>&1; then
+    log_error "klipperscreen-install: failed to find origin/${KS_PRIMARY_BRANCH} in ${repo_url}"
+    exit 1
+  fi
+
+  target_commit="$(sudo -u "${PI_USER}" -H git -C "${dst_dir}" rev-parse --verify "${ref}^{commit}" 2>/dev/null || true)"
+  if [ -z "${target_commit}" ]; then
     log_error "klipperscreen-install: failed to checkout ref '${ref}' from ${repo_url}"
     exit 1
   fi
-  sudo -u "${PI_USER}" -H git -C "${dst_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
+
+  # Moonraker update_manager требует ветку с remote, detached checkout ломает recovery/status.
+  sudo -u "${PI_USER}" -H git -C "${dst_dir}" checkout -B "${KS_PRIMARY_BRANCH}" "${target_commit}" >/dev/null
+  sudo -u "${PI_USER}" -H git -C "${dst_dir}" branch --set-upstream-to="origin/${KS_PRIMARY_BRANCH}" "${KS_PRIMARY_BRANCH}" >/dev/null 2>&1 || true
 }
 
 klipperscreen_package_complete() {
@@ -201,25 +212,52 @@ patch_klipperscreen_installer_noninteractive() {
     "${installer}"
 }
 
-refresh_klipperscreen_repo_metadata() {
+repair_klipperscreen_git_state() {
   local package_dir="$1"
   local is_shallow=""
+  local branch=""
+  local current_commit=""
 
   if [ ! -d "${package_dir}/.git" ]; then
     return 0
   fi
 
-  sudo -u "${PI_USER}" -H git -C "${package_dir}" remote set-url origin "${KS_REPO_URL}" >/dev/null 2>&1 || true
+  if sudo -u "${PI_USER}" -H git -C "${package_dir}" remote get-url origin >/dev/null 2>&1; then
+    sudo -u "${PI_USER}" -H git -C "${package_dir}" remote set-url origin "${KS_REPO_URL}" >/dev/null
+  else
+    sudo -u "${PI_USER}" -H git -C "${package_dir}" remote add origin "${KS_REPO_URL}"
+  fi
 
   is_shallow="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse --is-shallow-repository 2>/dev/null || printf 'false')"
   if [ "${is_shallow}" = "true" ]; then
-    if sudo -u "${PI_USER}" -H git -C "${package_dir}" fetch --unshallow --tags --prune origin >/dev/null 2>&1; then
-      return 0
+    if ! sudo -u "${PI_USER}" -H git -C "${package_dir}" fetch --unshallow --tags --prune origin >/dev/null 2>&1; then
+      log_warn "klipperscreen-install: failed to unshallow ${package_dir}, falling back to tag fetch"
     fi
-    log_warn "klipperscreen-install: failed to unshallow ${package_dir}, falling back to tag fetch"
   fi
 
   sudo -u "${PI_USER}" -H git -C "${package_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
+
+  if ! sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse --verify "origin/${KS_PRIMARY_BRANCH}^{commit}" >/dev/null 2>&1; then
+    log_error "klipperscreen-install: failed to detect origin/${KS_PRIMARY_BRANCH}; Moonraker cannot manage KlipperScreen updates"
+    exit 1
+  fi
+
+  branch="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ "${branch}" = "HEAD" ] || [ -z "${branch}" ]; then
+    current_commit="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse HEAD)"
+    sudo -u "${PI_USER}" -H git -C "${package_dir}" checkout -B "${KS_PRIMARY_BRANCH}" "${current_commit}" >/dev/null
+    branch="${KS_PRIMARY_BRANCH}"
+    log_info "klipperscreen-install: repaired detached checkout to branch ${KS_PRIMARY_BRANCH}"
+  fi
+
+  if [ "${branch}" != "${KS_PRIMARY_BRANCH}" ]; then
+    current_commit="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse HEAD)"
+    sudo -u "${PI_USER}" -H git -C "${package_dir}" checkout -B "${KS_PRIMARY_BRANCH}" "${current_commit}" >/dev/null
+    branch="${KS_PRIMARY_BRANCH}"
+    log_info "klipperscreen-install: normalized checkout branch to ${KS_PRIMARY_BRANCH}"
+  fi
+
+  sudo -u "${PI_USER}" -H git -C "${package_dir}" branch --set-upstream-to="origin/${KS_PRIMARY_BRANCH}" "${branch}" >/dev/null 2>&1 || true
 }
 
 ensure_moonraker_allowed_service() {
@@ -247,6 +285,7 @@ write_klipperscreen_update_manager_fragment() {
     printf '%s\n' "[update_manager KlipperScreen]"
     printf '%s\n' "type: git_repo"
     printf '%s\n' "channel: dev"
+    printf '%s\n' "primary_branch: ${KS_PRIMARY_BRANCH}"
     printf '%s\n' "path: ${KS_HOME}"
     printf '%s\n' "origin: ${KS_REPO_URL}"
     printf '%s\n' "virtualenv: ${KS_ENV}"
@@ -303,6 +342,7 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 KS_REPO_URL="${TREED_KLIPPERSCREEN_REPO:-https://github.com/KlipperScreen/KlipperScreen.git}"
+KS_PRIMARY_BRANCH="${TREED_KLIPPERSCREEN_PRIMARY_BRANCH:-master}"
 KS_PINNED_REF_DEFAULT="35c26ba4d452043695d73fa8ec2acd25bbc8911d"
 KS_REPO_REF="${TREED_KLIPPERSCREEN_REF:-${KS_PINNED_REF_DEFAULT}}"
 KS_STAGING_DIR="${PI_HOME}/treed/.staging/KlipperScreen"
@@ -402,7 +442,7 @@ if ! klipperscreen_package_complete "${KS_HOME}"; then
   exit 1
 fi
 
-refresh_klipperscreen_repo_metadata "${KS_HOME}"
+repair_klipperscreen_git_state "${KS_HOME}"
 ensure_moonraker_allowed_service "KlipperScreen"
 write_klipperscreen_update_manager_fragment
 restart_moonraker_if_active

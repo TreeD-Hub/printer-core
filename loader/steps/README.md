@@ -139,6 +139,7 @@
 - `TREED_KLIPPERSCREEN_NETWORK_MANAGER` (default `N`, ответ installer-у на установку NetworkManager)
 - `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` (default `0`, внешний installer не стартует сервис сам)
 - `TREED_KLIPPERSCREEN_REPO` (default `https://github.com/KlipperScreen/KlipperScreen.git`)
+- `TREED_KLIPPERSCREEN_PRIMARY_BRANCH` (default `master`, ветка для Moonraker update_manager)
 - `TREED_KLIPPERSCREEN_REF` (pin branch/tag/commit; checkout той же версии или новее не переустанавливается)
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` (default `45`)
 - `TREED_KLIPPERSCREEN_HOME`
@@ -178,6 +179,7 @@
 - `klipperscreen-install.sh`
   - managed checkout находится в `${TREED_KLIPPERSCREEN_HOME:-${PI_HOME}/KlipperScreen}`;
   - venv находится в `${TREED_KLIPPERSCREEN_ENV:-${PI_HOME}/.KlipperScreen-env}`;
+  - checkout нормализуется в branch-based состояние `${TREED_KLIPPERSCREEN_PRIMARY_BRANCH:-master}` с `origin`, чтобы Moonraker update_manager не видел detached repo;
   - если checkout полный и его commit равен target или новее target, package-переустановка не выполняется;
   - если service отсутствует/указывает в другой каталог, installer запускается для восстановления systemd wiring без пересоздания same-or-newer checkout.
 - `klipperscreen-theme.sh`

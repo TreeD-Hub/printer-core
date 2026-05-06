@@ -93,6 +93,7 @@
 - `TREED_MAINSAIL_WGET_TRIES` — число попыток загрузки `mainsail.zip` (default `3`).
 - `TREED_MAINSAIL_ALLOW_EXISTING_FALLBACK` — `0|1`, default `1`; при недоступном GitHub разрешает использовать существующий валидный web-root Mainsail.
 - `TREED_KLIPPERSCREEN_REPO` — default `https://github.com/KlipperScreen/KlipperScreen.git`.
+- `TREED_KLIPPERSCREEN_PRIMARY_BRANCH` — default `master`, ветка KlipperScreen для Moonraker update_manager.
 - `TREED_KLIPPERSCREEN_REF` — pin branch/tag/commit для managed checkout KlipperScreen; если установленный checkout той же версии или новее, переустановка пропускается.
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` принудительно пересоздает managed checkout KlipperScreen.
 - `TREED_KLIPPERSCREEN_ENV` — путь venv KlipperScreen, default `${PI_HOME}/.KlipperScreen-env`.

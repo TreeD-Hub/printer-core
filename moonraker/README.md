@@ -38,7 +38,8 @@
 Шаг `klipperscreen-install.sh` после managed-установки пишет generated-фрагмент:
 
 - `${PI_HOME}/printer_data/config/moonraker/generated/60-klipperscreen-update-manager.conf`
-- секция `[update_manager KlipperScreen]` создается только после появления валидного checkout KlipperScreen.
+- секция `[update_manager KlipperScreen]` создается только после появления валидного checkout KlipperScreen;
+- generated-секция содержит `primary_branch: master`, а installer нормализует checkout из detached HEAD в локальную ветку `master` с remote `origin/master`.
 
 ## Связанные каталоги
 
