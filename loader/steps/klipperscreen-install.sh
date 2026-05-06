@@ -84,15 +84,16 @@ checkout_klipperscreen_ref() {
   local ref="$3"
 
   sudo -u "${PI_USER}" -H mkdir -p "$(dirname "${dst_dir}")"
-  sudo -u "${PI_USER}" -H git init "${dst_dir}" >/dev/null
-  sudo -u "${PI_USER}" -H git -C "${dst_dir}" remote add origin "${repo_url}"
-
-  if ! sudo -u "${PI_USER}" -H git -C "${dst_dir}" fetch --depth 1 origin "${ref}" >/dev/null 2>&1; then
-    log_error "klipperscreen-install: failed to fetch ref '${ref}' from ${repo_url}"
+  if ! sudo -u "${PI_USER}" -H git clone "${repo_url}" "${dst_dir}" >/dev/null 2>&1; then
+    log_error "klipperscreen-install: failed to clone ${repo_url} into ${dst_dir}"
     exit 1
   fi
 
-  sudo -u "${PI_USER}" -H git -C "${dst_dir}" checkout --detach FETCH_HEAD >/dev/null
+  if ! sudo -u "${PI_USER}" -H git -C "${dst_dir}" checkout "${ref}" >/dev/null 2>&1; then
+    log_error "klipperscreen-install: failed to checkout ref '${ref}' from ${repo_url}"
+    exit 1
+  fi
+  sudo -u "${PI_USER}" -H git -C "${dst_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
 }
 
 klipperscreen_package_complete() {
@@ -200,6 +201,89 @@ patch_klipperscreen_installer_noninteractive() {
     "${installer}"
 }
 
+refresh_klipperscreen_repo_metadata() {
+  local package_dir="$1"
+  local is_shallow=""
+
+  if [ ! -d "${package_dir}/.git" ]; then
+    return 0
+  fi
+
+  sudo -u "${PI_USER}" -H git -C "${package_dir}" remote set-url origin "${KS_REPO_URL}" >/dev/null 2>&1 || true
+
+  is_shallow="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse --is-shallow-repository 2>/dev/null || printf 'false')"
+  if [ "${is_shallow}" = "true" ]; then
+    if sudo -u "${PI_USER}" -H git -C "${package_dir}" fetch --unshallow --tags --prune origin >/dev/null 2>&1; then
+      return 0
+    fi
+    log_warn "klipperscreen-install: failed to unshallow ${package_dir}, falling back to tag fetch"
+  fi
+
+  sudo -u "${PI_USER}" -H git -C "${package_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
+}
+
+ensure_moonraker_allowed_service() {
+  local service_name="$1"
+
+  ensure_dir "$(dirname "${MOONRAKER_ASVC}")"
+  if [ ! -f "${MOONRAKER_ASVC}" ]; then
+    touch "${MOONRAKER_ASVC}"
+  fi
+
+  if grep -qE "^[[:space:]]*${service_name}([.]service)?[[:space:]]*$" "${MOONRAKER_ASVC}"; then
+    return 0
+  fi
+
+  printf '%s\n' "${service_name}" >> "${MOONRAKER_ASVC}"
+  chown "${PI_USER}:${PI_GROUP}" "${MOONRAKER_ASVC}" || true
+  log_info "klipperscreen-install: allowed service added (${service_name})"
+}
+
+write_klipperscreen_update_manager_fragment() {
+  ensure_dir "$(dirname "${KS_UPDATE_MANAGER_FRAGMENT}")"
+
+  {
+    printf '%s\n' "#### treed-generated: klipperscreen-update-manager"
+    printf '%s\n' "[update_manager KlipperScreen]"
+    printf '%s\n' "type: git_repo"
+    printf '%s\n' "channel: dev"
+    printf '%s\n' "path: ${KS_HOME}"
+    printf '%s\n' "origin: ${KS_REPO_URL}"
+    printf '%s\n' "virtualenv: ${KS_ENV}"
+    if [ -f "${KS_HOME}/scripts/KlipperScreen-requirements.txt" ]; then
+      printf '%s\n' "requirements: scripts/KlipperScreen-requirements.txt"
+    fi
+    if [ -f "${KS_HOME}/scripts/system-dependencies.json" ]; then
+      printf '%s\n' "system_dependencies: scripts/system-dependencies.json"
+    fi
+    printf '%s\n' "managed_services: KlipperScreen"
+  } > "${KS_UPDATE_MANAGER_FRAGMENT}"
+
+  chown "${PI_USER}:${PI_GROUP}" "${KS_UPDATE_MANAGER_FRAGMENT}" || true
+  log_info "klipperscreen-install: wrote Moonraker updater fragment ${KS_UPDATE_MANAGER_FRAGMENT}"
+}
+
+restart_moonraker_if_active() {
+  local err=""
+  local rc=0
+
+  if ! systemctl cat moonraker.service >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! systemctl is-active --quiet moonraker.service; then
+    return 0
+  fi
+
+  if err="$(systemctl restart moonraker.service 2>&1)"; then
+    log_info "klipperscreen-install: restarted moonraker.service to load KlipperScreen updater"
+    return 0
+  fi
+
+  rc=$?
+  log_error "klipperscreen-install: failed to restart moonraker.service rc=${rc}: ${err}"
+  exit 1
+}
+
 # Блок 4: Основной сценарий установки и health-check.
 PI_USER="${PI_USER:-${SUDO_USER:-pi}}"
 PI_HOME="${PI_HOME:-$(getent passwd "${PI_USER}" | cut -d: -f6 || true)}"
@@ -218,7 +302,7 @@ if ! command -v git >/dev/null 2>&1; then
   apt_get_noninteractive install git
 fi
 
-KS_REPO_URL="${TREED_KLIPPERSCREEN_REPO:-https://github.com/jordanruthe/KlipperScreen.git}"
+KS_REPO_URL="${TREED_KLIPPERSCREEN_REPO:-https://github.com/KlipperScreen/KlipperScreen.git}"
 KS_PINNED_REF_DEFAULT="35c26ba4d452043695d73fa8ec2acd25bbc8911d"
 KS_REPO_REF="${TREED_KLIPPERSCREEN_REF:-${KS_PINNED_REF_DEFAULT}}"
 KS_STAGING_DIR="${PI_HOME}/treed/.staging/KlipperScreen"
@@ -230,6 +314,8 @@ else
   KS_HOME="${KS_HOME_DEFAULT}"
 fi
 KS_ENV="${TREED_KLIPPERSCREEN_ENV:-${PI_HOME}/.KlipperScreen-env}"
+KS_UPDATE_MANAGER_FRAGMENT="${PI_HOME}/printer_data/config/moonraker/generated/60-klipperscreen-update-manager.conf"
+MOONRAKER_ASVC="${PI_HOME}/printer_data/moonraker.asvc"
 KS_INSTALL_SERVICE="${TREED_KLIPPERSCREEN_INSTALL_SERVICE:-1}"
 KS_BACKEND="${TREED_KLIPPERSCREEN_BACKEND:-X}"
 KS_NETWORK="${TREED_KLIPPERSCREEN_NETWORK_MANAGER:-N}"
@@ -315,6 +401,11 @@ if ! klipperscreen_package_complete "${KS_HOME}"; then
   log_error "klipperscreen-install: installed package is incomplete after install (${KS_HOME})"
   exit 1
 fi
+
+refresh_klipperscreen_repo_metadata "${KS_HOME}"
+ensure_moonraker_allowed_service "KlipperScreen"
+write_klipperscreen_update_manager_fragment
+restart_moonraker_if_active
 
 systemctl enable KlipperScreen.service >/dev/null 2>&1 || true
 assert_klipperscreen_healthy

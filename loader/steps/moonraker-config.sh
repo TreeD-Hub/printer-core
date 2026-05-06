@@ -26,6 +26,9 @@ SRC_COMPONENT="${REPO_DIR}/moonraker/components/treed_shell_command.py"
 COMPONENT_NAME="treed_shell_command.py"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
+TREED_CROWSNEST_SRC_DIR="${TREED_CROWSNEST_SRC_DIR:-${PI_HOME}/crowsnest}"
+TREED_CROWSNEST_REPO="${TREED_CROWSNEST_REPO:-https://github.com/mainsail-crew/crowsnest.git}"
+MOONRAKER_ASVC="${PI_HOME}/printer_data/moonraker.asvc"
 
 case "${DEPLOY_MODE}" in
   clean|preserve)
@@ -198,16 +201,52 @@ resolve_mainsail_web_path() {
   return 1
 }
 
-disable_mainsail_updater_section() {
+is_valid_crowsnest_repo_path() {
+  local candidate="$1"
+  if [ -z "${candidate}" ]; then
+    return 1
+  fi
+  if [ ! -d "${candidate}/.git" ]; then
+    return 1
+  fi
+  if [ ! -f "${candidate}/tools/pkglist.sh" ]; then
+    return 1
+  fi
+  return 0
+}
+
+resolve_crowsnest_repo_path() {
+  local candidate=""
+  local candidates=()
+
+  if [ -n "${TREED_CROWSNEST_SRC_DIR}" ]; then
+    candidates+=("${TREED_CROWSNEST_SRC_DIR}")
+  fi
+  candidates+=(
+    "${PI_HOME}/crowsnest"
+    "/home/${PI_USER}/crowsnest"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if is_valid_crowsnest_repo_path "${candidate}"; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+disable_update_manager_section() {
   local core_cfg="$1"
+  local section_name="$2"
   local tmp=""
 
   tmp="$(mktemp)"
-  awk '
+  awk -v section_name="${section_name}" '
     BEGIN { in_section = 0 }
-    /^[[:space:]]*\[update_manager mainsail\][[:space:]]*$/ {
+    $0 ~ "^[[:space:]]*\\[update_manager " section_name "\\][[:space:]]*$" {
       in_section = 1
-      print "# [update_manager mainsail]"
+      print "# [update_manager " section_name "]"
       next
     }
     in_section && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
@@ -228,10 +267,37 @@ disable_mainsail_updater_section() {
   mv "${tmp}" "${core_cfg}"
 }
 
+set_update_manager_section_option() {
+  local core_cfg="$1"
+  local section_name="$2"
+  local option_name="$3"
+  local option_value="$4"
+  local option_value_escaped=""
+
+  option_value_escaped="$(printf '%s' "${option_value}" | sed 's|[&|]|\\&|g')"
+  sed -i -E "/^[[:space:]]*\\[update_manager ${section_name}\\][[:space:]]*$/,/^[[:space:]]*\\[[^]]+\\][[:space:]]*$/ s|^([[:space:]]*${option_name}:[[:space:]]*).*$|\\1${option_value_escaped}|" "${core_cfg}"
+}
+
+ensure_moonraker_allowed_service() {
+  local service_name="$1"
+
+  ensure_dir "$(dirname "${MOONRAKER_ASVC}")"
+  if [ ! -f "${MOONRAKER_ASVC}" ]; then
+    touch "${MOONRAKER_ASVC}"
+  fi
+
+  if grep -qE "^[[:space:]]*${service_name}([.]service)?[[:space:]]*$" "${MOONRAKER_ASVC}"; then
+    return 0
+  fi
+
+  printf '%s\n' "${service_name}" >> "${MOONRAKER_ASVC}"
+  chown "${PI_USER}:${grp}" "${MOONRAKER_ASVC}" || true
+  log_info "moonraker-config: allowed service added (${service_name})"
+}
+
 configure_mainsail_updater_section() {
   local core_cfg="${DST_BASE_DIR}/00-core.conf"
   local mainsail_path=""
-  local mainsail_path_escaped=""
 
   if [ ! -f "${core_cfg}" ]; then
     log_warn "moonraker-config: base core fragment not found, skip mainsail updater tuning"
@@ -244,12 +310,36 @@ configure_mainsail_updater_section() {
   fi
 
   if mainsail_path="$(resolve_mainsail_web_path)"; then
-    mainsail_path_escaped="$(printf '%s' "${mainsail_path}" | sed 's|[&|]|\\&|g')"
-    sed -i -E "/^[[:space:]]*\\[update_manager mainsail\\][[:space:]]*$/,/^[[:space:]]*\\[[^]]+\\][[:space:]]*$/ s|^([[:space:]]*path:[[:space:]]*).*$|\\1${mainsail_path_escaped}|" "${core_cfg}"
+    set_update_manager_section_option "${core_cfg}" "mainsail" "path" "${mainsail_path}"
     log_info "moonraker-config: mainsail updater enabled (path=${mainsail_path})"
   else
-    disable_mainsail_updater_section "${core_cfg}"
+    disable_update_manager_section "${core_cfg}" "mainsail"
     log_warn "moonraker-config: mainsail updater disabled (no valid web path with release_info.json)"
+  fi
+}
+
+configure_crowsnest_updater_section() {
+  local core_cfg="${DST_BASE_DIR}/00-core.conf"
+  local crowsnest_path=""
+
+  if [ ! -f "${core_cfg}" ]; then
+    log_warn "moonraker-config: base core fragment not found, skip crowsnest updater tuning"
+    return 0
+  fi
+
+  if ! grep -qE '^[[:space:]]*\[update_manager crowsnest\][[:space:]]*$' "${core_cfg}"; then
+    log_warn "moonraker-config: [update_manager crowsnest] section not found in ${core_cfg}"
+    return 0
+  fi
+
+  if crowsnest_path="$(resolve_crowsnest_repo_path)"; then
+    set_update_manager_section_option "${core_cfg}" "crowsnest" "path" "${crowsnest_path}"
+    set_update_manager_section_option "${core_cfg}" "crowsnest" "origin" "${TREED_CROWSNEST_REPO}"
+    ensure_moonraker_allowed_service "crowsnest"
+    log_info "moonraker-config: crowsnest updater enabled (path=${crowsnest_path})"
+  else
+    disable_update_manager_section "${core_cfg}" "crowsnest"
+    log_warn "moonraker-config: crowsnest updater disabled (no valid git checkout with tools/pkglist.sh)"
   fi
 }
 
@@ -275,6 +365,7 @@ deploy_base_fragments() {
   cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
   render_base_fragment_templates
   configure_mainsail_updater_section
+  configure_crowsnest_updater_section
   chown -R "${PI_USER}:${grp}" "${DST_BASE_DIR}" || true
   BASE_DEPLOYED=1
   log_info "Deployed Moonraker base fragments to ${DST_BASE_DIR}"

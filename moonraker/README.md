@@ -32,6 +32,13 @@
 Пост-обработка `00-core.conf` в `moonraker-config.sh`:
 - если найден валидный локальный путь Mainsail (по умолчанию `/var/www/mainsail`, с `index.html` и `release_info.json`), updater-секция Mainsail остается активной;
 - если путь не найден, секция `[update_manager mainsail]` автоматически комментируется, чтобы исключить warning о невалидном `path`.
+- если найден валидный git checkout Crowsnest (по умолчанию `${PI_HOME}/crowsnest`, с `.git` и `tools/pkglist.sh`), updater-секция Crowsnest остается активной;
+- если Crowsnest checkout не найден, секция `[update_manager crowsnest]` автоматически комментируется.
+
+Шаг `klipperscreen-install.sh` после managed-установки пишет generated-фрагмент:
+
+- `${PI_HOME}/printer_data/config/moonraker/generated/60-klipperscreen-update-manager.conf`
+- секция `[update_manager KlipperScreen]` создается только после появления валидного checkout KlipperScreen.
 
 ## Связанные каталоги
 

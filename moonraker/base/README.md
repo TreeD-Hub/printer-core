@@ -11,7 +11,9 @@
 - `00-core.conf`
   - базовый серверный конфиг Moonraker;
   - секции авторизации и update_manager;
+  - секции `[update_manager klipper]` и `[update_manager moonraker]` задают явный `dev`-канал для auto-detected core-updater'ов;
   - секция `[update_manager mainsail]` пост-обрабатывается loader-ом: включается только при валидном локальном пути клиента Mainsail (с `index.html` и `release_info.json`), типовой путь `/var/www/mainsail`;
+  - секция `[update_manager crowsnest]` пост-обрабатывается loader-ом: включается только при валидном git checkout Crowsnest с `tools/pkglist.sh`;
   - подключение компонента `[treed_shell_command]`;
   - runtime shell_command-команды камеры:
     - `treed_cam_session_start`

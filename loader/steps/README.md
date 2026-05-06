@@ -91,6 +91,8 @@
 
 - `TREED_RUNTIME_BOOTSTRAP` (`0|1`, default `1`)
 - `TREED_ALLOW_MISSING_REQUIRED_SERVICES_ON_STOP` (`0|1`, default `1`)
+- `TREED_KLIPPER_REPO` (default `https://github.com/Klipper3d/klipper.git`)
+- `TREED_KLIPPER_REF` (optional, empty by default)
 - `TREED_KLIPPY_ENV_DIR` (default `${PI_HOME}/klippy-env`)
 - `TREED_MOONRAKER_SRC_DIR` (default `${PI_HOME}/moonraker`)
 - `TREED_MOONRAKER_ENV_DIR` (default `${PI_HOME}/moonraker-env`)
@@ -136,7 +138,7 @@
 - `TREED_KLIPPERSCREEN_BACKEND` (default `X`, ответ installer-у на выбор Xserver/Wayland)
 - `TREED_KLIPPERSCREEN_NETWORK_MANAGER` (default `N`, ответ installer-у на установку NetworkManager)
 - `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` (default `0`, внешний installer не стартует сервис сам)
-- `TREED_KLIPPERSCREEN_REPO`
+- `TREED_KLIPPERSCREEN_REPO` (default `https://github.com/KlipperScreen/KlipperScreen.git`)
 - `TREED_KLIPPERSCREEN_REF` (pin branch/tag/commit; checkout той же версии или новее не переустанавливается)
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` (default `45`)
 - `TREED_KLIPPERSCREEN_HOME`
@@ -188,6 +190,7 @@
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
+- `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
 - `klipper-profiles.sh` подставляет зафиксированный EBB UUID и fail-fast при невалидном hex-формате.
 - `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).
@@ -195,4 +198,5 @@
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
+- `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с `tools/pkglist.sh`; updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
 - `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, Input Shaper и Eddy; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.

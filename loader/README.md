@@ -73,6 +73,8 @@
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.
 - `TREED_FIRMWARE_BUILD_ENABLED` — `0|1`, default `1`.
 - `TREED_KLIPPER_SRC_DIR` — default `${PI_HOME}/klipper`.
+- `TREED_KLIPPER_REPO` — default `https://github.com/Klipper3d/klipper.git`.
+- `TREED_KLIPPER_REF` — optional pin branch/tag/commit для Klipper.
 - `TREED_FIRMWARE_ARTIFACTS_DIR` — default `${PI_HOME}/treed/firmware-artifacts/treed-v2`.
 - `TREED_FW_MAIN_CONFIG` / `TREED_FW_EBB_CONFIG` / `TREED_FW_EDDY_CONFIG` — пути к Kconfig target-файлам сборки.
 - `TREED_RUNTIME_BOOTSTRAP` — `0|1`, default `1` (создание/проверка unit-файлов и venv Klipper/Moonraker).
@@ -90,6 +92,7 @@
 - `TREED_MAINSAIL_WGET_TIMEOUT` / `TREED_MAINSAIL_WGET_CONNECT_TIMEOUT` / `TREED_MAINSAIL_WGET_READ_TIMEOUT` — таймауты загрузки `mainsail.zip`.
 - `TREED_MAINSAIL_WGET_TRIES` — число попыток загрузки `mainsail.zip` (default `3`).
 - `TREED_MAINSAIL_ALLOW_EXISTING_FALLBACK` — `0|1`, default `1`; при недоступном GitHub разрешает использовать существующий валидный web-root Mainsail.
+- `TREED_KLIPPERSCREEN_REPO` — default `https://github.com/KlipperScreen/KlipperScreen.git`.
 - `TREED_KLIPPERSCREEN_REF` — pin branch/tag/commit для managed checkout KlipperScreen; если установленный checkout той же версии или новее, переустановка пропускается.
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` принудительно пересоздает managed checkout KlipperScreen.
 - `TREED_KLIPPERSCREEN_ENV` — путь venv KlipperScreen, default `${PI_HOME}/.KlipperScreen-env`.
@@ -97,6 +100,8 @@
 - `TREED_REQUIRE_KLIPPER_READY` — `0|1`, default `0`; управляет тем, будет ли `Klippy state!=ready` блокировать `verify`.
 
 ## Запуск
+
+`runtime-bootstrap` поддерживает полную Git metadata для Klipper/Moonraker/Crowsnest: новые checkout'ы не создаются shallow-клонами, а существующие shallow-репозитории разворачиваются через `git fetch --unshallow --tags`. Это нужно, чтобы Moonraker update_manager видел реальные semver-версии, а не `v0.0.0-...-inferred`.
 
 ```bash
 cd /home/pi/treed/treed-mainshellOS

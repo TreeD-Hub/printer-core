@@ -32,6 +32,8 @@ fi
 
 # Блок 3: Нормализация путей/репозиториев runtime-контуров.
 KLIPPER_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
+KLIPPER_REPO="${TREED_KLIPPER_REPO:-https://github.com/Klipper3d/klipper.git}"
+KLIPPER_REF="${TREED_KLIPPER_REF:-}"
 KLIPPY_ENV_DIR="${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}"
 MOONRAKER_DIR="${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}"
 MOONRAKER_ENV_DIR="${TREED_MOONRAKER_ENV_DIR:-${PI_HOME}/moonraker-env}"
@@ -62,6 +64,22 @@ run_as_pi() {
   sudo -u "${PI_USER}" -H bash -lc "${cmd}"
 }
 
+refresh_repo_metadata() {
+  local repo_dir="$1"
+  local is_shallow=""
+
+  is_shallow="$(run_as_pi "set -euo pipefail; cd '${repo_dir}'; git rev-parse --is-shallow-repository 2>/dev/null || printf 'false'")"
+  if [ "${is_shallow}" = "true" ]; then
+    # Moonraker определяет версии через git describe; shallow-история часто не содержит ближайший semver-tag.
+    if run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --unshallow --tags --prune origin >/dev/null 2>&1"; then
+      return 0
+    fi
+    log_warn "runtime-bootstrap: failed to unshallow ${repo_dir}, falling back to tag fetch"
+  fi
+
+  run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --tags --prune origin >/dev/null 2>&1 || true"
+}
+
 ensure_repo_present() {
   local repo_dir="$1"
   local repo_url="$2"
@@ -87,8 +105,7 @@ ensure_repo_present() {
       log_warn "runtime-bootstrap: ${repo_dir} has no origin remote, recreating from ${repo_url}"
       rm -rf "${repo_dir}"
     else
-      # Подтягиваем теги даже без repo_ref, чтобы Moonraker не оставался в inferred-версии.
-      run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --tags --prune origin >/dev/null 2>&1 || true"
+      refresh_repo_metadata "${repo_dir}"
     fi
   fi
 
@@ -100,7 +117,7 @@ ensure_repo_present() {
   fi
 
   ensure_dir "$(dirname "${repo_dir}")"
-  run_as_pi "set -euo pipefail; git clone --depth 1 '${repo_url}' '${repo_dir}'"
+  run_as_pi "set -euo pipefail; git clone '${repo_url}' '${repo_dir}'"
   if [ -n "${repo_ref}" ]; then
     run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --tags --prune; git checkout '${repo_ref}'"
   fi
@@ -270,10 +287,7 @@ if getent group dialout >/dev/null 2>&1; then
 fi
 
 # Блок 6: Klipper env/service (репозиторий ожидается локально, clone fallback включен).
-if [ ! -d "${KLIPPER_DIR}/.git" ]; then
-  log_warn "runtime-bootstrap: Klipper repo not found in ${KLIPPER_DIR}, cloning fallback"
-  ensure_repo_present "${KLIPPER_DIR}" "https://github.com/Klipper3d/klipper.git" "${TREED_KLIPPER_REF:-}"
-fi
+ensure_repo_present "${KLIPPER_DIR}" "${KLIPPER_REPO}" "${KLIPPER_REF}"
 
 KLIPPER_REQ_FILE="${KLIPPER_DIR}/scripts/klippy-requirements.txt"
 if [ ! -f "${KLIPPER_REQ_FILE}" ]; then
