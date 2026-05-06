@@ -35,6 +35,14 @@ KLIPPER_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
 KLIPPER_REPO="${TREED_KLIPPER_REPO:-https://github.com/Klipper3d/klipper.git}"
 KLIPPER_REF="${TREED_KLIPPER_REF:-}"
 KLIPPY_ENV_DIR="${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}"
+TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00}"
+TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
+TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-efaf957ab20f}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
+TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
+TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
+TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
+TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}"
 MOONRAKER_DIR="${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}"
 MOONRAKER_ENV_DIR="${TREED_MOONRAKER_ENV_DIR:-${PI_HOME}/moonraker-env}"
 MOONRAKER_REPO="${TREED_MOONRAKER_REPO:-https://github.com/Arksine/moonraker.git}"
@@ -57,6 +65,8 @@ PRINTER_COMMS_DIR="${PRINTER_DATA_DIR}/comms"
 KLIPPY_API_SOCK="${PRINTER_COMMS_DIR}/klippy.sock"
 CROWSNEST_ENV_FILE="${PRINTER_DATA_DIR}/systemd/crowsnest.env"
 CROWSNEST_VENV_DIR="${PI_HOME}/crowsnest-env"
+KLIPPER_PREFLIGHT_ENV_FILE="/etc/default/treed-klipper-preflight"
+KLIPPER_PREFLIGHT_SCRIPT="/usr/local/sbin/treed-klipper-preflight.sh"
 
 # Блок 4: Вспомогательные функции (run-as-user, clone/update, venv, requirements).
 run_as_pi() {
@@ -141,6 +151,189 @@ ensure_python_venv() {
     exit 1
   fi
   run_as_pi "set -euo pipefail; '${env_dir}/bin/pip' install -r '${req_file}'"
+}
+
+install_klipper_preflight() {
+  ensure_dir "$(dirname "${KLIPPER_PREFLIGHT_SCRIPT}")"
+
+  cat > "${KLIPPER_PREFLIGHT_ENV_FILE}" <<EOF
+TREED_KLIPPER_PREFLIGHT=${TREED_KLIPPER_PREFLIGHT}
+TREED_KLIPPER_PREFLIGHT_WAIT_SEC=${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}
+TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC=${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}
+TREED_MAIN_MCU_SERIAL_BY_ID=${TREED_MAIN_MCU_SERIAL_BY_ID}
+TREED_CAN_IFACE=${TREED_CAN_IFACE}
+TREED_EBB_CANBUS_UUID=${TREED_EBB_CANBUS_UUID}
+TREED_EDDY_ENABLED=${TREED_EDDY_ENABLED}
+TREED_EDDY_CANBUS_UUID=${TREED_EDDY_CANBUS_UUID}
+KLIPPER_DIR=${KLIPPER_DIR}
+KLIPPY_ENV_DIR=${KLIPPY_ENV_DIR}
+EOF
+  chmod 0644 "${KLIPPER_PREFLIGHT_ENV_FILE}"
+
+  cat > "${KLIPPER_PREFLIGHT_SCRIPT}" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+# ==========================================
+# RUNTIME PREFLIGHT: KLIPPER START
+# ==========================================
+# Назначение:
+# - Перед стартом Klipper ждет фактическую готовность main MCU и CAN MCU.
+# - Заменяет фиксированный sleep на condition-based ожидание с ранним выходом.
+# Контур:
+# - required для стабильного холодного включения V2.
+
+ENV_FILE="/etc/default/treed-klipper-preflight"
+if [ -f "${ENV_FILE}" ]; then
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+fi
+
+TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
+TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
+TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}"
+TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
+TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
+TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
+TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
+TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
+KLIPPER_DIR="${KLIPPER_DIR:-/home/pi/klipper}"
+KLIPPY_ENV_DIR="${KLIPPY_ENV_DIR:-/home/pi/klippy-env}"
+
+log_info() {
+  echo "[klipper-preflight] $*"
+}
+
+log_error() {
+  echo "[klipper-preflight] ERROR: $*" >&2
+}
+
+is_positive_int() {
+  case "${1:-}" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$1" -gt 0 ]
+}
+
+wait_until_deadline() {
+  local check_cmd="$1"
+  local success_msg="$2"
+  local error_msg="$3"
+  local deadline="$4"
+
+  while true; do
+    if eval "${check_cmd}"; then
+      log_info "${success_msg}"
+      return 0
+    fi
+    if [ "${SECONDS}" -ge "${deadline}" ]; then
+      log_error "${error_msg}"
+      return 1
+    fi
+    sleep "${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}"
+  done
+}
+
+if [ "${TREED_KLIPPER_PREFLIGHT}" != "1" ]; then
+  log_info "skipped (TREED_KLIPPER_PREFLIGHT=${TREED_KLIPPER_PREFLIGHT})"
+  exit 0
+fi
+
+if ! is_positive_int "${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}"; then
+  log_error "TREED_KLIPPER_PREFLIGHT_WAIT_SEC must be positive integer, got: ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}"
+  exit 1
+fi
+if ! is_positive_int "${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}"; then
+  log_error "TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC must be positive integer, got: ${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}"
+  exit 1
+fi
+
+deadline=$((SECONDS + TREED_KLIPPER_PREFLIGHT_WAIT_SEC))
+
+if [ -n "${TREED_MAIN_MCU_SERIAL_BY_ID}" ]; then
+  wait_until_deadline \
+    "[ -e '${TREED_MAIN_MCU_SERIAL_BY_ID}' ]" \
+    "main MCU serial is present (${TREED_MAIN_MCU_SERIAL_BY_ID})" \
+    "main MCU serial is missing after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_MAIN_MCU_SERIAL_BY_ID})" \
+    "${deadline}"
+fi
+
+IP_BIN="$(command -v ip || true)"
+if [ -z "${IP_BIN}" ]; then
+  log_error "ip command not found"
+  exit 1
+fi
+
+wait_until_deadline \
+  "\"${IP_BIN}\" link show '${TREED_CAN_IFACE}' >/dev/null 2>&1" \
+  "CAN interface is present (${TREED_CAN_IFACE})" \
+  "CAN interface is missing after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_CAN_IFACE})" \
+  "${deadline}"
+
+wait_until_deadline \
+  "\"${IP_BIN}\" link show '${TREED_CAN_IFACE}' 2>/dev/null | grep -q '<[^>]*UP[^>]*>'" \
+  "CAN interface is UP (${TREED_CAN_IFACE})" \
+  "CAN interface is not UP after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_CAN_IFACE})" \
+  "${deadline}"
+
+if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
+  log_error "TREED_EBB_CANBUS_UUID is empty"
+  exit 1
+fi
+
+required_uuids=("${TREED_EBB_CANBUS_UUID}")
+if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
+  if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
+    log_error "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1"
+    exit 1
+  fi
+  required_uuids+=("${TREED_EDDY_CANBUS_UUID}")
+fi
+
+PY_BIN="${KLIPPY_ENV_DIR}/bin/python"
+QUERY_SCRIPT="${KLIPPER_DIR}/scripts/canbus_query.py"
+if [ ! -x "${PY_BIN}" ]; then
+  log_error "python runtime not found or not executable: ${PY_BIN}"
+  exit 1
+fi
+if [ ! -f "${QUERY_SCRIPT}" ]; then
+  log_error "canbus_query.py not found: ${QUERY_SCRIPT}"
+  exit 1
+fi
+QUERY_TIMEOUT_BIN="$(command -v timeout || true)"
+
+run_canbus_query() {
+  if [ -n "${QUERY_TIMEOUT_BIN}" ]; then
+    "${QUERY_TIMEOUT_BIN}" 2 "${PY_BIN}" "${QUERY_SCRIPT}" "${TREED_CAN_IFACE}"
+  else
+    "${PY_BIN}" "${QUERY_SCRIPT}" "${TREED_CAN_IFACE}"
+  fi
+}
+
+while true; do
+  query_output="$(run_canbus_query 2>&1 || true)"
+  missing=""
+  for uuid in "${required_uuids[@]}"; do
+    if ! printf '%s\n' "${query_output}" | grep -Eiq "(^|[^0-9A-Fa-f])${uuid}([^0-9A-Fa-f]|$)"; then
+      missing="${missing} ${uuid}"
+    fi
+  done
+
+  if [ -z "${missing}" ]; then
+    log_info "CAN MCU ready:${required_uuids[*]}"
+    exit 0
+  fi
+
+  if [ "${SECONDS}" -ge "${deadline}" ]; then
+    log_error "CAN MCU not ready after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s, missing:${missing}"
+    printf '%s\n' "${query_output}" >&2
+    exit 1
+  fi
+
+  sleep "${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}"
+done
+EOF
+  chmod 0755 "${KLIPPER_PREFLIGHT_SCRIPT}"
 }
 
 install_moonraker_policykit_rules() {
@@ -296,6 +489,7 @@ if [ ! -f "${KLIPPER_REQ_FILE}" ]; then
 fi
 
 ensure_python_venv "${KLIPPY_ENV_DIR}" "${KLIPPER_REQ_FILE}"
+install_klipper_preflight
 
 cat > /etc/systemd/system/klipper.service <<EOF
 [Unit]
@@ -312,7 +506,7 @@ User=${PI_USER}
 Group=${PI_GROUP}
 SupplementaryGroups=dialout tty video render
 WorkingDirectory=${KLIPPER_DIR}
-ExecStartPre=/bin/sleep 5
+ExecStartPre=${KLIPPER_PREFLIGHT_SCRIPT}
 ExecStart=${KLIPPY_ENV_DIR}/bin/python ${KLIPPER_DIR}/klippy/klippy.py ${PRINTER_CFG_DIR}/printer.cfg -l ${PRINTER_LOG_DIR}/klippy.log -I ${PRINTER_COMMS_DIR}/klippy.serial -a ${KLIPPY_API_SOCK}
 Restart=always
 RestartSec=5

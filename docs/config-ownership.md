@@ -77,6 +77,12 @@ CAN-host слой:
 - `/etc/systemd/system/treed-can-setup.service`
   владелец: `loader/steps/can-setup.sh`
 
+Klipper cold-start слой:
+- `/etc/default/treed-klipper-preflight`
+- `/usr/local/sbin/treed-klipper-preflight.sh`
+- `ExecStartPre=/usr/local/sbin/treed-klipper-preflight.sh` в `/etc/systemd/system/klipper.service`
+  владелец: `loader/steps/runtime-bootstrap.sh`
+
 ## 4. Контракт V2: main/CAN/Eddy
 
 Required:
@@ -88,6 +94,9 @@ Optional:
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
+- `TREED_KLIPPER_PREFLIGHT` (`0|1`, default `1`)
+- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`)
+- `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`)
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
 - `TREED_Z_ENDSTOP_PIN` (default `PG10`, используется при `TREED_EDDY_ENABLED=0`)

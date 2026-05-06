@@ -40,6 +40,8 @@ cd "${REPO_DIR}"
 export TREED_CAN_IFACE="can0"
 export TREED_CAN_BITRATE="1000000"
 export TREED_CAN_TXQUEUE="1024"
+export TREED_KLIPPER_PREFLIGHT="1"
+export TREED_KLIPPER_PREFLIGHT_WAIT_SEC="12"
 ```
 
 ## 4. Запуск loader

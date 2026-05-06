@@ -72,6 +72,9 @@
 - `TREED_CAN_REINIT_DELAY_SEC` (default `2`; пауза между циклами reinit CAN)
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
 - `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
+- `TREED_KLIPPER_PREFLIGHT` (`0|1`, default `1`; readiness-проверка перед стартом Klipper)
+- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`; общий таймаут ожидания main MCU и CAN MCU)
+- `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`; интервал повторной проверки)
 - `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
@@ -192,6 +195,7 @@
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
+- `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: перед стартом Klipper он ждет main MCU serial, `can0` в состоянии UP и UUID EBB/Eddy через `canbus_query.py`, но выходит сразу при готовности.
 - `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
 - `klipper-profiles.sh` подставляет зафиксированный EBB UUID и fail-fast при невалидном hex-формате.
