@@ -40,7 +40,7 @@
 | 13 | `plymouth-cmdline` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd` | required | Политика `getty@tty1` и unit Plymouth. |
 | 15 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
-| 16 | `klipper-profiles` | required | Профиль V2: main USB serial + CAN UUID EBB/Eddy. |
+| 16 | `klipper-profiles` | required | Профиль V2: main USB serial, CAN UUID EBB/Eddy, Z0 через Eddy и Zmax sensorless. |
 | 17 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
 | 18 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
 | 19 | `mainsail-web` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |

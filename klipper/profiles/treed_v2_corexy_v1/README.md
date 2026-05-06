@@ -29,13 +29,15 @@ Optional include:
 - подставляет `canbus_uuid` и `canbus_interface` EBB в `ebb42_can.cfg`;
 - управляет include Eddy в `printer.cfg` (по умолчанию включен);
 - при `TREED_EDDY_ENABLED=1` подставляет `canbus_uuid` и `canbus_interface` Eddy в `probe_eddy_duo_optional.cfg`;
-- при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `probe:z_virtual_endstop` и убирает `position_endstop`;
+- при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `tmc5160_stepper_z:virtual_endstop` для sensorless-парковки Zmax;
 - при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
 
 ## X/Y sensorless (TMC5160 SPI) и Z (TMC5160 SPI)
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
-Z работает через Eddy probe (`probe:z_virtual_endstop`) и управляется TMC5160 на слоте `MOTOR2_1`.
+Z имеет два раздельных сервисных контура:
+- `TREED_Z_PARK_ZERO_EDDY` — поиск Z0 через Eddy, используется обычным `G28 Z` и стартом печати;
+- `TREED_Z_PARK_MAX_SENSORLESS` — опускание стола к Zmax через TMC5160 sensorless и механический упор.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;
@@ -43,12 +45,13 @@ Z работает через Eddy probe (`probe:z_virtual_endstop`) и упра
 - на X/Y включены DIAG-джамперы в линии endstop;
 - X/Y механические концевики не участвуют в логике хоуминга;
 - Z-драйвер TMC5160/TMC5160T Pro стоит в слоте `MOTOR2_1`;
-- Z-homing идет через Eddy probe (`probe:z_virtual_endstop`).
+- Z DIAG-джампер включен в линию Z-endstop (`PG10`);
+- рабочий Z0 ищется через Eddy, а нижняя парковка стола идет sensorless к Zmax.
 
 База пинов (Octopus Pro):
 - `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
 - `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
-- `stepper_z`: `step_pin=PF11`, `dir_pin=!PG3`, `enable_pin=!PG5`, `cs_pin=PC6`;
+- `stepper_z`: `step_pin=PF11`, `dir_pin=!PG3`, `enable_pin=!PG5`, `cs_pin=PC6`, `diag1_pin=^!PG10`;
 - общая software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
 
 Стартовые параметры X/Y:
@@ -59,9 +62,9 @@ Z работает через Eddy probe (`probe:z_virtual_endstop`) и упра
 ## Тюн `driver_SGT` (обязательный после внедрения)
 
 1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
-2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y.
-3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний.
-4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний; затем `G28 Z` через Eddy probe.
+2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
+3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний и без жесткого клина Z.
+4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний; затем `G28 Z` через Eddy probe и `TREED_Z_PARK_MAX_SENSORLESS` к Zmax.
 
 ## Переменные окружения
 

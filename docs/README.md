@@ -81,5 +81,6 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 - CAN adapter: U2C V2.1 (USB -> CAN).
 - Toolhead MCU: EBB42 по CAN (required).
 - Probe: Eddy / Eddy Duo по CAN (enabled by default).
+- Z: при Eddy enabled рабочий Z0 ищется через Eddy, сервисная нижняя парковка стола идет через TMC5160 sensorless к Zmax.
 
 Ветка `treed-v2` не поддерживает RN12/RPi/UART-миграции.

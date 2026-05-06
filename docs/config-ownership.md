@@ -93,6 +93,10 @@ Optional:
 - `TREED_Z_ENDSTOP_PIN` (default `PG10`, используется при `TREED_EDDY_ENABLED=0`)
 - `TREED_Z_POSITION_ENDSTOP` (default `0.5`, используется при `TREED_EDDY_ENABLED=0`)
 
+При `TREED_EDDY_ENABLED=1` профиль использует два раздельных Z-контура:
+- `TREED_Z_PARK_ZERO_EDDY` ищет рабочий Z0 через Eddy;
+- `TREED_Z_PARK_MAX_SENSORLESS` опускает стол к Zmax через `tmc5160_stepper_z:virtual_endstop`.
+
 Fail-fast сценарии:
 - auto-resolve main MCU: `0` кандидатов -> fail;
 - auto-resolve main MCU: `>1` кандидатов -> fail;

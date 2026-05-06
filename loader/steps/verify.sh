@@ -1219,12 +1219,48 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
     && awk '
       /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
       in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-      in_z && /^[[:space:]]*endstop_pin:[[:space:]]*probe:z_virtual_endstop[[:space:]]*$/ { found = 1 }
+      in_z && /^[[:space:]]*endstop_pin:[[:space:]]*tmc5160_stepper_z:virtual_endstop[[:space:]]*$/ { found = 1 }
       END { exit found ? 0 : 1 }
     ' "${STEPPERS_CFG_RUNTIME}"; then
-    pass "stepper_z uses probe:z_virtual_endstop"
+    pass "stepper_z uses sensorless Zmax virtual endstop"
   else
-    failf "stepper_z uses probe:z_virtual_endstop"
+    failf "stepper_z uses sensorless Zmax virtual endstop"
+  fi
+
+  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+    && awk '
+      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
+      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+      in_z && /^[[:space:]]*position_endstop:[[:space:]]*200[[:space:]]*$/ { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "${STEPPERS_CFG_RUNTIME}"; then
+    pass "stepper_z position_endstop is Zmax"
+  else
+    failf "stepper_z position_endstop is Zmax"
+  fi
+
+  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+    && awk '
+      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
+      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
+      in_z && /^[[:space:]]*homing_positive_dir:[[:space:]]*true[[:space:]]*$/ { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "${STEPPERS_CFG_RUNTIME}"; then
+    pass "stepper_z homes toward Zmax"
+  else
+    failf "stepper_z homes toward Zmax"
+  fi
+
+  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
+    && awk '
+      /^\[tmc5160 stepper_z\][[:space:]]*$/ { in_z_tmc = 1; next }
+      in_z_tmc && /^\[[^]]+\][[:space:]]*$/ { in_z_tmc = 0 }
+      in_z_tmc && /^[[:space:]]*diag1_pin:[[:space:]]*\^!PG10[[:space:]]*$/ { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "${STEPPERS_CFG_RUNTIME}"; then
+    pass "stepper_z: tmc5160 diag1_pin=^!PG10"
+  else
+    failf "stepper_z: tmc5160 diag1_pin=^!PG10"
   fi
 else
   if [ -f "${PRINTER_CFG_RUNTIME}" ] \

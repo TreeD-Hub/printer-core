@@ -29,6 +29,8 @@ EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
 EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
 Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
 Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
+Z_SENSORLESS_ENDSTOP_PIN="tmc5160_stepper_z:virtual_endstop"
+Z_SENSORLESS_POSITION_ENDSTOP="200"
 CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 EDDY_INCLUDE_PATH="profiles/${PROFILE_NAME}/probe_eddy_duo_optional.cfg"
 
@@ -52,6 +54,8 @@ set_stepper_z_endstop() {
   local endstop_pin="$1"
   local position_endstop="${2:-}"
   local keep_position_endstop="$3"
+  local homing_positive_dir="${4:-}"
+  local keep_homing_positive_dir="$5"
   local tmp=""
 
   if ! grep -qE '^[[:space:]]*\[stepper_z\][[:space:]]*$' "${STEPPERS_CFG}"; then
@@ -62,28 +66,36 @@ set_stepper_z_endstop() {
   tmp="$(mktemp)"
   awk -v endstop_pin="${endstop_pin}" \
       -v position_endstop="${position_endstop}" \
-      -v keep_position_endstop="${keep_position_endstop}" '
+      -v homing_positive_dir="${homing_positive_dir}" \
+      -v keep_position_endstop="${keep_position_endstop}" \
+      -v keep_homing_positive_dir="${keep_homing_positive_dir}" '
     BEGIN {
       in_z = 0
       saw_z = 0
       saw_endstop = 0
       wrote_position = 0
+      wrote_homing_dir = 0
     }
-    function emit_position_if_needed() {
+    function emit_z_tail_if_needed() {
       if (in_z && keep_position_endstop == "1" && !wrote_position) {
         print "position_endstop: " position_endstop
         wrote_position = 1
+      }
+      if (in_z && keep_homing_positive_dir == "1" && !wrote_homing_dir) {
+        print "homing_positive_dir: " homing_positive_dir
+        wrote_homing_dir = 1
       }
     }
     /^[[:space:]]*\[stepper_z\][[:space:]]*$/ {
       in_z = 1
       saw_z = 1
       wrote_position = 0
+      wrote_homing_dir = 0
       print
       next
     }
     /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
-      emit_position_if_needed()
+      emit_z_tail_if_needed()
       in_z = 0
       print
       next
@@ -100,9 +112,16 @@ set_stepper_z_endstop() {
       }
       next
     }
+    in_z && /^[[:space:]]*homing_positive_dir[[:space:]]*:/ {
+      if (keep_homing_positive_dir == "1") {
+        print "homing_positive_dir: " homing_positive_dir
+        wrote_homing_dir = 1
+      }
+      next
+    }
     { print }
     END {
-      emit_position_if_needed()
+      emit_z_tail_if_needed()
       if (!saw_z || !saw_endstop) {
         exit 2
       }
@@ -245,15 +264,15 @@ if [ "${EDDY_ENABLED}" = "1" ]; then
     exit 1
   fi
   sed -i -E "s|^([[:space:]]*canbus_interface:[[:space:]]*)[^[:space:]#]+(.*)$|\\1${CAN_IFACE}\\2|" "${EDDY_CFG}"
-  set_stepper_z_endstop "probe:z_virtual_endstop" "" "0"
+  set_stepper_z_endstop "${Z_SENSORLESS_ENDSTOP_PIN}" "${Z_SENSORLESS_POSITION_ENDSTOP}" "1" "true" "1"
   log_info "klipper-profiles: Eddy enabled, canbus_uuid -> ${EDDY_CANBUS_UUID}"
   log_info "klipper-profiles: Eddy canbus_interface -> ${CAN_IFACE}"
-  log_info "klipper-profiles: stepper_z endstop -> probe:z_virtual_endstop"
+  log_info "klipper-profiles: stepper_z endstop -> ${Z_SENSORLESS_ENDSTOP_PIN}, position_endstop=${Z_SENSORLESS_POSITION_ENDSTOP}"
 else
   sed -i -E "s|^[[:space:]]*#?[[:space:]]*\\[include[[:space:]]+${EDDY_INCLUDE_PATH//\//\\/}\\][[:space:]]*$|# [include ${EDDY_INCLUDE_PATH}]|" "${PRINTER_CFG}"
-  set_stepper_z_endstop "${Z_ENDSTOP_PIN}" "${Z_POSITION_ENDSTOP}" "1"
+  set_stepper_z_endstop "${Z_ENDSTOP_PIN}" "${Z_POSITION_ENDSTOP}" "1" "false" "1"
   log_info "klipper-profiles: Eddy disabled (include commented)"
-  log_info "klipper-profiles: stepper_z endstop -> ${Z_ENDSTOP_PIN}, position_endstop=${Z_POSITION_ENDSTOP}"
+  log_info "klipper-profiles: stepper_z endstop -> ${Z_ENDSTOP_PIN}, position_endstop=${Z_POSITION_ENDSTOP}, homing_positive_dir=false"
 fi
 
 # Блок 8: Финализация владельца staging.

@@ -21,7 +21,7 @@
 | 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB CAN UUID, Eddy UUID, контур X/Y sensorless (tmc5160 virtual endstop) и Z на tmc5160 SPI. |
+| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB/Eddy CAN UUID, X/Y sensorless, Z0 через Eddy и Zmax sensorless. |
 | 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 18 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
 | 19 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
@@ -191,7 +191,7 @@
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
 - `klipper-profiles.sh` подставляет зафиксированный EBB UUID и fail-fast при невалидном hex-формате.
 - `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).
-- Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. Z работает на TMC5160 SPI в слоте `MOTOR2_1`.
+- Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. При Eddy enabled Z имеет два макроса: `TREED_Z_PARK_ZERO_EDDY` для рабочего Z0 и `TREED_Z_PARK_MAX_SENSORLESS` для нижней парковки стола к Zmax через TMC5160 DIAG на `PG10`.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
