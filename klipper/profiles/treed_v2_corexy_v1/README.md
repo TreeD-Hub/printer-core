@@ -36,8 +36,8 @@ Optional include:
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
 Z имеет два раздельных сервисных контура:
-- `TREED_Z_PARK_ZERO_EDDY` — поиск Z0 через Eddy, используется обычным `G28 Z` и стартом печати;
-- `TREED_Z_PARK_MAX_SENSORLESS` — опускание стола к Zmax через TMC5160 sensorless и механический упор.
+- `G28 Z` / кнопка Home Z в UI — опускание стола к Zmax через TMC5160 sensorless и механический упор;
+- `TREED_Z_PARK_ZERO_EDDY` — рабочий поиск Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`, используется стартом печати.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;
@@ -64,7 +64,19 @@ Z имеет два раздельных сервисных контура:
 1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
 2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
 3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний и без жесткого клина Z.
-4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний; затем `G28 Z` через Eddy probe и `TREED_Z_PARK_MAX_SENSORLESS` к Zmax.
+4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний; затем `G28 Z` к Zmax и, после калибровки Eddy, `TREED_Z_PARK_ZERO_EDDY`.
+
+## Первичная калибровка Eddy
+
+До сохраненной калибровки `PROBE_EDDY_CURRENT_CALIBRATE` любые `PROBE`, `BED_MESH_CALIBRATE` и `TREED_Z_PARK_ZERO_EDDY` будут падать с `Must calibrate probe_eddy_current first`.
+
+Базовый порядок:
+1. Навести датчик примерно в центр стола и около 20 мм над поверхностью.
+2. Выполнить `LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy`, затем `TREED_SAVE_CONFIG`.
+3. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`.
+4. Снова выполнить `TREED_SAVE_CONFIG`.
+
+После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper. Для обычных повторных раскладок использовать `preserve` или `auto` на ветке `treed-v2`.
 
 ## Переменные окружения
 

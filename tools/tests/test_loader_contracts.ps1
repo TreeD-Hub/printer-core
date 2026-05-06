@@ -109,7 +109,8 @@ Assert-Contains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?s)\[tmc516
 Assert-Contains "klipper/profiles/treed_v2_corexy_v1/steppers.cfg" '(?s)\[tmc5160 stepper_z\][^\[]*diag1_pin:\s*\^!PG10' "repo stepper_z uses TMC5160 DIAG1 for sensorless Z-max parking"
 Assert-Contains "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg" '(?m)^\[gcode_macro TREED_Z_PARK_ZERO_EDDY\]' "repo exposes explicit Eddy Z0 parking macro"
 Assert-Contains "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg" '(?m)^\[gcode_macro TREED_Z_PARK_MAX_SENSORLESS\]' "repo exposes explicit sensorless Z-max parking macro"
-Assert-Contains "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg" '(?s)\[gcode_macro G28\][^\[]*TREED_Z_PARK_ZERO_EDDY' "repo G28 Z path uses Eddy Z0 macro"
+Assert-Contains "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg" '(?s)\[gcode_macro G28\][^\[]*TREED_Z_PARK_MAX_SENSORLESS' "repo G28 Z path uses sensorless Z-max parking"
+Assert-Contains "klipper/profiles/treed_v2_corexy_v1/macros_core.cfg" '(?s)\[gcode_macro _TREED_HOME_ALL\].*TREED_Z_PARK_ZERO_EDDY' "repo print homing path uses Eddy Z0 macro"
 Assert-Contains "loader/steps/plymouth-initramfs-config.sh" 'OK \(extlinux backend, no config\.txt rewrite\)' "Plymouth initramfs config logs extlinux backend accurately"
 Assert-Contains "loader/steps/crowsnest-webcam.sh" 'if \[ -f "\$\{MOONRAKER_ASVC\}" \]; then\s+chown "\$\{PI_USER\}:\$\{grp\}" "\$\{MOONRAKER_ASVC\}"' "Crowsnest webcam only chowns moonraker.asvc when it exists"
 

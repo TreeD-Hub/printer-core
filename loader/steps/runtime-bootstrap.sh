@@ -287,7 +287,7 @@ cat > /etc/systemd/system/klipper.service <<EOF
 [Unit]
 Description=Klipper 3D Printer Firmware Host
 After=network.target treed-can-setup.service
-Wants=treed-can-setup.service
+Requires=treed-can-setup.service
 
 [Install]
 WantedBy=multi-user.target
@@ -298,6 +298,7 @@ User=${PI_USER}
 Group=${PI_GROUP}
 SupplementaryGroups=dialout tty video render
 WorkingDirectory=${KLIPPER_DIR}
+ExecStartPre=/bin/sleep 5
 ExecStart=${KLIPPY_ENV_DIR}/bin/python ${KLIPPER_DIR}/klippy/klippy.py ${PRINTER_CFG_DIR}/printer.cfg -l ${PRINTER_LOG_DIR}/klippy.log -I ${PRINTER_COMMS_DIR}/klippy.serial -a ${KLIPPY_API_SOCK}
 Restart=always
 RestartSec=5

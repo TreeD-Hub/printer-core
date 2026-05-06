@@ -191,7 +191,7 @@
 - `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
 - `klipper-profiles.sh` подставляет зафиксированный EBB UUID и fail-fast при невалидном hex-формате.
 - `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).
-- Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. При Eddy enabled Z имеет два макроса: `TREED_Z_PARK_ZERO_EDDY` для рабочего Z0 и `TREED_Z_PARK_MAX_SENSORLESS` для нижней парковки стола к Zmax через TMC5160 DIAG на `PG10`.
+- Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. При Eddy enabled `G28 Z`/UI Home Z паркует стол к Zmax через TMC5160 DIAG на `PG10`, а `TREED_Z_PARK_ZERO_EDDY` используется стартом печати для рабочего Z0 после сохраненной Eddy-калибровки.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
