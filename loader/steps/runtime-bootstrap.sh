@@ -43,6 +43,7 @@ TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
 TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}"
+TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED="${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED:-0}"
 MOONRAKER_DIR="${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}"
 MOONRAKER_ENV_DIR="${TREED_MOONRAKER_ENV_DIR:-${PI_HOME}/moonraker-env}"
 MOONRAKER_REPO="${TREED_MOONRAKER_REPO:-https://github.com/Arksine/moonraker.git}"
@@ -160,6 +161,7 @@ install_klipper_preflight() {
 TREED_KLIPPER_PREFLIGHT=${TREED_KLIPPER_PREFLIGHT}
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC=${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC=${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}
+TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}
 TREED_MAIN_MCU_CANBUS_UUID=${TREED_MAIN_MCU_CANBUS_UUID}
 TREED_CAN_IFACE=${TREED_CAN_IFACE}
 TREED_EBB_CANBUS_UUID=${TREED_EBB_CANBUS_UUID}
@@ -179,6 +181,7 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Перед стартом Klipper ждет фактическую готовность CAN-интерфейса и CAN MCU.
+# - CAN UUID readiness is diagnostic by default; strict mode is opt-in.
 # - Заменяет фиксированный sleep на condition-based ожидание с ранним выходом.
 # Контур:
 # - required для стабильного холодного включения V2.
@@ -192,6 +195,7 @@ fi
 TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}"
+TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED="${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED:-0}"
 TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
@@ -247,6 +251,13 @@ if ! is_positive_int "${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}"; then
   log_error "TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC must be positive integer, got: ${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}"
   exit 1
 fi
+case "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" in
+  0|1) ;;
+  *)
+    log_error "TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED must be 0 or 1, got: ${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}"
+    exit 1
+    ;;
+esac
 
 deadline=$((SECONDS + TREED_KLIPPER_PREFLIGHT_WAIT_SEC))
 
@@ -269,20 +280,32 @@ wait_until_deadline \
   "${deadline}"
 
 if [ -z "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
-  log_error "TREED_MAIN_MCU_CANBUS_UUID is empty"
-  exit 1
+  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
+    log_error "TREED_MAIN_MCU_CANBUS_UUID is empty"
+    exit 1
+  fi
+  log_info "TREED_MAIN_MCU_CANBUS_UUID is empty; CAN UUID readiness check skipped"
+  exit 0
 fi
 
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
-  log_error "TREED_EBB_CANBUS_UUID is empty"
-  exit 1
+  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
+    log_error "TREED_EBB_CANBUS_UUID is empty"
+    exit 1
+  fi
+  log_info "TREED_EBB_CANBUS_UUID is empty; CAN UUID readiness check skipped"
+  exit 0
 fi
 
 required_uuids=("${TREED_MAIN_MCU_CANBUS_UUID}" "${TREED_EBB_CANBUS_UUID}")
 if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
-    log_error "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1"
-    exit 1
+    if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
+      log_error "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1"
+      exit 1
+    fi
+    log_info "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1; CAN UUID readiness check skipped"
+    exit 0
   fi
   required_uuids+=("${TREED_EDDY_CANBUS_UUID}")
 fi
@@ -290,10 +313,18 @@ fi
 PY_BIN="${KLIPPY_ENV_DIR}/bin/python"
 QUERY_SCRIPT="${KLIPPER_DIR}/scripts/canbus_query.py"
 if [ ! -x "${PY_BIN}" ]; then
+  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "0" ]; then
+    log_info "CAN UUID readiness check unavailable, python runtime not executable: ${PY_BIN}"
+    exit 0
+  fi
   log_error "python runtime not found or not executable: ${PY_BIN}"
   exit 1
 fi
 if [ ! -f "${QUERY_SCRIPT}" ]; then
+  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "0" ]; then
+    log_info "CAN UUID readiness check unavailable, canbus_query.py not found: ${QUERY_SCRIPT}"
+    exit 0
+  fi
   log_error "canbus_query.py not found: ${QUERY_SCRIPT}"
   exit 1
 fi
@@ -306,6 +337,23 @@ run_canbus_query() {
     "${PY_BIN}" "${QUERY_SCRIPT}" "${TREED_CAN_IFACE}"
   fi
 }
+
+if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "0" ]; then
+  query_output="$(run_canbus_query 2>&1 || true)"
+  missing=""
+  for uuid in "${required_uuids[@]}"; do
+    if ! printf '%s\n' "${query_output}" | grep -Eiq "(^|[^0-9A-Fa-f])${uuid}([^0-9A-Fa-f]|$)"; then
+      missing="${missing} ${uuid}"
+    fi
+  done
+  if [ -z "${missing}" ]; then
+    log_info "CAN MCU ready:${required_uuids[*]}"
+  else
+    log_info "CAN MCU readiness not confirmed, missing:${missing} (non-blocking)"
+    printf '%s\n' "${query_output}" >&2
+  fi
+  exit 0
+fi
 
 while true; do
   query_output="$(run_canbus_query 2>&1 || true)"
@@ -322,9 +370,14 @@ while true; do
   fi
 
   if [ "${SECONDS}" -ge "${deadline}" ]; then
-    log_error "CAN MCU not ready after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s, missing:${missing}"
+    if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
+      log_error "CAN MCU not ready after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s, missing:${missing}"
+      printf '%s\n' "${query_output}" >&2
+      exit 1
+    fi
+    log_info "CAN MCU readiness not confirmed after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s, missing:${missing} (non-blocking)"
     printf '%s\n' "${query_output}" >&2
-    exit 1
+    exit 0
   fi
 
   sleep "${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}"

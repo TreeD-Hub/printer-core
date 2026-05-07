@@ -74,6 +74,7 @@
 - `TREED_KLIPPER_PREFLIGHT` (`0|1`, default `1`; readiness-проверка перед стартом Klipper)
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`; общий таймаут ожидания CAN-интерфейса и CAN MCU)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`; интервал повторной проверки)
+- `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`; strict gate для `canbus_query.py` UUID Octopus/EBB/Eddy)
 - `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
@@ -194,7 +195,7 @@
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
-- `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: перед стартом Klipper он ждет `can0` в состоянии UP и UUID Octopus/EBB/Eddy через `canbus_query.py`, но выходит сразу при готовности.
+- `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: перед стартом Klipper он строго ждет `can0` в состоянии UP, а UUID Octopus/EBB/Eddy через `canbus_query.py` проверяет одним диагностическим запросом, если не включен `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
 - `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.
 - `klipper-profiles.sh` подставляет зафиксированные CAN UUID Octopus/EBB/Eddy и fail-fast при невалидном hex-формате.
 - `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).

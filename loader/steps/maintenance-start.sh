@@ -69,6 +69,7 @@ start_required_service() {
     rc=$?
     log_error "maintenance-start: failed to start required ${unit} rc=${rc}: ${err}"
     systemctl --no-pager -l status "${unit}" || true
+    journalctl -u "${unit}" -n 120 --no-pager || true
     return 1
   fi
 
@@ -87,6 +88,7 @@ start_required_service() {
       ;;
   esac
   systemctl --no-pager -l status "${unit}" || true
+  journalctl -u "${unit}" -n 120 --no-pager || true
   return 1
 }
 
