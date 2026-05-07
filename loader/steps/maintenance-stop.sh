@@ -64,6 +64,29 @@ wait_service_inactive() {
   return 1
 }
 
+request_stop_service() {
+  local unit="$1"
+
+  if systemctl stop "${unit}" >/dev/null 2>&1; then
+    log_info "maintenance-stop: stop requested for ${unit}"
+    return 0
+  fi
+
+  log_error "maintenance-stop: failed to stop required ${unit}"
+  systemctl --no-pager -l status "${unit}" || true
+  return 1
+}
+
+force_kill_service() {
+  local unit="$1"
+
+  if systemctl kill --kill-who=all "${unit}" >/dev/null 2>&1; then
+    log_warn "maintenance-stop: force-kill requested for ${unit}"
+  else
+    log_warn "maintenance-stop: force-kill failed for ${unit}"
+  fi
+}
+
 stop_required_service() {
   local unit="$1"
   local state=""
@@ -78,26 +101,46 @@ stop_required_service() {
     return 1
   fi
 
-  if systemctl is-active --quiet "${unit}"; then
-    if systemctl stop "${unit}" >/dev/null 2>&1; then
-      log_info "maintenance-stop: stop requested for ${unit}"
-    else
-      log_error "maintenance-stop: failed to stop required ${unit}"
-      systemctl --no-pager -l status "${unit}" || true
-      return 1
-    fi
-  else
-    log_info "maintenance-stop: ${unit} already inactive"
-  fi
+  state="$(systemctl show -p ActiveState --value "${unit}" 2>/dev/null || true)"
+  case "${state}" in
+    inactive|failed|"")
+      log_info "maintenance-stop: ${unit} already inactive"
+      ;;
+    *)
+      if ! request_stop_service "${unit}"; then
+        return 1
+      fi
+      # Для stuck start-pre (activating) дополнительно гасим процессы юнита.
+      if [ "${state}" = "activating" ]; then
+        force_kill_service "${unit}"
+      fi
+      ;;
+  esac
 
   if wait_service_inactive "${unit}" "${REQUIRED_STOP_TIMEOUT}"; then
     log_info "maintenance-stop: ${unit} inactive"
     return 0
   fi
 
+  state="$(systemctl show -p ActiveState --value "${unit}" 2>/dev/null || true)"
+  case "${state}" in
+    activating|deactivating)
+      log_warn "maintenance-stop: ${unit} stuck in ${state}, retry stop+kill"
+      if ! request_stop_service "${unit}"; then
+        return 1
+      fi
+      force_kill_service "${unit}"
+      if wait_service_inactive "${unit}" 5; then
+        log_info "maintenance-stop: ${unit} inactive after force-kill"
+        return 0
+      fi
+      ;;
+  esac
+
   state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
   log_error "maintenance-stop: ${unit} did not become inactive within ${REQUIRED_STOP_TIMEOUT}s (state=${state:-unknown})"
   systemctl --no-pager -l status "${unit}" || true
+  journalctl -u "${unit}" -n 120 --no-pager || true
   return 1
 }
 
@@ -111,17 +154,23 @@ stop_best_effort_service() {
     return 0
   fi
 
-  if systemctl is-active --quiet "${unit}"; then
-    if systemctl stop "${unit}" >/dev/null 2>&1; then
-      log_info "maintenance-stop: stop requested for ${unit}"
-    else
+  state="$(systemctl show -p ActiveState --value "${unit}" 2>/dev/null || true)"
+  case "${state}" in
+    inactive|failed|"")
+      log_info "maintenance-stop: ${unit} already inactive"
+      return 0
+      ;;
+    *)
+      if ! systemctl stop "${unit}" >/dev/null 2>&1; then
       log_warn "maintenance-stop: failed to stop ${unit}, continuing"
       return 0
-    fi
-  else
-    log_info "maintenance-stop: ${unit} already inactive"
-    return 0
-  fi
+      fi
+      log_info "maintenance-stop: stop requested for ${unit}"
+      if [ "${state}" = "activating" ]; then
+        force_kill_service "${unit}"
+      fi
+      ;;
+  esac
 
   if wait_service_inactive "${unit}" "${BEST_EFFORT_STOP_TIMEOUT}"; then
     log_info "maintenance-stop: ${unit} inactive"
