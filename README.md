@@ -17,23 +17,11 @@ Rock Pi (Armbian Debian 12)
 ## Быстрый запуск (копируй в SSH)
 
 ```bash
-set -euo pipefail
-
-REPO_URL="${REPO_URL:-https://github.com/TreeD-Hub/treed-mainshellOS.git}"
-INSTALL_REF="${INSTALL_REF:-treed-v2}"
-BASE="${BASE:-/home/pi/treed}"
-REPO_DIR="${REPO_DIR:-${BASE}/treed-mainshellOS}"
-
-sudo mkdir -p "${BASE}"
-sudo chown "$(id -u):$(id -g)" "${BASE}"
-
-sudo rm -rf "${REPO_DIR}"
-git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
-
-cd "${REPO_DIR}"
-sudo TREED_DEPLOY_MODE=clean TREED_NONINTERACTIVE=1 bash install.sh
-sudo reboot
+curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
 ```
+
+Loader сам определяет `fresh|update|recover`, выбирает `clean|preserve` и ребутает только после `fresh`.
+
 ## Карта слоев
 
 1. Репозиторий (source of truth)

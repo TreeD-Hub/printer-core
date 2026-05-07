@@ -14,8 +14,9 @@
 1. Нормализацию `*.sh` в `loader/**` (убирает CRLF, выставляет executable-bit).
 2. Определение `PI_USER` / `PI_HOME` и host-aware boot-контекста (`BOOT_DIR`, `TREED_BOOT_BACKEND`, `CMDLINE_FILE`, `CONFIG_FILE`, `ARMBIAN_ENV_FILE`).
 3. Fail-fast проверку boot backend-контракта (`rpi`, `armbian` или `extlinux`).
-4. Вычисление режима деплоя (`TREED_DEPLOY_MODE_EFFECTIVE`).
-5. Последовательный запуск реестра шагов.
+4. Снятие state snapshot в `/run/treed-loader/state.env`.
+5. Вычисление режима деплоя (`TREED_DEPLOY_MODE_EFFECTIVE`) по фактическому состоянию устройства.
+6. Последовательный запуск реестра шагов.
 
 Контуры выполнения:
 - `required` шаг: ошибка завершает loader.
@@ -30,7 +31,7 @@
 | 3 | `timezone-sync` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop` | required | Контролируемая остановка runtime-сервисов. |
 | 5 | `packages-core` | required | Установка базовых пакетов. |
-| 6 | `runtime-bootstrap` | required | Bootstrap Klipper/Moonraker/Crowsnest unit-файлов, venv и runtime-каталогов. |
+| 6 | `runtime-bootstrap` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов; Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`. |
 | 7 | `can-setup` | required | Подъем `can0` через systemd oneshot + `ip link`. |
 | 8 | `firmware-build` | required | Сборка firmware main+EBB(+Eddy) и публикация build-отчета. |
 | 9 | `boot-hdmi-config` | required | RPi: `config.txt`; Armbian: `armbianEnv.txt`; Extlinux: `append video=...`. |
@@ -52,11 +53,14 @@
 | 25 | `klipperscreen-theme` | required | Деплой темы/шрифта KlipperScreen. |
 | 26 | `klipperscreen-integr` | required | Systemd override KlipperScreen. |
 | 27 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
-| 28 | `verify` | required | Финальная валидация V2-контура с паритетной отчетностью. |
+| 28 | `verify` | required | Финальная валидация V2-контура с разделением fatal/diagnostic проверок. |
 
 ## Ключевые переменные
 
 - `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, default `d372e54bf965`.
+- `TREED_DEPLOY_MODE` — `auto|clean|preserve`, default `auto`; `auto` использует state snapshot, а не имя ветки.
+- `TREED_DEVICE_STATE` — `fresh|update|recover`; пишется loader в `/run/treed-loader/state.env`.
+- `TREED_STATE_FILE` — default `/run/treed-loader/state.env`.
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
@@ -65,9 +69,9 @@
 - `TREED_CAN_REINIT_ATTEMPTS` — default `5` (количество циклов down/up для восстановления CAN после reboot).
 - `TREED_CAN_REINIT_DELAY_SEC` — default `2` (пауза между reinit-циклами).
 - `TREED_KLIPPER_PREFLIGHT` — `0|1`, default `1`; включает readiness-проверку перед стартом Klipper.
-- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания CAN-интерфейса и CAN MCU перед стартом Klipper.
+- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания CAN-интерфейса перед стартом Klipper.
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` — default `1`; интервал повторной проверки preflight.
-- `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` — `0|1`, default `0`; при `1` preflight strict (CAN iface + UUID) блокирует старт Klipper, при `0` проверки только диагностические.
+- `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` — `0|1`, default `0`; при `1` strict UUID-gate через `canbus_query.py`, при `0` query не запускается.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `1`.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
@@ -87,6 +91,7 @@
 - `TREED_CROWSNEST_INSTALL` — `0|1`, default `1`; установка/обновление Crowsnest в `runtime-bootstrap`.
 - `TREED_CROWSNEST_RECREATE` — `0|1`, default `0`; пересоздание `${PI_HOME}/crowsnest`.
 - `TREED_CROWSNEST_UPDATE` — `0|1`, default `1`; `git pull` и повторный unattended install Crowsnest.
+- `TREED_CAMERA_REQUIRED` — `0|1`, default `0`; при `1` Crowsnest/webcam становятся fail-fast.
 - `TREED_MAINSAIL_WEB_PATH` — default `/var/www/mainsail`, путь web-root Mainsail (используется в `mainsail-web` и `moonraker-config`).
 - `TREED_MAINSAIL_ZIP_URL` — URL архива Mainsail для `mainsail-web`.
 - `TREED_MAINSAIL_MOONRAKER_PROXY_URL` — upstream Moonraker для nginx reverse-proxy в `mainsail-web` (default `http://127.0.0.1:7125`).
@@ -101,11 +106,18 @@
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` принудительно пересоздает managed checkout KlipperScreen.
 - `TREED_KLIPPERSCREEN_ENV` — путь venv KlipperScreen, default `${PI_HOME}/.KlipperScreen-env`.
 - `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; управляет строгостью проверок KlipperScreen в `verify`.
+- `TREED_KLIPPER_START_REQUIRE_ACTIVE` — `0|1`, default `0`; при `1` `maintenance-start` блокирует loader, если `klipper.service` не стал active в таймаут.
 - `TREED_REQUIRE_KLIPPER_READY` — `0|1`, default `0`; управляет тем, будет ли `Klippy state!=ready` блокировать `verify`.
 
 ## Запуск
 
 `runtime-bootstrap` поддерживает полную Git metadata для Klipper/Moonraker/Crowsnest: новые checkout'ы не создаются shallow-клонами, а существующие shallow-репозитории разворачиваются через `git fetch --unshallow --tags`. Это нужно, чтобы Moonraker update_manager видел реальные semver-версии, а не `v0.0.0-...-inferred`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
+```
+
+Локальный запуск уже клонированного репозитория:
 
 ```bash
 cd /home/pi/treed/treed-mainshellOS

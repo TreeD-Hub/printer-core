@@ -106,7 +106,11 @@ export EXTLINUX_FILE
 
 # Блок 8: Глобальные режимы оркестрации (maintenance/deploy mode).
 TREED_MAINTENANCE_MODE="${TREED_MAINTENANCE_MODE:-1}"
+TREED_STATE_DIR="/run/treed-loader"
+TREED_STATE_FILE="/run/treed-loader/state.env"
 export TREED_MAINTENANCE_MODE
+export TREED_STATE_DIR
+export TREED_STATE_FILE
 
 # Блок 9: Helper-функция определения текущей ветки репозитория.
 resolve_repo_branch() {
@@ -126,11 +130,129 @@ resolve_repo_branch() {
   esac
 }
 
-# Блок 10: Helper-функция вычисления эффективного deploy-режима.
+# Блок 10: Helper-функции снимка состояния устройства.
+# Состояние нужно определить до deploy-mode: auto должен смотреть на runtime,
+# а не на имя ветки installer checkout.
+unit_exists() {
+  systemctl cat "$1" >/dev/null 2>&1
+}
+
+unit_active_state() {
+  local unit="$1"
+
+  if ! unit_exists "${unit}"; then
+    printf '%s\n' "missing"
+    return 0
+  fi
+
+  systemctl show -p ActiveState --value "${unit}" 2>/dev/null || printf '%s\n' "unknown"
+}
+
+detect_device_state() {
+  local runtime_config="${PI_HOME}/printer_data/config/printer.cfg"
+  local printer_data_dir="${PI_HOME}/printer_data"
+  local klipper_dir="${PI_HOME}/klipper"
+  local moonraker_dir="${PI_HOME}/moonraker"
+  local has_any_runtime=0
+  local runtime_incomplete=0
+
+  TREED_HAS_RUNTIME_CONFIG=0
+  TREED_HAS_PRINTER_DATA=0
+  TREED_HAS_KLIPPER_DIR=0
+  TREED_HAS_MOONRAKER_DIR=0
+  TREED_HAS_KLIPPER_SERVICE=0
+  TREED_HAS_MOONRAKER_SERVICE=0
+  TREED_KLIPPER_ACTIVE_STATE="missing"
+  TREED_MOONRAKER_ACTIVE_STATE="missing"
+  TREED_DEVICE_STATE_REASON=""
+
+  [ -f "${runtime_config}" ] && TREED_HAS_RUNTIME_CONFIG=1
+  [ -d "${printer_data_dir}" ] && TREED_HAS_PRINTER_DATA=1
+  [ -d "${klipper_dir}" ] && TREED_HAS_KLIPPER_DIR=1
+  [ -d "${moonraker_dir}" ] && TREED_HAS_MOONRAKER_DIR=1
+
+  if unit_exists "klipper.service"; then
+    TREED_HAS_KLIPPER_SERVICE=1
+    TREED_KLIPPER_ACTIVE_STATE="$(unit_active_state "klipper.service")"
+  fi
+  if unit_exists "moonraker.service"; then
+    TREED_HAS_MOONRAKER_SERVICE=1
+    TREED_MOONRAKER_ACTIVE_STATE="$(unit_active_state "moonraker.service")"
+  fi
+
+  if [ "${TREED_HAS_RUNTIME_CONFIG}" = "1" ] ||
+     [ "${TREED_HAS_PRINTER_DATA}" = "1" ] ||
+     [ "${TREED_HAS_KLIPPER_DIR}" = "1" ] ||
+     [ "${TREED_HAS_MOONRAKER_DIR}" = "1" ] ||
+     [ "${TREED_HAS_KLIPPER_SERVICE}" = "1" ] ||
+     [ "${TREED_HAS_MOONRAKER_SERVICE}" = "1" ]; then
+    has_any_runtime=1
+  fi
+
+  if [ "${has_any_runtime}" = "0" ]; then
+    TREED_DEVICE_STATE="fresh"
+    TREED_DEVICE_STATE_REASON="runtime-empty"
+  else
+    case "${TREED_KLIPPER_ACTIVE_STATE}:${TREED_MOONRAKER_ACTIVE_STATE}" in
+      *failed*|*activating*|*deactivating*)
+        runtime_incomplete=1
+        TREED_DEVICE_STATE_REASON="service-not-stable"
+        ;;
+    esac
+
+    if [ "${runtime_incomplete}" = "0" ]; then
+      if [ "${TREED_HAS_RUNTIME_CONFIG}" != "1" ] ||
+         [ "${TREED_HAS_KLIPPER_SERVICE}" != "1" ] ||
+         [ "${TREED_HAS_MOONRAKER_SERVICE}" != "1" ]; then
+        runtime_incomplete=1
+        TREED_DEVICE_STATE_REASON="runtime-incomplete"
+      fi
+    fi
+
+    if [ "${runtime_incomplete}" = "1" ]; then
+      TREED_DEVICE_STATE="recover"
+    else
+      TREED_DEVICE_STATE="update"
+      TREED_DEVICE_STATE_REASON="runtime-present"
+    fi
+  fi
+
+  export TREED_DEVICE_STATE
+  export TREED_DEVICE_STATE_REASON
+  export TREED_HAS_RUNTIME_CONFIG
+  export TREED_HAS_PRINTER_DATA
+  export TREED_HAS_KLIPPER_DIR
+  export TREED_HAS_MOONRAKER_DIR
+  export TREED_HAS_KLIPPER_SERVICE
+  export TREED_HAS_MOONRAKER_SERVICE
+  export TREED_KLIPPER_ACTIVE_STATE
+  export TREED_MOONRAKER_ACTIVE_STATE
+}
+
+write_device_state_snapshot() {
+  ensure_dir "${TREED_STATE_DIR}"
+  cat > "${TREED_STATE_FILE}" <<EOF
+TREED_DEVICE_STATE=${TREED_DEVICE_STATE}
+TREED_DEVICE_STATE_REASON=${TREED_DEVICE_STATE_REASON}
+TREED_HAS_RUNTIME_CONFIG=${TREED_HAS_RUNTIME_CONFIG}
+TREED_HAS_PRINTER_DATA=${TREED_HAS_PRINTER_DATA}
+TREED_HAS_KLIPPER_DIR=${TREED_HAS_KLIPPER_DIR}
+TREED_HAS_MOONRAKER_DIR=${TREED_HAS_MOONRAKER_DIR}
+TREED_HAS_KLIPPER_SERVICE=${TREED_HAS_KLIPPER_SERVICE}
+TREED_HAS_MOONRAKER_SERVICE=${TREED_HAS_MOONRAKER_SERVICE}
+TREED_KLIPPER_ACTIVE_STATE=${TREED_KLIPPER_ACTIVE_STATE}
+TREED_MOONRAKER_ACTIVE_STATE=${TREED_MOONRAKER_ACTIVE_STATE}
+TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE:-auto}
+TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE:-}
+EOF
+  chmod 0644 "${TREED_STATE_FILE}"
+}
+
+# Блок 11: Helper-функция вычисления эффективного deploy-режима.
 # Правило auto:
-# - ветка dev  -> clean,
-# - любая иная -> preserve,
-# - неизвестно -> clean.
+# - fresh   -> clean,
+# - update  -> preserve,
+# - recover -> preserve.
 resolve_deploy_mode() {
   local raw_mode="${TREED_DEPLOY_MODE:-auto}"
   local repo_branch=""
@@ -148,13 +270,18 @@ resolve_deploy_mode() {
   repo_branch="$(resolve_repo_branch)"
 
   if [ "${raw_mode}" = "auto" ]; then
-    if [ "${repo_branch}" = "dev" ]; then
-      effective_mode="clean"
-    elif [ -n "${repo_branch}" ]; then
-      effective_mode="preserve"
-    else
-      effective_mode="clean"
-    fi
+    case "${TREED_DEVICE_STATE:-fresh}" in
+      fresh)
+        effective_mode="clean"
+        ;;
+      update|recover)
+        effective_mode="preserve"
+        ;;
+      *)
+        log_warn "Unknown TREED_DEVICE_STATE=${TREED_DEVICE_STATE:-}; auto deploy falls back to preserve"
+        effective_mode="preserve"
+        ;;
+    esac
   else
     effective_mode="${raw_mode}"
   fi
@@ -168,15 +295,17 @@ resolve_deploy_mode() {
   export TREED_DEPLOY_BRANCH
 }
 
-# Блок 11: Подключение доп. библиотек и вычисление deploy-режима.
+# Блок 12: Подключение доп. библиотек, снимок состояния и deploy-режим.
 . "${REPO_DIR}/loader/lib/plymouth.sh"
+detect_device_state
 resolve_deploy_mode
+write_device_state_snapshot
 
-# Блок 12: Глобальный trap ошибок.
+# Блок 13: Глобальный trap ошибок.
 # Логирует имя шага, код, строку и команду, после чего завершает loader.
 trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BASH_LINENO[0]} cmd=${BASH_COMMAND}"; exit ${rc}' ERR
 
-# Блок 13: Реестр шагов оркестрации (порядок критичен).
+# Блок 14: Реестр шагов оркестрации (порядок критичен).
 STEPS=(
   # Предварительные проверки и подготовка окружения.
   "check-env"                # Контракт окружения: root, PI_USER/PI_HOME, OS sanity.
@@ -215,12 +344,12 @@ STEPS=(
   "verify"                   # Финальная валидация всего контура (must-pass).
 )
 
-# Блок 14: Явный список optional-шагов (не прерывают provisioning при ошибке).
+# Блок 15: Явный список optional-шагов (не прерывают provisioning при ошибке).
 OPTIONAL_STEPS=(
   "crowsnest-webcam"         # Камера может быть недоступна на конкретном хосте.
 )
 
-# Блок 15: Helper-проверка принадлежности шага к optional-контуру.
+# Блок 16: Helper-проверка принадлежности шага к optional-контуру.
 is_optional_step() {
   local step_name="$1"
   local opt=""
@@ -232,7 +361,7 @@ is_optional_step() {
   return 1
 }
 
-# Блок 16: Унифицированный запуск step-скрипта.
+# Блок 17: Унифицированный запуск step-скрипта.
 # Если у файла нет executable-бита, запускаем через bash явно.
 run_step_script() {
   local script_path="$1"
@@ -243,14 +372,15 @@ run_step_script() {
   fi
 }
 
-# Блок 17: Стартовая диагностика оркестратора.
+# Блок 18: Стартовая диагностика оркестратора.
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, BOOT_BACKEND=${TREED_BOOT_BACKEND}"
 log_info "BOOT_DIR=${BOOT_DIR}, CMDLINE_FILE=${CMDLINE_FILE:-<none>}, CONFIG_FILE=${CONFIG_FILE:-<none>}, ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE:-<none>}, EXTLINUX_FILE=${EXTLINUX_FILE:-<none>}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
+log_info "TREED_DEVICE_STATE=${TREED_DEVICE_STATE} (${TREED_DEVICE_STATE_REASON}), state_file=${TREED_STATE_FILE}"
 log_info "TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE}, TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}, TREED_DEPLOY_BRANCH=${TREED_DEPLOY_BRANCH:-unknown}"
 
-# Блок 18: Основной цикл выполнения шагов по реестру STEPS.
+# Блок 19: Основной цикл выполнения шагов по реестру STEPS.
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"
   script="${REPO_DIR}/loader/steps/${step}.sh"
@@ -284,5 +414,6 @@ for step in "${STEPS[@]}"; do
   fi
 done
 
-# Блок 19: Успешное завершение полного контура provisioning.
+# Блок 20: Успешное завершение полного контура provisioning.
+write_device_state_snapshot
 log_info "TreeD loader finished successfully"

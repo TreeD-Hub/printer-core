@@ -26,6 +26,15 @@ log_info "Step maintenance-start: starting runtime services"
 
 REQUIRED_START_TIMEOUT="${TREED_REQUIRED_SERVICE_START_TIMEOUT:-30}"
 BEST_EFFORT_START_TIMEOUT="${TREED_BEST_EFFORT_SERVICE_START_TIMEOUT:-20}"
+TREED_KLIPPER_START_REQUIRE_ACTIVE="${TREED_KLIPPER_START_REQUIRE_ACTIVE:-0}"
+
+case "${TREED_KLIPPER_START_REQUIRE_ACTIVE}" in
+  0|1) ;;
+  *)
+    log_error "maintenance-start: TREED_KLIPPER_START_REQUIRE_ACTIVE must be 0 or 1, got: ${TREED_KLIPPER_START_REQUIRE_ACTIVE}"
+    exit 1
+    ;;
+esac
 
 # Блок 4: Вспомогательные функции (ожидание, required-start, best-effort-start).
 wait_service_active() {
@@ -54,6 +63,7 @@ wait_service_active() {
 
 start_required_service() {
   local unit="$1"
+  local require_active="${2:-1}"
   local rc=0
   local err=""
 
@@ -79,6 +89,22 @@ start_required_service() {
   fi
 
   rc=$?
+  if [ "${require_active}" != "1" ]; then
+    case "${rc}" in
+      2)
+        log_warn "maintenance-start: ${unit} entered failed state during startup (diagnostic)"
+        ;;
+      *)
+        log_warn "maintenance-start: ${unit} did not become active within ${REQUIRED_START_TIMEOUT}s (diagnostic)"
+        ;;
+    esac
+    if [ "${TREED_MAINTENANCE_STATUS_LOG:-0}" = "1" ]; then
+      systemctl --no-pager -l status "${unit}" || true
+      journalctl -u "${unit}" -n 120 --no-pager || true
+    fi
+    return 0
+  fi
+
   case "${rc}" in
     2)
       log_error "maintenance-start: ${unit} entered failed state during startup"
@@ -127,7 +153,7 @@ start_best_effort_service() {
 }
 
 # Блок 5: Основной сценарий запуска сервисов.
-start_required_service "klipper.service"
+start_required_service "klipper.service" "${TREED_KLIPPER_START_REQUIRE_ACTIVE}"
 start_required_service "moonraker.service"
 start_best_effort_service "KlipperScreen.service"
 start_best_effort_service "crowsnest.service"

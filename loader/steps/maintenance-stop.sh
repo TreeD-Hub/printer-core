@@ -102,18 +102,14 @@ stop_required_service() {
   fi
 
   state="$(systemctl show -p ActiveState --value "${unit}" 2>/dev/null || true)"
+  if ! request_stop_service "${unit}"; then
+    return 1
+  fi
+
+  # Для stuck start-pre/deactivating дополнительно гасим процессы юнита.
   case "${state}" in
-    inactive|failed|"")
-      log_info "maintenance-stop: ${unit} already inactive"
-      ;;
-    *)
-      if ! request_stop_service "${unit}"; then
-        return 1
-      fi
-      # Для stuck start-pre (activating) дополнительно гасим процессы юнита.
-      if [ "${state}" = "activating" ]; then
-        force_kill_service "${unit}"
-      fi
+    activating|deactivating)
+      force_kill_service "${unit}"
       ;;
   esac
 
@@ -162,8 +158,8 @@ stop_best_effort_service() {
       ;;
     *)
       if ! systemctl stop "${unit}" >/dev/null 2>&1; then
-      log_warn "maintenance-stop: failed to stop ${unit}, continuing"
-      return 0
+        log_warn "maintenance-stop: failed to stop ${unit}, continuing"
+        return 0
       fi
       log_info "maintenance-stop: stop requested for ${unit}"
       if [ "${state}" = "activating" ]; then

@@ -55,7 +55,10 @@
 - `CMDLINE_FILE`, `CONFIG_FILE` (для `rpi` backend)
 - `ARMBIAN_ENV_FILE` (для `armbian` backend)
 - `EXTLINUX_FILE` (для `extlinux` backend)
+- `TREED_DEPLOY_MODE` (`auto|clean|preserve`, default `auto`)
 - `TREED_DEPLOY_MODE_EFFECTIVE` (`clean|preserve`)
+- `TREED_DEVICE_STATE` (`fresh|update|recover`)
+- `TREED_STATE_FILE` (default `/run/treed-loader/state.env`)
 - `TREED_MAINTENANCE_MODE` (`1|0`)
 - `TREED_NONINTERACTIVE` (`0|1`, default `1`; apt/dpkg/needrestart без prompt)
 
@@ -72,9 +75,9 @@
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
 - `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
 - `TREED_KLIPPER_PREFLIGHT` (`0|1`, default `1`; readiness-проверка перед стартом Klipper)
-- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`; общий таймаут ожидания CAN-интерфейса и CAN MCU)
+- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`; общий таймаут ожидания CAN-интерфейса)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`; интервал повторной проверки)
-- `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`; strict gate для preflight CAN iface + UUID Octopus/EBB/Eddy)
+- `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`; при `1` strict UUID-gate через `canbus_query.py`, при `0` query не запускается)
 - `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
@@ -161,6 +164,7 @@
 - `TREED_CAM_HTTP_RETRIES` (default `3`)
 - `TREED_CAM_HTTP_TIMEOUT` (default `8`)
 - `TREED_MOONRAKER_HTTP_RETRIES` (default `30`)
+- `TREED_KLIPPER_START_REQUIRE_ACTIVE` (`0|1`, default `0`; при `0` ожидание `klipper.service active` в `maintenance-start` диагностическое)
 - `TREED_REQUIRE_KLIPPER_READY` (`0|1`, default `0`; при `1` `verify.sh` считает `Klippy state!=ready` блокирующей ошибкой)
 - `TREED_ARMBIAN_VERBOSITY` (default `1`)
 - `TREED_ARMBIAN_BOOTLOGO` (default `true`)
@@ -170,6 +174,12 @@
 - `TREED_ARMBIAN_VIDEO_MODE` (default `HDMI-A-1:960x544@60`)
 
 ## Поведение `TREED_DEPLOY_MODE_EFFECTIVE`
+
+При `TREED_DEPLOY_MODE=auto` оркестратор сначала пишет snapshot `/run/treed-loader/state.env`:
+
+- `fresh` — нет runtime-конфига и unit-файлов Klipper/Moonraker; effective mode `clean`;
+- `update` — runtime полный и сервисы не stuck; effective mode `preserve`;
+- `recover` — runtime частичный или сервисы `failed|activating|deactivating`; effective mode `preserve`.
 
 `TREED_DEPLOY_MODE_EFFECTIVE` влияет на шаги:
 
@@ -195,7 +205,8 @@
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
-- `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: в default-режиме (`TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0`) checks по `can0` и UUID только диагностические; strict fail-fast включается через `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
+- `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: в default-режиме (`TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0`) проверяется только состояние `can0`, а `canbus_query.py` не запускается; strict UUID-gate включается через `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
+- `runtime-bootstrap.sh` устанавливает/обновляет Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`; при `TREED_CAMERA_REQUIRED=1` ошибки Crowsnest становятся блокирующими.
 - `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.
 - `klipper-profiles.sh` подставляет зафиксированные CAN UUID Octopus/EBB/Eddy и fail-fast при невалидном hex-формате.
 - `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).
@@ -204,4 +215,4 @@
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с `tools/pkglist.sh`; updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
-- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), CAN UUID Octopus/EBB/Eddy, Input Shaper; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.
+- `verify.sh` разделяет fatal и diagnostic: runtime-файлы, include-цепочка, unit-файлы и CAN UUID в конфигах остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-состояние CAN/Klipper по умолчанию диагностические.

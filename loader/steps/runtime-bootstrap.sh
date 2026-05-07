@@ -57,6 +57,15 @@ CROWSNEST_REF="${TREED_CROWSNEST_REF:-}"
 CROWSNEST_INSTALL="${TREED_CROWSNEST_INSTALL:-1}"
 CROWSNEST_RECREATE="${TREED_CROWSNEST_RECREATE:-0}"
 CROWSNEST_UPDATE="${TREED_CROWSNEST_UPDATE:-1}"
+TREED_CAMERA_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
+
+case "${TREED_CAMERA_REQUIRED}" in
+  0|1) ;;
+  *)
+    log_error "runtime-bootstrap: TREED_CAMERA_REQUIRED must be 0 or 1, got: ${TREED_CAMERA_REQUIRED}"
+    exit 1
+    ;;
+esac
 
 PRINTER_DATA_DIR="${PI_HOME}/printer_data"
 PRINTER_CFG_DIR="${PRINTER_DATA_DIR}/config"
@@ -180,8 +189,8 @@ set -euo pipefail
 # RUNTIME PREFLIGHT: KLIPPER START
 # ==========================================
 # Назначение:
-# - Перед стартом Klipper ждет фактическую готовность CAN-интерфейса и CAN MCU.
-# - CAN UUID readiness is diagnostic by default; strict mode is opt-in.
+# - Перед стартом Klipper проверяет фактическую готовность CAN-интерфейса.
+# - CAN UUID readiness is diagnostic by default; normal mode не вызывает canbus_query.py.
 # - Заменяет фиксированный sleep на condition-based ожидание с ранним выходом.
 # Контур:
 # - required для стабильного холодного включения V2.
@@ -297,33 +306,26 @@ else
   fi
 fi
 
-if [ -z "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
-  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
-    log_error "TREED_MAIN_MCU_CANBUS_UUID is empty"
-    exit 1
-  fi
-  log_info "TREED_MAIN_MCU_CANBUS_UUID is empty; CAN UUID readiness check skipped"
+if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "0" ]; then
+  log_info "CAN UUID strict gate skipped (canbus_query only reports uninitialized devices)"
   exit 0
 fi
 
+if [ -z "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
+  log_error "TREED_MAIN_MCU_CANBUS_UUID is empty"
+  exit 1
+fi
+
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
-  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
-    log_error "TREED_EBB_CANBUS_UUID is empty"
-    exit 1
-  fi
-  log_info "TREED_EBB_CANBUS_UUID is empty; CAN UUID readiness check skipped"
-  exit 0
+  log_error "TREED_EBB_CANBUS_UUID is empty"
+  exit 1
 fi
 
 required_uuids=("${TREED_MAIN_MCU_CANBUS_UUID}" "${TREED_EBB_CANBUS_UUID}")
 if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
-    if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
-      log_error "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1"
-      exit 1
-    fi
-    log_info "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1; CAN UUID readiness check skipped"
-    exit 0
+    log_error "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1"
+    exit 1
   fi
   required_uuids+=("${TREED_EDDY_CANBUS_UUID}")
 fi
@@ -331,19 +333,11 @@ fi
 PY_BIN="${KLIPPY_ENV_DIR}/bin/python"
 QUERY_SCRIPT="${KLIPPER_DIR}/scripts/canbus_query.py"
 if [ ! -x "${PY_BIN}" ]; then
-  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "0" ]; then
-    log_info "CAN UUID readiness check unavailable, python runtime not executable: ${PY_BIN}"
-    exit 0
-  fi
-  log_error "python runtime not found or not executable: ${PY_BIN}"
+  log_error "CAN UUID readiness check unavailable, python runtime not executable: ${PY_BIN}"
   exit 1
 fi
 if [ ! -f "${QUERY_SCRIPT}" ]; then
-  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "0" ]; then
-    log_info "CAN UUID readiness check unavailable, canbus_query.py not found: ${QUERY_SCRIPT}"
-    exit 0
-  fi
-  log_error "canbus_query.py not found: ${QUERY_SCRIPT}"
+  log_error "CAN UUID readiness check unavailable, canbus_query.py not found: ${QUERY_SCRIPT}"
   exit 1
 fi
 QUERY_TIMEOUT_BIN="$(command -v timeout || true)"
@@ -355,23 +349,6 @@ run_canbus_query() {
     "${PY_BIN}" "${QUERY_SCRIPT}" "${TREED_CAN_IFACE}"
   fi
 }
-
-if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "0" ]; then
-  query_output="$(run_canbus_query 2>&1 || true)"
-  missing=""
-  for uuid in "${required_uuids[@]}"; do
-    if ! printf '%s\n' "${query_output}" | grep -Eiq "(^|[^0-9A-Fa-f])${uuid}([^0-9A-Fa-f]|$)"; then
-      missing="${missing} ${uuid}"
-    fi
-  done
-  if [ -z "${missing}" ]; then
-    log_info "CAN MCU ready:${required_uuids[*]}"
-  else
-    log_info "CAN MCU readiness not confirmed, missing:${missing} (non-blocking)"
-    printf '%s\n' "${query_output}" >&2
-  fi
-  exit 0
-fi
 
 while true; do
   query_output="$(run_canbus_query 2>&1 || true)"
@@ -474,6 +451,22 @@ crowsnest_runtime_ready() {
   fi
 }
 
+crowsnest_required() {
+  [ "${TREED_CAMERA_REQUIRED}" = "1" ]
+}
+
+crowsnest_fail_or_skip() {
+  local message="$1"
+
+  if crowsnest_required; then
+    log_error "${message}"
+    exit 1
+  fi
+
+  log_warn "${message}; continuing because TREED_CAMERA_REQUIRED=${TREED_CAMERA_REQUIRED}"
+  return 0
+}
+
 ensure_crowsnest_runtime() {
   local installer_log="${PRINTER_LOG_DIR}/crowsnest-install.log"
 
@@ -489,12 +482,18 @@ ensure_crowsnest_runtime() {
       ;;
   esac
 
-  ensure_repo_present "${CROWSNEST_DIR}" "${CROWSNEST_REPO}" "${CROWSNEST_REF}"
-  update_crowsnest_repo
+  if ! ensure_repo_present "${CROWSNEST_DIR}" "${CROWSNEST_REPO}" "${CROWSNEST_REF}"; then
+    crowsnest_fail_or_skip "runtime-bootstrap: failed to prepare Crowsnest repo (${CROWSNEST_DIR})"
+    return 0
+  fi
+  if ! update_crowsnest_repo; then
+    crowsnest_fail_or_skip "runtime-bootstrap: failed to update Crowsnest repo (${CROWSNEST_DIR})"
+    return 0
+  fi
 
   if [ ! -f "${CROWSNEST_DIR}/Makefile" ] || [ ! -f "${CROWSNEST_DIR}/tools/install.sh" ]; then
-    log_error "runtime-bootstrap: Crowsnest installer not found in ${CROWSNEST_DIR}"
-    exit 1
+    crowsnest_fail_or_skip "runtime-bootstrap: Crowsnest installer not found in ${CROWSNEST_DIR}"
+    return 0
   fi
 
   if crowsnest_runtime_ready && [ "${CROWSNEST_UPDATE}" != "1" ]; then
@@ -517,19 +516,19 @@ ensure_crowsnest_runtime() {
       DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}" \
       make install
   ) > "${installer_log}" 2>&1 || {
-    log_error "runtime-bootstrap: Crowsnest install failed (see ${installer_log})"
-    exit 1
+    crowsnest_fail_or_skip "runtime-bootstrap: Crowsnest install failed (see ${installer_log})"
+    return 0
   }
 
   systemctl daemon-reload
 
   if ! systemctl cat crowsnest.service >/dev/null 2>&1; then
-    log_error "runtime-bootstrap: crowsnest.service is missing after install"
-    exit 1
+    crowsnest_fail_or_skip "runtime-bootstrap: crowsnest.service is missing after install"
+    return 0
   fi
   if ! crowsnest_runtime_ready; then
-    log_error "runtime-bootstrap: crowsnest systemd runtime is incomplete after install (expected service/env/venv)"
-    exit 1
+    crowsnest_fail_or_skip "runtime-bootstrap: crowsnest systemd runtime is incomplete after install (expected service/env/venv)"
+    return 0
   fi
 
   log_info "runtime-bootstrap: crowsnest runtime ready"
@@ -642,7 +641,7 @@ EOF
 
 install_moonraker_policykit_rules
 
-# Блок 8: Crowsnest repo/service (required для webcam-контура, управляется loader).
+# Блок 8: Crowsnest repo/service (best-effort, если камера не required).
 ensure_crowsnest_runtime
 
 # Блок 9: Активация systemd unit-файлов.

@@ -8,25 +8,15 @@
 - Пользователь для runtime-путей проекта: `pi`.
 - SSH должен быть включен.
 
-## 2. Подготовка репозитория
+## 2. Запуск installer
 
 ```bash
-set -euo pipefail
-
-REPO_URL="${REPO_URL:-https://github.com/TreeD-Hub/treed-mainshellOS.git}"
-INSTALL_REF="${INSTALL_REF:-treed-v2}"
-BASE="${BASE:-/home/pi/treed}"
-REPO_DIR="${REPO_DIR:-${BASE}/treed-mainshellOS}"
-
-sudo mkdir -p "${BASE}"
-sudo chown "$(id -u):$(id -g)" "${BASE}"
-
-sudo rm -rf "${REPO_DIR}"
-git clone --branch "${INSTALL_REF}" --depth 1 "${REPO_URL}" "${REPO_DIR}"
-cd "${REPO_DIR}"
+curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
 ```
 
-## 3. Минимальные переменные для V2
+`bootstrap-pi.sh` клонирует свежий installer checkout в `/home/pi/treed/treed-mainshellOS`, запускает loader в `TREED_DEPLOY_MODE=auto` и перезагружает систему только при состоянии `fresh`.
+
+## 3. V2 UUID
 
 Для текущей платы значения зафиксированы в `loader/bootstrap.sh`:
 - Octopus Pro: `d372e54bf965`;
@@ -34,26 +24,8 @@ cd "${REPO_DIR}"
 - Eddy: `95485b93332a`;
 - Eddy включен по умолчанию (`TREED_EDDY_ENABLED=1`).
 
-Опционально:
-
-```bash
-export TREED_CAN_IFACE="can0"
-export TREED_CAN_BITRATE="1000000"
-export TREED_CAN_TXQUEUE="1024"
-export TREED_KLIPPER_PREFLIGHT="1"
-export TREED_KLIPPER_PREFLIGHT_WAIT_SEC="12"
-export TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED="0"
-```
-
-## 4. Запуск loader
-
-```bash
-sudo TREED_DEPLOY_MODE=clean TREED_NONINTERACTIVE=1 bash install.sh
-sudo reboot
-```
-
-## 5. Что проверить после запуска
+## 4. Что проверить после запуска
 
 - `systemctl is-active klipper moonraker treed-can-setup`
 - `ip -details link show can0`
-- `~/klippy-env/bin/python ~/klipper/scripts/canbus_query.py can0`
+- `cat /run/treed-loader/state.env`

@@ -21,6 +21,7 @@ log_info "Step verify: running V2 post-configuration checks (parity mode)"
 
 ok=0
 fail=0
+VERIFY_DIAGNOSTIC_FAILS=0
 MOONRAKER_HTTP_OK=0
 MOONRAKER_PROXY_HTTP_OK=0
 MOONRAKER_PRINTER_INFO_OK=0
@@ -38,6 +39,19 @@ pass() {
 failf() {
   log_warn "VERIFY $1: FAIL"
   fail=$((fail+1))
+}
+
+diagnostic_failf() {
+  log_warn "VERIFY $1: DIAGNOSTIC"
+  VERIFY_DIAGNOSTIC_FAILS=$((VERIFY_DIAGNOSTIC_FAILS+1))
+}
+
+camera_failf() {
+  if is_true "${TREED_CAMERA_REQUIRED:-0}"; then
+    failf "$1"
+  else
+    diagnostic_failf "$1"
+  fi
 }
 
 is_true() {
@@ -175,6 +189,7 @@ missing_required_icons() {
 check_required_service_active() {
   local unit="$1"
   local substate_allowed="${2:-running}"
+  local active_failure_mode="${3:-fatal}"
   local state=""
   local substate=""
   local allowed=""
@@ -190,7 +205,11 @@ check_required_service_active() {
     pass "${unit} active"
   else
     state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
-    failf "${unit} active (state=${state:-unknown})"
+    if [ "${active_failure_mode}" = "diagnostic" ]; then
+      diagnostic_failf "${unit} active (state=${state:-unknown})"
+    else
+      failf "${unit} active (state=${state:-unknown})"
+    fi
     return 0
   fi
 
@@ -203,9 +222,17 @@ check_required_service_active() {
   done
 
   if [ "${substate_allowed}" = "running" ]; then
-    failf "${unit} substate running (state=${substate:-unknown})"
+    if [ "${active_failure_mode}" = "diagnostic" ]; then
+      diagnostic_failf "${unit} substate running (state=${substate:-unknown})"
+    else
+      failf "${unit} substate running (state=${substate:-unknown})"
+    fi
   else
-    failf "${unit} substate one-of(${substate_allowed// /|}) (state=${substate:-unknown})"
+    if [ "${active_failure_mode}" = "diagnostic" ]; then
+      diagnostic_failf "${unit} substate one-of(${substate_allowed// /|}) (state=${substate:-unknown})"
+    else
+      failf "${unit} substate one-of(${substate_allowed// /|}) (state=${substate:-unknown})"
+    fi
   fi
 }
 
@@ -335,7 +362,7 @@ klipper_mcu_journal_clean_check() {
   local patterns=""
 
   if ! command -v journalctl >/dev/null 2>&1; then
-    failf "${check_name} (journalctl missing)"
+    diagnostic_failf "${check_name} (journalctl missing)"
     return 0
   fi
 
@@ -348,7 +375,7 @@ klipper_mcu_journal_clean_check() {
   if journalctl -u "${unit}" --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
     :
   else
-    failf "${check_name} (cannot read journal since=${since})"
+    diagnostic_failf "${check_name} (cannot read journal since=${since})"
     rm -f "${tmp}"
     return 0
   fi
@@ -376,7 +403,7 @@ klipper_ebb_connected_check() {
   local error_patterns=""
 
   if ! command -v journalctl >/dev/null 2>&1; then
-    failf "${check_name} (journalctl missing)"
+    diagnostic_failf "${check_name} (journalctl missing)"
     return 0
   fi
 
@@ -389,7 +416,7 @@ klipper_ebb_connected_check() {
   if journalctl -u "${unit}" --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
     :
   else
-    failf "${check_name} (cannot read journal since=${since})"
+    diagnostic_failf "${check_name} (cannot read journal since=${since})"
     rm -f "${tmp}"
     return 0
   fi
@@ -403,12 +430,12 @@ klipper_ebb_connected_check() {
       if grep -Eiq "${patterns}" "${tmp}"; then
         pass "${check_name} (markers found in recent journal)"
       elif grep -Eiq "${error_patterns}" "${tmp}"; then
-        failf "${check_name} (EBBCan errors found in recent journal)"
+        diagnostic_failf "${check_name} (EBBCan errors found in recent journal)"
       else
         pass "${check_name} (no startup markers, but no EBBCan errors in recent journal)"
       fi
     else
-      failf "${check_name} (no EBBCan startup markers since=${since})"
+      diagnostic_failf "${check_name} (no EBBCan startup markers since=${since})"
     fi
   fi
 
@@ -431,7 +458,7 @@ http_snapshot_check() {
     fi
     sleep 1
   done
-  failf "${check_name} (http=${code:-n/a})"
+  camera_failf "${check_name} (http=${code:-n/a})"
   rm -f "${tmp}"
 }
 
@@ -456,7 +483,7 @@ moonraker_webcams_check() {
     sleep 1
   done
 
-  failf "${check_name} (http=${code:-n/a})"
+  camera_failf "${check_name} (http=${code:-n/a})"
   rm -f "${tmp}"
 }
 
@@ -950,7 +977,7 @@ else
 fi
 
 # Блок 7: Проверки сервисов, Moonraker API и CAN-интерфейса.
-check_required_service_active "klipper.service"
+check_required_service_active "klipper.service" "running" "diagnostic"
 check_required_service_active "moonraker.service"
 check_required_service_active "nginx.service"
 check_required_service_active "${CAN_UNIT}" "running exited"
@@ -978,31 +1005,31 @@ klipper_ebb_connected_check "klipper startup connected EBBCan"
 if ip -details link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
   pass "CAN interface present (${TREED_CAN_IFACE})"
 else
-  failf "CAN interface present (${TREED_CAN_IFACE})"
+  diagnostic_failf "CAN interface present (${TREED_CAN_IFACE})"
 fi
 
 if ip link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q '<[^>]*UP[^>]*>'; then
   pass "CAN interface UP (${TREED_CAN_IFACE})"
 else
-  failf "CAN interface UP (${TREED_CAN_IFACE})"
+  diagnostic_failf "CAN interface UP (${TREED_CAN_IFACE})"
 fi
 
 if ip -details link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q "bitrate ${TREED_CAN_BITRATE}"; then
   pass "CAN bitrate ${TREED_CAN_BITRATE}"
 else
-  failf "CAN bitrate ${TREED_CAN_BITRATE}"
+  diagnostic_failf "CAN bitrate ${TREED_CAN_BITRATE}"
 fi
 
 if ip link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q "qlen ${TREED_CAN_TXQUEUE}"; then
   pass "CAN txqueuelen ${TREED_CAN_TXQUEUE}"
 else
-  failf "CAN txqueuelen ${TREED_CAN_TXQUEUE}"
+  diagnostic_failf "CAN txqueuelen ${TREED_CAN_TXQUEUE}"
 fi
 
 if ip -details link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q "restart-ms ${TREED_CAN_RESTART_MS}"; then
   pass "CAN restart-ms ${TREED_CAN_RESTART_MS}"
 else
-  failf "CAN restart-ms ${TREED_CAN_RESTART_MS}"
+  diagnostic_failf "CAN restart-ms ${TREED_CAN_RESTART_MS}"
 fi
 
 # Блок 8: Проверки runtime-профиля V2 и MCU binding.
@@ -1457,7 +1484,7 @@ if [ "${camera_checks_enabled}" = "1" ]; then
   if systemctl cat crowsnest.service >/dev/null 2>&1; then
     pass "crowsnest.service present for camera checks"
   else
-    failf "crowsnest.service present for camera checks"
+    camera_failf "crowsnest.service present for camera checks"
     camera_checks_enabled=0
   fi
 fi
@@ -1472,7 +1499,7 @@ if [ "${camera_checks_enabled}" = "1" ]; then
     if [ -x "${CAM_BIN_DIR}/${f}" ]; then
       pass "cam script executable ${CAM_BIN_DIR}/${f}"
     else
-      failf "cam script executable ${CAM_BIN_DIR}/${f}"
+      camera_failf "cam script executable ${CAM_BIN_DIR}/${f}"
     fi
   done
 
@@ -1481,17 +1508,17 @@ if [ "${camera_checks_enabled}" = "1" ]; then
     && grep -qE '^[[:space:]]*service[[:space:]]*[:=][[:space:]]*mjpegstreamer[[:space:]]*$' "${MOONRAKER_WEBCAM_FRAGMENT}"; then
     pass "moonraker webcam treed service=mjpegstreamer (${MOONRAKER_WEBCAM_FRAGMENT})"
   else
-    failf "moonraker webcam treed service=mjpegstreamer (${MOONRAKER_WEBCAM_FRAGMENT})"
+    camera_failf "moonraker webcam treed service=mjpegstreamer (${MOONRAKER_WEBCAM_FRAGMENT})"
   fi
 
   if [ -f "${MOONRAKER_CFG}" ]; then
     if grep -qE '^\[include[[:space:]]+moonraker/generated/\*\.conf\][[:space:]]*$' "${MOONRAKER_CFG}"; then
       pass "moonraker include generated/*.conf"
     else
-      failf "moonraker include generated/*.conf"
+      camera_failf "moonraker include generated/*.conf"
     fi
   else
-    failf "moonraker config present (${MOONRAKER_CFG})"
+    camera_failf "moonraker config present (${MOONRAKER_CFG})"
   fi
 
   if [ -f "${CROWSNEST_CFG}" ]; then
@@ -1511,23 +1538,23 @@ if [ "${camera_checks_enabled}" = "1" ]; then
       if [ -e "${cam_device_cfg}" ] || [ -L "${cam_device_cfg}" ]; then
         pass "crowsnest camera device exists (${cam_device_cfg})"
       else
-        failf "crowsnest camera device exists (${cam_device_cfg})"
+        camera_failf "crowsnest camera device exists (${cam_device_cfg})"
       fi
     else
-      failf "crowsnest camera device configured"
+      camera_failf "crowsnest camera device configured"
     fi
 
     if [ "${byid_index0_available}" = "1" ]; then
       if printf '%s' "${cam_device_cfg:-}" | grep -qE '^/dev/v4l/by-id/.+-video-index0$'; then
         pass "crowsnest prefers /dev/v4l/by-id/*-video-index0"
       else
-        failf "crowsnest prefers /dev/v4l/by-id/*-video-index0"
+        camera_failf "crowsnest prefers /dev/v4l/by-id/*-video-index0"
       fi
     else
       pass "no /dev/v4l/by-id/*-video-index0 on host (fallback allowed)"
     fi
   else
-    failf "crowsnest config present (${CROWSNEST_CFG})"
+    camera_failf "crowsnest config present (${CROWSNEST_CFG})"
   fi
 
   if command -v curl >/dev/null 2>&1; then
@@ -1535,7 +1562,7 @@ if [ "${camera_checks_enabled}" = "1" ]; then
     http_snapshot_check "camera proxied snapshot /webcam" "http://127.0.0.1/webcam/?action=snapshot"
     moonraker_webcams_check "moonraker webcams api treed entry" "${WEBCAM_API_URL}"
   else
-    failf "curl installed for camera checks"
+    camera_failf "curl installed for camera checks"
   fi
 else
   log_info "VERIFY camera checks skipped (${camera_checks_reason})"
@@ -1566,10 +1593,14 @@ else
   log_info "VERIFY firmware artifact checks skipped (TREED_FIRMWARE_BUILD_ENABLED=0)"
 fi
 
-# Блок 13: Итог verify (pass/fail счетчики).
+# Блок 13: Итог verify (fatal/diagnostic счетчики).
 if [ "${fail}" -eq 0 ]; then
-  log_info "verify: all ${ok} checks passed"
+  if [ "${VERIFY_DIAGNOSTIC_FAILS}" -eq 0 ]; then
+    log_info "verify: all ${ok} checks passed"
+  else
+    log_warn "verify: ${VERIFY_DIAGNOSTIC_FAILS} diagnostic checks failed, ${ok} passed"
+  fi
 else
-  log_warn "verify: ${fail} checks failed, ${ok} passed"
+  log_warn "verify: ${fail} fatal checks failed, ${VERIFY_DIAGNOSTIC_FAILS} diagnostic checks failed, ${ok} passed"
   exit 1
 fi

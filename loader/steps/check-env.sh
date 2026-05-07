@@ -66,6 +66,7 @@ TREED_KLIPPERSCREEN_INSTALL_SERVICE="${TREED_KLIPPERSCREEN_INSTALL_SERVICE:-1}"
 TREED_KLIPPERSCREEN_BACKEND="${TREED_KLIPPERSCREEN_BACKEND:-X}"
 TREED_KLIPPERSCREEN_NETWORK_MANAGER="${TREED_KLIPPERSCREEN_NETWORK_MANAGER:-N}"
 TREED_KLIPPERSCREEN_START_AFTER_INSTALL="${TREED_KLIPPERSCREEN_START_AFTER_INSTALL:-0}"
+TREED_CAMERA_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
 
 TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED:-1}"
 TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
@@ -121,6 +122,14 @@ case "${TREED_KLIPPERSCREEN_START_AFTER_INSTALL}" in
   0|1) ;;
   *)
     log_error "check-env: TREED_KLIPPERSCREEN_START_AFTER_INSTALL must be 0 or 1, got: ${TREED_KLIPPERSCREEN_START_AFTER_INSTALL}"
+    exit 1
+    ;;
+esac
+
+case "${TREED_CAMERA_REQUIRED}" in
+  0|1) ;;
+  *)
+    log_error "check-env: TREED_CAMERA_REQUIRED must be 0 or 1, got: ${TREED_CAMERA_REQUIRED}"
     exit 1
     ;;
 esac
@@ -272,7 +281,7 @@ case "${TREED_FIRMWARE_BUILD_ENABLED}" in
     ;;
 esac
 
-for abs_path_var in TREED_KLIPPER_SRC_DIR TREED_FIRMWARE_ARTIFACTS_DIR TREED_FW_MAIN_CONFIG TREED_FW_EBB_CONFIG TREED_FW_EDDY_CONFIG; do
+for abs_path_var in TREED_KLIPPER_SRC_DIR; do
   abs_path_val="$(eval "printf '%s' \"\${${abs_path_var}}\"")"
   case "${abs_path_val}" in
     /*) ;;
@@ -282,5 +291,18 @@ for abs_path_var in TREED_KLIPPER_SRC_DIR TREED_FIRMWARE_ARTIFACTS_DIR TREED_FW_
       ;;
   esac
 done
+
+if [ "${TREED_FIRMWARE_BUILD_ENABLED}" = "1" ]; then
+  for abs_path_var in TREED_FIRMWARE_ARTIFACTS_DIR TREED_FW_MAIN_CONFIG TREED_FW_EBB_CONFIG TREED_FW_EDDY_CONFIG; do
+    abs_path_val="$(eval "printf '%s' \"\${${abs_path_var}}\"")"
+    case "${abs_path_val}" in
+      /*) ;;
+      *)
+        log_error "check-env: ${abs_path_var} must be absolute path when TREED_FIRMWARE_BUILD_ENABLED=1, got: ${abs_path_val}"
+        exit 1
+        ;;
+    esac
+  done
+fi
 
 log_info "check-env: OK"
