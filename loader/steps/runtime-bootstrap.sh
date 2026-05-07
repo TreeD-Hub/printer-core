@@ -35,7 +35,7 @@ KLIPPER_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
 KLIPPER_REPO="${TREED_KLIPPER_REPO:-https://github.com/Klipper3d/klipper.git}"
 KLIPPER_REF="${TREED_KLIPPER_REF:-}"
 KLIPPY_ENV_DIR="${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}"
-TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00}"
+TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-efaf957ab20f}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
@@ -160,7 +160,7 @@ install_klipper_preflight() {
 TREED_KLIPPER_PREFLIGHT=${TREED_KLIPPER_PREFLIGHT}
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC=${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC=${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}
-TREED_MAIN_MCU_SERIAL_BY_ID=${TREED_MAIN_MCU_SERIAL_BY_ID}
+TREED_MAIN_MCU_CANBUS_UUID=${TREED_MAIN_MCU_CANBUS_UUID}
 TREED_CAN_IFACE=${TREED_CAN_IFACE}
 TREED_EBB_CANBUS_UUID=${TREED_EBB_CANBUS_UUID}
 TREED_EDDY_ENABLED=${TREED_EDDY_ENABLED}
@@ -178,7 +178,7 @@ set -euo pipefail
 # RUNTIME PREFLIGHT: KLIPPER START
 # ==========================================
 # Назначение:
-# - Перед стартом Klipper ждет фактическую готовность main MCU и CAN MCU.
+# - Перед стартом Klipper ждет фактическую готовность CAN-интерфейса и CAN MCU.
 # - Заменяет фиксированный sleep на condition-based ожидание с ранним выходом.
 # Контур:
 # - required для стабильного холодного включения V2.
@@ -192,7 +192,7 @@ fi
 TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}"
-TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-}"
+TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
@@ -250,14 +250,6 @@ fi
 
 deadline=$((SECONDS + TREED_KLIPPER_PREFLIGHT_WAIT_SEC))
 
-if [ -n "${TREED_MAIN_MCU_SERIAL_BY_ID}" ]; then
-  wait_until_deadline \
-    "[ -e '${TREED_MAIN_MCU_SERIAL_BY_ID}' ]" \
-    "main MCU serial is present (${TREED_MAIN_MCU_SERIAL_BY_ID})" \
-    "main MCU serial is missing after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_MAIN_MCU_SERIAL_BY_ID})" \
-    "${deadline}"
-fi
-
 IP_BIN="$(command -v ip || true)"
 if [ -z "${IP_BIN}" ]; then
   log_error "ip command not found"
@@ -276,12 +268,17 @@ wait_until_deadline \
   "CAN interface is not UP after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_CAN_IFACE})" \
   "${deadline}"
 
+if [ -z "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
+  log_error "TREED_MAIN_MCU_CANBUS_UUID is empty"
+  exit 1
+fi
+
 if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
   log_error "TREED_EBB_CANBUS_UUID is empty"
   exit 1
 fi
 
-required_uuids=("${TREED_EBB_CANBUS_UUID}")
+required_uuids=("${TREED_MAIN_MCU_CANBUS_UUID}" "${TREED_EBB_CANBUS_UUID}")
 if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
   if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
     log_error "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1"

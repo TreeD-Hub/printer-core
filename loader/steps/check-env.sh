@@ -43,8 +43,7 @@ else
 fi
 
 # Блок 6: Контракт V2 для main MCU / CAN / Eddy.
-TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00}"
-TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
+TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-efaf957ab20f}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
@@ -70,24 +69,20 @@ TREED_KLIPPERSCREEN_START_AFTER_INSTALL="${TREED_KLIPPERSCREEN_START_AFTER_INSTA
 TREED_FIRMWARE_BUILD_ENABLED="${TREED_FIRMWARE_BUILD_ENABLED:-1}"
 TREED_KLIPPER_SRC_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
 TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
-TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_usb.config}"
+TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_can.config}"
 TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
 TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_rp2040.config}"
 
-if [ -n "${TREED_MAIN_MCU_SERIAL_BY_ID}" ]; then
-  case "${TREED_MAIN_MCU_SERIAL_BY_ID}" in
-    /dev/serial/by-id/*) ;;
-    *)
-      log_error "check-env: TREED_MAIN_MCU_SERIAL_BY_ID must be /dev/serial/by-id/*, got: ${TREED_MAIN_MCU_SERIAL_BY_ID}"
-      exit 1
-      ;;
-  esac
-fi
-
-if [ -z "${TREED_MAIN_MCU_SERIAL_MASK}" ]; then
-  log_error "check-env: TREED_MAIN_MCU_SERIAL_MASK must not be empty"
+if [ -z "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
+  log_error "check-env: TREED_MAIN_MCU_CANBUS_UUID is required; set explicit Octopus Pro CAN UUID"
   exit 1
 fi
+case "${TREED_MAIN_MCU_CANBUS_UUID}" in
+  *[!0-9A-Fa-f]*)
+    log_error "check-env: TREED_MAIN_MCU_CANBUS_UUID must be hex, got: ${TREED_MAIN_MCU_CANBUS_UUID}"
+    exit 1
+    ;;
+esac
 
 case "${TREED_NONINTERACTIVE}" in
   0|1) ;;

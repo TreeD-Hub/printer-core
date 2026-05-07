@@ -6,8 +6,8 @@
 
 ```text
 Rock Pi (Armbian Debian 12)
- ├─ USB -> Octopus Pro (main MCU, Klipper serial)
  └─ USB -> U2C V2.1
+          ├─ CAN -> Octopus Pro (main MCU, required)
           ├─ CAN -> EBB42 (required)
           └─ CAN -> Eddy Duo (enabled by default)
 ```

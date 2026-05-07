@@ -10,8 +10,7 @@ INSTALL_REF="${INSTALL_REF:-treed-v2}"
 BASE="/home/pi/treed"
 REPO_DIR="${BASE}/treed-mainshellOS"
 
-TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID:-/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00}"
-TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK:-/dev/serial/by-id/*stm32*}"
+TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-1024}"
@@ -41,8 +40,7 @@ find loader -type f -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'
 chmod +x loader/loader.sh
 find loader/steps -type f -name '*.sh' -exec chmod +x {} +
 
-sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
-     TREED_MAIN_MCU_SERIAL_MASK="${TREED_MAIN_MCU_SERIAL_MASK}" \
+sudo TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID}" \
      TREED_CAN_IFACE="${TREED_CAN_IFACE}" \
      TREED_CAN_BITRATE="${TREED_CAN_BITRATE}" \
      TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE}" \
@@ -64,13 +62,12 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 
 ## Контракт переменных
 
-- `TREED_MAIN_MCU_SERIAL_BY_ID` — Octopus Pro serial, default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`.
-- `TREED_MAIN_MCU_SERIAL_MASK` — маска для auto-resolve main MCU, default `/dev/serial/by-id/*stm32*`.
+- `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, default `d372e54bf965`.
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
 - `TREED_KLIPPER_PREFLIGHT` — `0|1`, default `1`; включает readiness-проверку перед стартом Klipper.
-- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания main MCU и CAN MCU.
+- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания CAN-интерфейса и CAN MCU.
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` — default `1`; интервал повторной проверки.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `1`.
@@ -86,7 +83,7 @@ sudo TREED_MAIN_MCU_SERIAL_BY_ID="${TREED_MAIN_MCU_SERIAL_BY_ID}" \
 ## Контракт железа
 
 - Host SBC: Rock Pi / Rock Pi 4 Plus.
-- Main MCU: Octopus Pro по USB serial.
+- Main MCU: Octopus Pro по CAN.
 - CAN adapter: U2C V2.1 (USB -> CAN).
 - Toolhead MCU: EBB42 по CAN (required).
 - Probe: Eddy / Eddy Duo по CAN (enabled by default).

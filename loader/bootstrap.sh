@@ -34,8 +34,7 @@ fi
 # Все значения можно переопределить снаружи:
 # sudo TREED_CAN_BITRATE=500000 TREED_EDDY_ENABLED=0 bash install.sh
 
-: "${TREED_MAIN_MCU_SERIAL_BY_ID:=/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00}"
-: "${TREED_MAIN_MCU_SERIAL_MASK:=/dev/serial/by-id/*stm32*}"
+: "${TREED_MAIN_MCU_CANBUS_UUID:=d372e54bf965}"
 
 : "${TREED_CAN_IFACE:=can0}"
 : "${TREED_CAN_BITRATE:=1000000}"
@@ -74,14 +73,13 @@ fi
 : "${TREED_CROWSNEST_RECREATE:=0}"
 : "${TREED_CROWSNEST_UPDATE:=1}"
 
-: "${TREED_FW_MAIN_CONFIG:=${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_usb.config}"
+: "${TREED_FW_MAIN_CONFIG:=${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_can.config}"
 : "${TREED_FW_EBB_CONFIG:=${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
 : "${TREED_FW_EDDY_CONFIG:=${REPO_DIR}/firmware/configs/treed_v2/eddy_can_rp2040.config}"
 
 export REPO_DIR
 
-export TREED_MAIN_MCU_SERIAL_BY_ID
-export TREED_MAIN_MCU_SERIAL_MASK
+export TREED_MAIN_MCU_CANBUS_UUID
 
 export TREED_CAN_IFACE
 export TREED_CAN_BITRATE
@@ -131,6 +129,7 @@ fi
 echo "[bootstrap] REPO_DIR=${REPO_DIR}"
 echo "[bootstrap] DEPLOY_USER=${DEPLOY_USER}"
 echo "[bootstrap] DEPLOY_HOME=${DEPLOY_HOME}"
+echo "[bootstrap] TREED_MAIN_MCU_CANBUS_UUID=${TREED_MAIN_MCU_CANBUS_UUID}"
 echo "[bootstrap] TREED_CAN_IFACE=${TREED_CAN_IFACE}"
 echo "[bootstrap] TREED_CAN_BITRATE=${TREED_CAN_BITRATE}"
 echo "[bootstrap] TREED_KLIPPER_PREFLIGHT=${TREED_KLIPPER_PREFLIGHT}"

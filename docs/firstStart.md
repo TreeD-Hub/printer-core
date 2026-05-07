@@ -29,7 +29,7 @@ cd "${REPO_DIR}"
 ## 3. Минимальные переменные для V2
 
 Для текущей платы значения зафиксированы в `loader/bootstrap.sh`:
-- Octopus Pro: `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`;
+- Octopus Pro: `d372e54bf965`;
 - EBB42: `efaf957ab20f`;
 - Eddy: `95485b93332a`;
 - Eddy включен по умолчанию (`TREED_EDDY_ENABLED=1`).
@@ -55,4 +55,4 @@ sudo reboot
 
 - `systemctl is-active klipper moonraker treed-can-setup`
 - `ip -details link show can0`
-- `ls -l /dev/serial/by-id/`
+- `~/klippy-env/bin/python ~/klipper/scripts/canbus_query.py can0`

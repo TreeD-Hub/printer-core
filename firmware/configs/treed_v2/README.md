@@ -4,8 +4,8 @@
 
 ## Файлы
 
-- `main_octopus_pro_f446_usb.config`
-  - Octopus Pro V1.0.1 (вариант F446) через USB serial.
+- `main_octopus_pro_f446_can.config`
+  - Octopus Pro V1.0.1 (вариант F446) через CAN PD0/PD1.
 - `ebb42_can_stm32g0b1.config`
   - EBB42 CAN (STM32G0B1, CAN PB0/PB1).
 - `eddy_can_rp2040.config`

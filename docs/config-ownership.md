@@ -86,11 +86,10 @@ Klipper cold-start слой:
 ## 4. Контракт V2: main/CAN/Eddy
 
 Required:
+- `TREED_MAIN_MCU_CANBUS_UUID` (default `d372e54bf965`; auto-detect не используется)
 - `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется)
 
 Optional:
-- `TREED_MAIN_MCU_SERIAL_BY_ID` (default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`)
-- `TREED_MAIN_MCU_SERIAL_MASK` (default `/dev/serial/by-id/*stm32*`)
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
@@ -107,8 +106,7 @@ Optional:
 - `TREED_Z_PARK_ZERO_EDDY` ищет рабочий Z0 через Eddy после сохраненной `PROBE_EDDY_CURRENT_CALIBRATE`.
 
 Fail-fast сценарии:
-- auto-resolve main MCU: `0` кандидатов -> fail;
-- auto-resolve main MCU: `>1` кандидатов -> fail;
+- пустой `TREED_MAIN_MCU_CANBUS_UUID` -> fail;
 - `TREED_EDDY_ENABLED=1` и пустой `TREED_EDDY_CANBUS_UUID` -> fail.
 
 ## 5. Что не используется в `treed-v2`

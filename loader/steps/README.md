@@ -21,7 +21,7 @@
 | 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 16 | `klipper-profiles.sh` | required | Профиль V2: main USB serial, EBB/Eddy CAN UUID, X/Y sensorless, Z0 через Eddy и Zmax sensorless. |
+| 16 | `klipper-profiles.sh` | required | Профиль V2: CAN UUID Octopus/EBB/Eddy, X/Y sensorless, Z0 через Eddy и Zmax sensorless. |
 | 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
 | 18 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
 | 19 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
@@ -61,8 +61,7 @@
 
 ### Main MCU / CAN / Eddy
 
-- `TREED_MAIN_MCU_SERIAL_BY_ID` (default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`)
-- `TREED_MAIN_MCU_SERIAL_MASK` (default `/dev/serial/by-id/*stm32*`)
+- `TREED_MAIN_MCU_CANBUS_UUID` (default `d372e54bf965`)
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
@@ -73,7 +72,7 @@
 - `TREED_CAN_SETUP_ENV_FILE` (default `/etc/default/treed-can-setup`)
 - `TREED_CAN_SETUP_UNIT` (default `treed-can-setup.service`)
 - `TREED_KLIPPER_PREFLIGHT` (`0|1`, default `1`; readiness-проверка перед стартом Klipper)
-- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`; общий таймаут ожидания main MCU и CAN MCU)
+- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`; общий таймаут ожидания CAN-интерфейса и CAN MCU)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`; интервал повторной проверки)
 - `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
@@ -86,7 +85,7 @@
 - `TREED_FIRMWARE_BUILD_ENABLED` (`0|1`, default `1`)
 - `TREED_KLIPPER_SRC_DIR` (default `${PI_HOME}/klipper`)
 - `TREED_FIRMWARE_ARTIFACTS_DIR` (default `${PI_HOME}/treed/firmware-artifacts/treed-v2`)
-- `TREED_FW_MAIN_CONFIG` (default `firmware/configs/treed_v2/main_octopus_pro_f446_usb.config`)
+- `TREED_FW_MAIN_CONFIG` (default `firmware/configs/treed_v2/main_octopus_pro_f446_can.config`)
 - `TREED_FW_EBB_CONFIG` (default `firmware/configs/treed_v2/ebb42_can_stm32g0b1.config`)
 - `TREED_FW_EDDY_CONFIG` (default `firmware/configs/treed_v2/eddy_can_rp2040.config`)
 
@@ -195,14 +194,13 @@
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
-- `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: перед стартом Klipper он ждет main MCU serial, `can0` в состоянии UP и UUID EBB/Eddy через `canbus_query.py`, но выходит сразу при готовности.
+- `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: перед стартом Klipper он ждет `can0` в состоянии UP и UUID Octopus/EBB/Eddy через `canbus_query.py`, но выходит сразу при готовности.
 - `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.
-- `klipper-profiles.sh` fail-fast при ambiguous main MCU auto-resolve (`0` или `>1` кандидатов по маске).
-- `klipper-profiles.sh` подставляет зафиксированный EBB UUID и fail-fast при невалидном hex-формате.
+- `klipper-profiles.sh` подставляет зафиксированные CAN UUID Octopus/EBB/Eddy и fail-fast при невалидном hex-формате.
 - `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).
 - Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. При Eddy enabled `G28 Z`/UI Home Z паркует стол к Zmax через TMC5160 DIAG на `PG10`, а `TREED_Z_PARK_ZERO_EDDY` используется стартом печати для рабочего Z0 после сохраненной Eddy-калибровки.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с `tools/pkglist.sh`; updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
-- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), main USB serial, EBB CAN UUID, Input Shaper и Eddy; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.
+- `verify.sh` проверяет V2-контур с паритетом `dev`: boot/initramfs/cmdline, timezone/NTP, web-слой (`nginx` + Mainsail web-root + proxy к Moonraker), camera/webcam/crowsnest, KlipperScreen, `klipper`/`moonraker`, `treed-can-setup`, `can0` (`bitrate`/`txqueuelen`/`restart-ms`), CAN UUID Octopus/EBB/Eddy, Input Shaper; HTTP-ready Moonraker и готовность Klippy разделены через `TREED_REQUIRE_KLIPPER_READY`.

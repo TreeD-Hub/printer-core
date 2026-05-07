@@ -40,7 +40,7 @@
 | 13 | `plymouth-cmdline` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd` | required | Политика `getty@tty1` и unit Plymouth. |
 | 15 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
-| 16 | `klipper-profiles` | required | Профиль V2: main USB serial, CAN UUID EBB/Eddy, Z0 через Eddy и Zmax sensorless. |
+| 16 | `klipper-profiles` | required | Профиль V2: CAN UUID Octopus/EBB/Eddy, Z0 через Eddy и Zmax sensorless. |
 | 17 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
 | 18 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
 | 19 | `mainsail-web` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
@@ -56,8 +56,7 @@
 
 ## Ключевые переменные
 
-- `TREED_MAIN_MCU_SERIAL_BY_ID` — Octopus Pro serial, default `/dev/serial/by-id/usb-Klipper_stm32f446xx_3B0027000D50535556323420-if00`.
-- `TREED_MAIN_MCU_SERIAL_MASK` — маска автопоиска main MCU (`/dev/serial/by-id/*stm32*` по умолчанию).
+- `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, default `d372e54bf965`.
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
@@ -66,7 +65,7 @@
 - `TREED_CAN_REINIT_ATTEMPTS` — default `5` (количество циклов down/up для восстановления CAN после reboot).
 - `TREED_CAN_REINIT_DELAY_SEC` — default `2` (пауза между reinit-циклами).
 - `TREED_KLIPPER_PREFLIGHT` — `0|1`, default `1`; включает readiness-проверку перед стартом Klipper.
-- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания main MCU и CAN MCU перед стартом Klipper.
+- `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания CAN-интерфейса и CAN MCU перед стартом Klipper.
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` — default `1`; интервал повторной проверки preflight.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `1`.

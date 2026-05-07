@@ -7,7 +7,7 @@ set -euo pipefail
 # Назначение:
 # - Выполняет финальные post-configuration проверки provisioning-контура.
 # - Сохраняет паритет dev-отчета (boot/time/camera/ui/services) в V2-модели.
-# - Валидирует V2 runtime: main MCU USB, CAN EBB(required), Eddy, Input Shaper.
+# - Валидирует V2 runtime: CAN Octopus/EBB(required), Eddy, Input Shaper.
 # Контур:
 # - required (непрошедшие проверки завершают loader с ошибкой).
 
@@ -629,6 +629,7 @@ if [ -f "${CAN_SETUP_ENV_FILE}" ]; then
   CAN_ENV_TXQUEUE="$(sed -nE 's|^[[:space:]]*TREED_CAN_TXQUEUE=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
   CAN_ENV_RESTART_MS="$(sed -nE 's|^[[:space:]]*TREED_CAN_RESTART_MS=([0-9]+)[[:space:]]*$|\1|p' "${CAN_SETUP_ENV_FILE}" | tail -n1 | tr -d '\r\n')"
 fi
+TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-${CAN_ENV_IFACE:-can0}}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-1000000}}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-${CAN_ENV_TXQUEUE:-1024}}"
@@ -639,7 +640,7 @@ TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 
 PROFILE_DIR="${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1"
 PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
-MAIN_CFG_RUNTIME="${PROFILE_DIR}/mcu_main_octopus_usb.cfg"
+MAIN_CFG_RUNTIME="${PROFILE_DIR}/mcu_main_octopus_can.cfg"
 EBB_CFG_RUNTIME="${PROFILE_DIR}/ebb42_can.cfg"
 EDDY_CFG_RUNTIME="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
 STEPPERS_CFG_RUNTIME="${PROFILE_DIR}/steppers.cfg"
@@ -1014,7 +1015,7 @@ for required_file in "${PRINTER_CFG_RUNTIME}" "${MAIN_CFG_RUNTIME}" "${EBB_CFG_R
 done
 
 if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qF "[include profiles/treed_v2_corexy_v1/mcu_main_octopus_usb.cfg]" "${PRINTER_CFG_RUNTIME}"; then
+  && grep -qF "[include profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg]" "${PRINTER_CFG_RUNTIME}"; then
   pass "printer.cfg includes V2 main MCU config"
 else
   failf "printer.cfg includes V2 main MCU config"
@@ -1027,20 +1028,27 @@ else
   failf "printer.cfg includes V2 EBB config"
 fi
 
-runtime_main_serial=""
+runtime_main_uuid=""
 if [ -f "${MAIN_CFG_RUNTIME}" ]; then
-  runtime_main_serial="$(extract_cfg_value "serial" "${MAIN_CFG_RUNTIME}")"
+  runtime_main_uuid="$(extract_cfg_value "canbus_uuid" "${MAIN_CFG_RUNTIME}")"
 fi
-if [ -n "${runtime_main_serial}" ] && printf '%s' "${runtime_main_serial}" | grep -qE '^/dev/serial/by-id/.+'; then
-  pass "main MCU serial format (/dev/serial/by-id/*)"
+if [ -n "${runtime_main_uuid}" ] && ! printf '%s' "${runtime_main_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
+  pass "main MCU canbus_uuid is hex"
 else
-  failf "main MCU serial format (/dev/serial/by-id/*)"
+  failf "main MCU canbus_uuid is hex"
 fi
 
-if [ -n "${runtime_main_serial}" ] && [ -e "${runtime_main_serial}" ] && [ -r "${runtime_main_serial}" ]; then
-  pass "main MCU serial path exists/readable (${runtime_main_serial})"
+if [ -n "${runtime_main_uuid}" ] && [ "${runtime_main_uuid}" = "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
+  pass "main MCU canbus_uuid matches ${TREED_MAIN_MCU_CANBUS_UUID}"
 else
-  failf "main MCU serial path exists/readable (${runtime_main_serial:-missing})"
+  failf "main MCU canbus_uuid matches ${TREED_MAIN_MCU_CANBUS_UUID}"
+fi
+
+if [ -f "${MAIN_CFG_RUNTIME}" ] \
+  && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${MAIN_CFG_RUNTIME}"; then
+  pass "main MCU canbus_interface is ${TREED_CAN_IFACE}"
+else
+  failf "main MCU canbus_interface is ${TREED_CAN_IFACE}"
 fi
 
 runtime_ebb_uuid=""
