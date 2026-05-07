@@ -263,21 +263,39 @@ deadline=$((SECONDS + TREED_KLIPPER_PREFLIGHT_WAIT_SEC))
 
 IP_BIN="$(command -v ip || true)"
 if [ -z "${IP_BIN}" ]; then
-  log_error "ip command not found"
-  exit 1
+  if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
+    log_error "ip command not found"
+    exit 1
+  fi
+  log_info "CAN interface readiness check unavailable, ip command not found"
+  exit 0
 fi
 
-wait_until_deadline \
-  "\"${IP_BIN}\" link show '${TREED_CAN_IFACE}' >/dev/null 2>&1" \
-  "CAN interface is present (${TREED_CAN_IFACE})" \
-  "CAN interface is missing after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_CAN_IFACE})" \
-  "${deadline}"
+if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then
+  wait_until_deadline \
+    "\"${IP_BIN}\" link show '${TREED_CAN_IFACE}' >/dev/null 2>&1" \
+    "CAN interface is present (${TREED_CAN_IFACE})" \
+    "CAN interface is missing after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_CAN_IFACE})" \
+    "${deadline}"
 
-wait_until_deadline \
-  "\"${IP_BIN}\" link show '${TREED_CAN_IFACE}' 2>/dev/null | grep -q '<[^>]*UP[^>]*>'" \
-  "CAN interface is UP (${TREED_CAN_IFACE})" \
-  "CAN interface is not UP after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_CAN_IFACE})" \
-  "${deadline}"
+  wait_until_deadline \
+    "\"${IP_BIN}\" link show '${TREED_CAN_IFACE}' 2>/dev/null | grep -q '<[^>]*UP[^>]*>'" \
+    "CAN interface is UP (${TREED_CAN_IFACE})" \
+    "CAN interface is not UP after ${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}s (${TREED_CAN_IFACE})" \
+    "${deadline}"
+else
+  if "${IP_BIN}" link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
+    log_info "CAN interface is present (${TREED_CAN_IFACE})"
+  else
+    log_info "CAN interface is missing (${TREED_CAN_IFACE}, non-blocking)"
+  fi
+
+  if "${IP_BIN}" link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q '<[^>]*UP[^>]*>'; then
+    log_info "CAN interface is UP (${TREED_CAN_IFACE})"
+  else
+    log_info "CAN interface is not UP (${TREED_CAN_IFACE}, non-blocking)"
+  fi
+fi
 
 if [ -z "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
   if [ "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" = "1" ]; then

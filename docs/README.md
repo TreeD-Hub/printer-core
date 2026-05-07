@@ -71,7 +71,7 @@ sudo TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID}" \
 - `TREED_KLIPPER_PREFLIGHT` — `0|1`, default `1`; включает readiness-проверку перед стартом Klipper.
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания CAN-интерфейса и CAN MCU.
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` — default `1`; интервал повторной проверки.
-- `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` — `0|1`, default `0`; при `1` отсутствие UUID в `canbus_query.py` блокирует старт Klipper, при `0` только логируется.
+- `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` — `0|1`, default `0`; при `1` preflight strict (CAN iface + UUID) и блокирует старт Klipper, при `0` проверки только логируются.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `1`.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.

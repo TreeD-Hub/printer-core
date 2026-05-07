@@ -90,6 +90,7 @@ Assert-Contains "loader/steps/klipper-profiles.sh" 'TREED_MAIN_MCU_CANBUS_UUID:-
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CAN UUID readiness is diagnostic' "runtime preflight documents non-blocking CAN UUID readiness"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED' "runtime preflight exposes strict CAN UUID gate"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CAN UUID readiness check unavailable' "runtime preflight does not block when diagnostic query tooling is unavailable"
+Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CAN interface is missing .*non-blocking' "runtime preflight does not block on CAN interface in diagnostic mode"
 Assert-Contains "loader/steps/maintenance-start.sh" 'journalctl -u "\$\{unit\}" -n 120' "maintenance-start prints recent journal on required service start failure"
 Assert-Contains "loader/steps/klipper-profiles.sh" 'TREED_EBB_CANBUS_UUID:-efaf957ab20f' "klipper-profiles defaults to the detected EBB UUID"
 Assert-Contains "loader/steps/klipper-profiles.sh" 'TREED_EDDY_ENABLED:-1' "klipper-profiles enables Eddy by default"
