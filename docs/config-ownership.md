@@ -99,9 +99,10 @@ Optional:
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
 
-При `TREED_EDDY_ENABLED=1` профиль использует два раздельных Z-контура:
-- `G28 Z` и UI Home Z опускают стол к Zmax через `tmc5160_stepper_z:virtual_endstop`;
-- `TREED_Z_PARK_ZERO_EDDY` ищет рабочий Z0 через Eddy после сохраненной `PROBE_EDDY_CURRENT_CALIBRATE`.
+При `TREED_EDDY_ENABLED=1` профиль использует Eddy как штатный рабочий Z-контур:
+- `stepper_z` работает через `probe:z_virtual_endstop`;
+- `G28 Z`, полный `G28` и `TREED_Z_PARK_ZERO_EDDY` ищут рабочий Z0 через Eddy после сохраненной `PROBE_EDDY_CURRENT_CALIBRATE`;
+- Zmax sensorless DIAG оставлен только как аппаратный резерв вне основного Eddy-профиля.
 
 Fail-fast сценарии:
 - пустой `TREED_MAIN_MCU_CANBUS_UUID` -> fail;

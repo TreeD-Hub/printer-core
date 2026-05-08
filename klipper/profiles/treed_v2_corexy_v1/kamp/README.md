@@ -16,6 +16,9 @@
 - Подключение и fail-fast логика находятся в `macros_kamp.cfg`.
 - Включены только `Smart_Park` и `Line_Purge` (без adaptive mesh).
 
+Локальное отклонение:
+- `Smart_Park.cfg` вычисляет fallback-центр через `axis_minimum`/`axis_maximum`, чтобы не держать привязку к нулевому минимуму осей.
+
 Как обновлять snapshot:
 1. Скопировать нужные файлы из `Configuration/` upstream-репозитория.
 2. Обновить commit в этом README.

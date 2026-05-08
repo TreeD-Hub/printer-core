@@ -34,6 +34,6 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v
 - CAN adapter: U2C V2.1 (USB -> CAN).
 - Toolhead MCU: EBB42 по CAN (required).
 - Probe: Eddy / Eddy Duo по CAN (enabled by default).
-- Z: при Eddy enabled рабочий Z0 ищется через Eddy, сервисная нижняя парковка стола идет через TMC5160 sensorless к Zmax.
+- Z: при Eddy enabled штатный `G28 Z`/полный `G28` ищет рабочий Z0 через Eddy; Zmax sensorless оставлен только как аппаратный резерв вне основного профиля.
 
 Ветка `treed-v2` не поддерживает RN12/RPi/UART-миграции.
