@@ -394,16 +394,27 @@ klipper_mcu_journal_clean_check() {
   rm -f "${tmp}"
 }
 
-klipper_ebb_connected_check() {
+can_mcu_check_fail() {
+  local message="$1"
+  if is_true "${TREED_VERIFY_CAN_MCU_REQUIRED:-1}"; then
+    failf "${message}"
+  else
+    diagnostic_failf "${message}"
+  fi
+}
+
+klipper_can_mcus_connected_check() {
   local check_name="$1"
   local unit="klipper.service"
   local since=""
   local tmp=""
+  local mcu=""
   local patterns=""
   local error_patterns=""
+  local expected_mcus="mcu EBBCan"
 
   if ! command -v journalctl >/dev/null 2>&1; then
-    diagnostic_failf "${check_name} (journalctl missing)"
+    can_mcu_check_fail "${check_name} (journalctl missing)"
     return 0
   fi
 
@@ -412,32 +423,33 @@ klipper_ebb_connected_check() {
     ""|"n/a") since="-20 min" ;;
   esac
 
-  tmp="$(mktemp "/tmp/treed_verify_klipper_ebb_XXXXXX.log")"
+  tmp="$(mktemp "/tmp/treed_verify_klipper_can_mcu_XXXXXX.log")"
   if journalctl -u "${unit}" --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
     :
   else
-    diagnostic_failf "${check_name} (cannot read journal since=${since})"
+    can_mcu_check_fail "${check_name} (cannot read journal since=${since})"
     rm -f "${tmp}"
     return 0
   fi
 
-  patterns="Loaded MCU 'EBBCan'|Configured MCU 'EBBCan'"
-  error_patterns="MCU 'EBBCan' shutdown|mcu 'EBBCan': Unable to connect|Lost communication with MCU|Timeout with MCU"
-  if grep -Eiq "${patterns}" "${tmp}"; then
-    pass "${check_name}"
-  else
-    if journalctl -u "${unit}" -n 400 --no-pager > "${tmp}" 2>/dev/null; then
-      if grep -Eiq "${patterns}" "${tmp}"; then
-        pass "${check_name} (markers found in recent journal)"
-      elif grep -Eiq "${error_patterns}" "${tmp}"; then
-        diagnostic_failf "${check_name} (EBBCan errors found in recent journal)"
+  if [ "${TREED_EDDY_ENABLED:-1}" = "1" ]; then
+    expected_mcus="${expected_mcus} eddy"
+  fi
+
+  for mcu in ${expected_mcus}; do
+    patterns="Loaded MCU '${mcu}'|Configured MCU '${mcu}'"
+    error_patterns="MCU '${mcu}' shutdown|mcu '${mcu}': Unable to connect|Lost communication with MCU '${mcu}'|Timeout with MCU '${mcu}'"
+
+    if grep -Eiq "${patterns}" "${tmp}"; then
+      if grep -Eiq "${error_patterns}" "${tmp}"; then
+        can_mcu_check_fail "${check_name}: MCU '${mcu}' has connection errors since=${since}"
       else
-        pass "${check_name} (no startup markers, but no EBBCan errors in recent journal)"
+        pass "${check_name}: MCU '${mcu}' connected"
       fi
     else
-      diagnostic_failf "${check_name} (no EBBCan startup markers since=${since})"
+      can_mcu_check_fail "${check_name}: MCU '${mcu}' has no startup markers since=${since}"
     fi
-  fi
+  done
 
   rm -f "${tmp}"
 }
@@ -679,6 +691,24 @@ case "${TREED_REQUIRE_KLIPPER_READY}" in
   *)
     failf "TREED_REQUIRE_KLIPPER_READY is valid (0|1, current=${TREED_REQUIRE_KLIPPER_READY})"
     TREED_REQUIRE_KLIPPER_READY="0"
+    ;;
+esac
+
+TREED_VERIFY_CONFIG="${TREED_VERIFY_CONFIG:-0}"
+case "${TREED_VERIFY_CONFIG}" in
+  0|1|true|TRUE|yes|YES|on|ON|false|FALSE|no|NO|off|OFF) ;;
+  *)
+    failf "TREED_VERIFY_CONFIG is valid (0|1, current=${TREED_VERIFY_CONFIG})"
+    TREED_VERIFY_CONFIG="0"
+    ;;
+esac
+
+TREED_VERIFY_CAN_MCU_REQUIRED="${TREED_VERIFY_CAN_MCU_REQUIRED:-1}"
+case "${TREED_VERIFY_CAN_MCU_REQUIRED}" in
+  0|1|true|TRUE|yes|YES|on|ON|false|FALSE|no|NO|off|OFF) ;;
+  *)
+    failf "TREED_VERIFY_CAN_MCU_REQUIRED is valid (0|1, current=${TREED_VERIFY_CAN_MCU_REQUIRED})"
+    TREED_VERIFY_CAN_MCU_REQUIRED="1"
     ;;
 esac
 
@@ -1000,7 +1030,7 @@ moonraker_server_info_check "Moonraker HTTP 127.0.0.1:7125 /server/info" "${MOON
 moonraker_server_info_check "nginx proxy /server/info" "${MAINSAIL_MOONRAKER_PROXY_INFO_URL}" "proxy"
 printer_info_check "Klipper /printer/info" "${MOONRAKER_PRINTER_INFO_URL}"
 klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
-klipper_ebb_connected_check "klipper startup connected EBBCan"
+klipper_can_mcus_connected_check "klipper CAN MCU connectivity"
 
 if ip -details link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
   pass "CAN interface present (${TREED_CAN_IFACE})"
@@ -1032,6 +1062,8 @@ else
   diagnostic_failf "CAN restart-ms ${TREED_CAN_RESTART_MS}"
 fi
 
+# Блок 8-9: Проверки runtime-профиля V2 и MCU binding (опционально).
+if is_true "${TREED_VERIFY_CONFIG}"; then
 # Блок 8: Проверки runtime-профиля V2 и MCU binding.
 for required_file in "${PRINTER_CFG_RUNTIME}" "${MAIN_CFG_RUNTIME}" "${EBB_CFG_RUNTIME}" "${EDDY_CFG_RUNTIME}" "${STEPPERS_CFG_RUNTIME}" "${INPUT_SHAPER_CFG}"; do
   if [ -f "${required_file}" ]; then
@@ -1338,6 +1370,9 @@ else
   else
     failf "stepper_z position_endstop ${TREED_Z_POSITION_ENDSTOP}"
   fi
+fi
+else
+  log_info "VERIFY runtime profile checks skipped (TREED_VERIFY_CONFIG=${TREED_VERIFY_CONFIG})"
 fi
 
 # Блок 10: Проверки состояния KlipperScreen (required/optional режимы).

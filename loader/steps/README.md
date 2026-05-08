@@ -33,7 +33,7 @@
 | 25 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
 | 26 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
 | 27 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью, включая проверки sensorless X/Y и Input Shaper. |
+| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью; runtime config-checks включаются отдельно через `TREED_VERIFY_CONFIG=1`. |
 
 ## Контракт для step-скриптов
 
@@ -166,6 +166,8 @@
 - `TREED_MOONRAKER_HTTP_RETRIES` (default `30`)
 - `TREED_KLIPPER_START_REQUIRE_ACTIVE` (`0|1`, default `0`; при `0` ожидание `klipper.service active` в `maintenance-start` диагностическое)
 - `TREED_REQUIRE_KLIPPER_READY` (`0|1`, default `0`; при `1` `verify.sh` считает `Klippy state!=ready` блокирующей ошибкой)
+- `TREED_VERIFY_CAN_MCU_REQUIRED` (`0|1`, default `1`; при `1` `verify.sh` блокирует deploy, если `klipper.service` не поднял все ожидаемые CAN-MCU: `mcu`, `EBBCan`, и `eddy` при `TREED_EDDY_ENABLED=1`)
+- `TREED_VERIFY_CONFIG` (`0|1`, default `0`; при `1` включает проверки runtime-профиля Klipper: include-цепочка, CAN UUID/interface и sensorless-контур)
 - `TREED_ARMBIAN_VERBOSITY` (default `1`)
 - `TREED_ARMBIAN_BOOTLOGO` (default `true`)
 - `TREED_ARMBIAN_CONSOLE` (default `both`)
@@ -215,4 +217,5 @@
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
-- `verify.sh` разделяет fatal и diagnostic: runtime-файлы, include-цепочка, unit-файлы и CAN UUID в конфигах остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-состояние CAN/Klipper по умолчанию диагностические.
+- `verify.sh` разделяет fatal и diagnostic: сервисы/HTTP/boot-путь, startup-связность CAN-MCU (`mcu`, `EBBCan`, optional `eddy`) и прочие required-checks остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-параметры CAN-интерфейса по умолчанию диагностические.
+- Конфиг-проверки runtime-профиля (`printer.cfg`, include-цепочка, CAN UUID/interface, sensorless X/Y/Z, Eddy include) по умолчанию отключены и выполняются только при `TREED_VERIFY_CONFIG=1`.
