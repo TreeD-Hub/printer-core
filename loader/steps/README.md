@@ -10,7 +10,7 @@
 | 2 | `detect-boot-env.sh` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-путей. |
 | 3 | `timezone-sync.sh` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop.sh` | required | Остановка runtime-сервисов перед provisioning. |
-| 5 | `packages-core.sh` | required | Базовые системные пакеты. |
+| 5 | `packages-core.sh` | required | Базовые системные пакеты и numpy/matplotlib/BLAS-зависимости. |
 | 6 | `runtime-bootstrap.sh` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов. |
 | 7 | `can-setup.sh` | required | Подъем CAN интерфейса (`can0`) через systemd oneshot + `ip link`. |
 | 8 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum. |
@@ -202,6 +202,7 @@
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
+- `runtime-bootstrap.sh` после подготовки `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}` проверяет импорт `numpy` и `matplotlib`: если пакет уже есть, логирует skip; если нет, ставит текущий стабильный релиз через pip.
 - `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: в default-режиме (`TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0`) проверяется только состояние `can0`, а `canbus_query.py` не запускается; strict UUID-gate включается через `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
 - `runtime-bootstrap.sh` устанавливает/обновляет Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`; при `TREED_CAMERA_REQUIRED=1` ошибки Crowsnest становятся блокирующими.
 - `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.

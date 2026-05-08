@@ -163,6 +163,36 @@ ensure_python_venv() {
   run_as_pi "set -euo pipefail; '${env_dir}/bin/pip' install -r '${req_file}'"
 }
 
+ensure_klippy_numpy() {
+  if [ ! -x "${KLIPPY_ENV_DIR}/bin/python" ]; then
+    log_error "runtime-bootstrap: klippy python is not executable: ${KLIPPY_ENV_DIR}/bin/python"
+    exit 1
+  fi
+
+  if run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/python' -c 'import numpy' >/dev/null 2>&1"; then
+    log_info "runtime-bootstrap: klippy numpy already installed, skip"
+    return 0
+  fi
+
+  log_info "runtime-bootstrap: installing numpy into ${KLIPPY_ENV_DIR}"
+  run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/pip' install numpy"
+}
+
+ensure_klippy_matplotlib() {
+  if [ ! -x "${KLIPPY_ENV_DIR}/bin/python" ]; then
+    log_error "runtime-bootstrap: klippy python is not executable: ${KLIPPY_ENV_DIR}/bin/python"
+    exit 1
+  fi
+
+  if run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/python' -c 'import matplotlib' >/dev/null 2>&1"; then
+    log_info "runtime-bootstrap: klippy matplotlib already installed, skip"
+    return 0
+  fi
+
+  log_info "runtime-bootstrap: installing matplotlib into ${KLIPPY_ENV_DIR}"
+  run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/pip' install matplotlib"
+}
+
 install_klipper_preflight() {
   ensure_dir "$(dirname "${KLIPPER_PREFLIGHT_SCRIPT}")"
 
@@ -556,6 +586,8 @@ if [ ! -f "${KLIPPER_REQ_FILE}" ]; then
 fi
 
 ensure_python_venv "${KLIPPY_ENV_DIR}" "${KLIPPER_REQ_FILE}"
+ensure_klippy_numpy
+ensure_klippy_matplotlib
 install_klipper_preflight
 
 cat > /etc/systemd/system/klipper.service <<EOF

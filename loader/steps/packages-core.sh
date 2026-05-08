@@ -20,6 +20,7 @@ apt_get_noninteractive install \
   plymouth plymouth-themes plymouth-label \
   rsync curl v4l-utils git acl \
   python3 python3-pip python3-venv python3-dev \
+  python3-numpy python3-matplotlib libatlas-base-dev libopenblas-dev \
   build-essential libffi-dev libssl-dev \
   gcc-avr binutils-avr avr-libc \
   gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi

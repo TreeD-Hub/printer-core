@@ -30,7 +30,7 @@
 | 2 | `detect-boot-env` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-файлов. |
 | 3 | `timezone-sync` | required | Синхронизация timezone/NTP. |
 | 4 | `maintenance-stop` | required | Контролируемая остановка runtime-сервисов. |
-| 5 | `packages-core` | required | Установка базовых пакетов. |
+| 5 | `packages-core` | required | Установка базовых пакетов и numpy/matplotlib/BLAS-зависимостей. |
 | 6 | `runtime-bootstrap` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов; Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`. |
 | 7 | `can-setup` | required | Подъем `can0` через systemd oneshot + `ip link`. |
 | 8 | `firmware-build` | required | Сборка firmware main+EBB(+Eddy) и публикация build-отчета. |
@@ -82,6 +82,7 @@
 - `TREED_FIRMWARE_ARTIFACTS_DIR` — default `${PI_HOME}/treed/firmware-artifacts/treed-v2`.
 - `TREED_FW_MAIN_CONFIG` / `TREED_FW_EBB_CONFIG` / `TREED_FW_EDDY_CONFIG` — пути к Kconfig target-файлам сборки.
 - `TREED_RUNTIME_BOOTSTRAP` — `0|1`, default `1` (создание/проверка unit-файлов и venv Klipper/Moonraker).
+- `TREED_KLIPPY_ENV_DIR` — default `${PI_HOME}/klippy-env`; venv Klipper, куда `runtime-bootstrap` при первом запуске ставит `numpy` и `matplotlib`.
 - `TREED_CROWSNEST_SRC_DIR` — default `${PI_HOME}/crowsnest`, upstream checkout Crowsnest.
 - `TREED_CROWSNEST_REPO` — default `https://github.com/mainsail-crew/crowsnest.git`.
 - `TREED_CROWSNEST_REF` — optional pin branch/tag/commit для Crowsnest.
@@ -109,6 +110,8 @@
 ## Запуск
 
 `runtime-bootstrap` поддерживает полную Git metadata для Klipper/Moonraker/Crowsnest: новые checkout'ы не создаются shallow-клонами, а существующие shallow-репозитории разворачиваются через `git fetch --unshallow --tags`. Это нужно, чтобы Moonraker update_manager видел реальные semver-версии, а не `v0.0.0-...-inferred`.
+
+`runtime-bootstrap` проверяет `numpy` и `matplotlib` в `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}`: если импорт уже работает, установка пропускается; если пакета нет, ставится текущий стабильный релиз через pip в существующий venv Klipper.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
