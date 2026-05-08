@@ -32,9 +32,10 @@ Optional include:
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
 Z в основном Eddy-профиле работает через `probe:z_virtual_endstop`:
-- `G28 X` и `G28 Y` делают Z-hop перед своей осью;
-- `G28 X Y` и полный `G28` делают один общий Z-hop перед X/Y;
-- `G28 Z`, полный `G28` и `TREED_Z_PARK_ZERO_EDDY` ищут рабочий Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`;
+- `G28` остается штатной командой Klipper без macro override;
+- `_TREED_HOME_XY_SENSORLESS` делает Z-hop перед штатным `G28 X Y`;
+- `G28 Z` и полный `G28` используют Eddy как штатный `probe:z_virtual_endstop`;
+- `TREED_Z_PARK_ZERO_EDDY` дополнительно уточняет рабочий Z0 через `PROBE` и `SET_Z_FROM_PROBE`;
 - Zmax sensorless оставлен только как аппаратный резерв вне штатного G28-контура.
 
 Обязательные аппаратные предпосылки перед запуском loader:
@@ -61,7 +62,7 @@ Z в основном Eddy-профиле работает через `probe:z_v
 1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
 2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
 3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний и без жесткого клина Z.
-4. Критерий приемки: `G28 X` и `G28 Y` с single touch и Z-hop перед каждой отдельной осью; `G28 X Y` с одним общим Z-hop; затем `G28 Z` / полный `G28` через Eddy без ухода к Zmax.
+4. Критерий приемки: штатные `G28 X`, `G28 Y`, `G28 X Y` без macro override; `_TREED_HOME_XY_SENSORLESS` с одним Z-hop перед XY; затем `G28 Z` через Eddy без ухода к Zmax и `TREED_Z_PARK_ZERO_EDDY` с Eddy-коррекцией Z0.
 
 ## Первичная калибровка Eddy
 

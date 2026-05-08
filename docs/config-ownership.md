@@ -101,7 +101,9 @@ Optional:
 
 При `TREED_EDDY_ENABLED=1` профиль использует Eddy как штатный рабочий Z-контур:
 - `stepper_z` работает через `probe:z_virtual_endstop`;
-- `G28 Z`, полный `G28` и `TREED_Z_PARK_ZERO_EDDY` ищут рабочий Z0 через Eddy после сохраненной `PROBE_EDDY_CURRENT_CALIBRATE`;
+- `G28` остается штатной командой Klipper без macro override;
+- `G28 Z` и полный `G28` используют Eddy как штатный `probe:z_virtual_endstop`;
+- `TREED_Z_PARK_ZERO_EDDY` дополнительно уточняет рабочий Z0 через `PROBE` и `SET_Z_FROM_PROBE`;
 - Zmax sensorless DIAG оставлен только как аппаратный резерв вне основного Eddy-профиля.
 
 Fail-fast сценарии:
