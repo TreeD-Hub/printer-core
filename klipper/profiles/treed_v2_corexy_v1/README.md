@@ -11,15 +11,15 @@
 2. `profiles/treed_v2_corexy_v1/ebb42_can.cfg`
 3. `profiles/treed_v2_corexy_v1/printer_base.cfg`
 4. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
-5. `profiles/treed_v2_corexy_v1/steppers.cfg`
-6. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-7. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-8. `profiles/treed_v2_corexy_v1/macros.cfg`
-9. `profiles/treed_v2_corexy_v1/ui.cfg`
-10. `local_overrides.cfg`
-
-Optional include:
-- `profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg` включен в `klipper/printer.cfg` репозиторно; loader include-цепочку не переключает.
+5. `profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg`
+6. `profiles/treed_v2_corexy_v1/steppers.cfg`
+7. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
+8. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+9. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+10. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+11. `profiles/treed_v2_corexy_v1/macros.cfg`
+12. `profiles/treed_v2_corexy_v1/ui.cfg`
+13. `local_overrides.cfg`
 
 ## Контракт loader
 
@@ -28,12 +28,18 @@ Optional include:
 - `loader/steps/klipper-core.sh` раскладывает staging в runtime без post-deploy подстановок в `printer.cfg`/`profiles/*`;
 - `TREED_EDDY_ENABLED` влияет на firmware/build и CAN-проверки, но не переключает include-цепочку профиля.
 
-## X/Y sensorless (TMC5160 SPI) и Z (TMC5160 SPI)
+## X/Y sensorless (TMC5160 SPI) и Z через активный endstop профиля
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
-Z имеет два раздельных сервисных контура:
-- `G28 Z` / кнопка Home Z в UI — опускание стола к Zmax через TMC5160 sensorless и механический упор;
-- `TREED_Z_PARK_ZERO_EDDY` — рабочий поиск Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`, используется стартом печати.
+Профиль подключает override `G28`, который:
+- для `G28 X`, `G28 Y` и `G28 X Y` вызывает штатный `G28_BASE`, затем делает отход на 10 мм от X-max/Y-max и паузу 1 секунду для сброса stall-флага TMC5160;
+- перед `G28 Z` переводит голову в безопасную точку `X122.5 Y122.5`, если X/Y уже захоумлены или будут захоумлены в этом же вызове `G28`;
+- для `G28 Z` оставляет штатный endstop активного профиля.
+- если `G28 Z` вызван без готовых X/Y, макрос завершится с явной ошибкой и подсказкой сначала выполнить `G28` или `G28 X Y`.
+
+В текущем Eddy-профиле `stepper_z.endstop_pin = probe:z_virtual_endstop`, поэтому:
+- `G28 Z` / кнопка Home Z в UI используют штатный Z-endstop активного профиля, а при наличии (или запланированном в текущем макросе) homed X/Y сначала едут в безопасную точку стола;
+- `TREED_Z_PARK_ZERO_EDDY` остается рабочим макросом поиска Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;
@@ -41,8 +47,8 @@ Z имеет два раздельных сервисных контура:
 - на X/Y включены DIAG-джамперы в линии endstop;
 - X/Y механические концевики не участвуют в логике хоуминга;
 - Z-драйвер TMC5160/TMC5160T Pro стоит в слоте `MOTOR2_1`;
-- Z DIAG-джампер включен в линию Z-endstop (`PG10`);
-- рабочий Z0 ищется через Eddy, а нижняя парковка стола идет sensorless к Zmax.
+- Z DIAG-джампер на `PG10` остается аппаратным резервом для fallback-сценариев;
+- рабочий Z0 ищется через Eddy.
 
 База пинов (Octopus Pro):
 - `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
@@ -59,8 +65,8 @@ Z имеет два раздельных сервисных контура:
 
 1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
 2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
-3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний и без жесткого клина Z.
-4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний; затем `G28 Z` к Zmax и, после калибровки Eddy, `TREED_Z_PARK_ZERO_EDDY`.
+3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний.
+4. Критерий приемки: `G28 X` и `G28 Y` делают single touch, отход на 10 мм и паузу 1 секунду; полный `G28` перед `G28 Z` переводит голову в `X122.5 Y122.5`, затем `G28 Z` использует штатный Z-endstop активного профиля и, после калибровки Eddy, `TREED_Z_PARK_ZERO_EDDY`; отдельный `G28 Z` без предварительного/встроенного XY homing дает явную ошибку.
 
 ## Первичная калибровка Eddy
 
