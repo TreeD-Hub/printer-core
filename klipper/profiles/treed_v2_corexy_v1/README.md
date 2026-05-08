@@ -28,15 +28,12 @@ Optional include:
 - `loader/steps/klipper-core.sh` раскладывает staging в runtime без post-deploy подстановок в `printer.cfg`/`profiles/*`;
 - `TREED_EDDY_ENABLED` влияет на firmware/build и CAN-проверки, но не переключает include-цепочку профиля.
 
-## X/Y sensorless (TMC5160 SPI) и Z через Eddy
+## X/Y sensorless (TMC5160 SPI) и Z (TMC5160 SPI)
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
-Z в основном Eddy-профиле работает через `probe:z_virtual_endstop`:
-- `G28` остается штатной командой Klipper без macro override;
-- `_TREED_HOME_XY_SENSORLESS` делает Z-hop перед штатным `G28 X Y`;
-- `G28 Z` и полный `G28` используют Eddy как штатный `probe:z_virtual_endstop`;
-- `TREED_Z_PARK_ZERO_EDDY` дополнительно уточняет рабочий Z0 через `PROBE` и `SET_Z_FROM_PROBE`;
-- Zmax sensorless оставлен только как аппаратный резерв вне штатного G28-контура.
+Z имеет два раздельных сервисных контура:
+- `G28 Z` / кнопка Home Z в UI — опускание стола к Zmax через TMC5160 sensorless и механический упор;
+- `TREED_Z_PARK_ZERO_EDDY` — рабочий поиск Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`, используется стартом печати.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;
@@ -44,7 +41,8 @@ Z в основном Eddy-профиле работает через `probe:z_v
 - на X/Y включены DIAG-джамперы в линии endstop;
 - X/Y механические концевики не участвуют в логике хоуминга;
 - Z-драйвер TMC5160/TMC5160T Pro стоит в слоте `MOTOR2_1`;
-- рабочий Z0 ищется через Eddy; Z DIAG (`PG10`) в основном профиле не является штатным Z-endstop.
+- Z DIAG-джампер включен в линию Z-endstop (`PG10`);
+- рабочий Z0 ищется через Eddy, а нижняя парковка стола идет sensorless к Zmax.
 
 База пинов (Octopus Pro):
 - `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
@@ -62,7 +60,7 @@ Z в основном Eddy-профиле работает через `probe:z_v
 1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
 2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
 3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний и без жесткого клина Z.
-4. Критерий приемки: штатные `G28 X`, `G28 Y`, `G28 X Y` без macro override; `_TREED_HOME_XY_SENSORLESS` с одним Z-hop перед XY; затем `G28 Z` через Eddy без ухода к Zmax и `TREED_Z_PARK_ZERO_EDDY` с Eddy-коррекцией Z0.
+4. Критерий приемки: `G28 X` и `G28 Y` с single touch, без ложных срабатываний; затем `G28 Z` к Zmax и, после калибровки Eddy, `TREED_Z_PARK_ZERO_EDDY`.
 
 ## Первичная калибровка Eddy
 
