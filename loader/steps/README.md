@@ -214,5 +214,5 @@
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
-- `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с `tools/pkglist.sh`; updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
+- `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
 - `verify.sh` разделяет fatal и diagnostic: runtime-файлы, include-цепочка, unit-файлы и CAN UUID в конфигах остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-состояние CAN/Klipper по умолчанию диагностические.

@@ -209,10 +209,16 @@ is_valid_crowsnest_repo_path() {
   if [ ! -d "${candidate}/.git" ]; then
     return 1
   fi
-  if [ ! -f "${candidate}/tools/pkglist.sh" ]; then
-    return 1
+  # Совместимость с legacy и v5:
+  # - legacy: updater через tools/pkglist.sh
+  # - v5: updater через system-dependencies.json + requirements.txt
+  if [ -f "${candidate}/tools/pkglist.sh" ]; then
+    return 0
   fi
-  return 0
+  if [ -f "${candidate}/system-dependencies.json" ] && [ -f "${candidate}/requirements.txt" ]; then
+    return 0
+  fi
+  return 1
 }
 
 resolve_crowsnest_repo_path() {
@@ -339,7 +345,7 @@ configure_crowsnest_updater_section() {
     log_info "moonraker-config: crowsnest updater enabled (path=${crowsnest_path})"
   else
     disable_update_manager_section "${core_cfg}" "crowsnest"
-    log_warn "moonraker-config: crowsnest updater disabled (no valid git checkout with tools/pkglist.sh)"
+    log_warn "moonraker-config: crowsnest updater disabled (no compatible git checkout metadata)"
   fi
 }
 
