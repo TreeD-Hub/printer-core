@@ -30,6 +30,24 @@ function Assert-NotContains {
   }
 }
 
+function Assert-Order {
+  param(
+    [string]$Path,
+    [string]$FirstPattern,
+    [string]$SecondPattern,
+    [string]$Message
+  )
+
+  $content = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot $Path) -Raw
+  $first = [regex]::Match($content, $FirstPattern)
+  $second = [regex]::Match($content, $SecondPattern)
+  if (-not $first.Success -or -not $second.Success -or $first.Index -ge $second.Index) {
+    throw "FAIL: $Message ($Path)"
+  }
+}
+
+Assert-Contains "loader/lib/boot-env.sh" '\[ -f "\$\{dir\}/extlinux/extlinux\.conf" \]' "boot dir detection treats extlinux.conf as a boot marker"
+Assert-Order "loader/lib/boot-env.sh" 'armbian_env="\$\(detect_armbian_env_file "\$\{boot_dir\}"\)"[\s\S]*echo "armbian"' 'echo "rpi"' "boot backend detection prefers Armbian/extlinux markers before RPi cmdline/config"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'TREED_CROWSNEST_REPO' "runtime-bootstrap exposes Crowsnest repo configuration"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'ensure_crowsnest_runtime' "runtime-bootstrap installs or updates Crowsnest runtime"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CROWSNEST_UNATTENDED=1' "Crowsnest install runs unattended"
