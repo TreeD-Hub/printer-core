@@ -21,8 +21,6 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `1`.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
-- `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
-- `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; disables apt/dpkg/needrestart prompts.
 - `TREED_KLIPPERSCREEN_INSTALL_SERVICE` — answer for KlipperScreen service install, default `1`.
 - `TREED_KLIPPERSCREEN_BACKEND` — answer for KlipperScreen graphical backend, default `X`.

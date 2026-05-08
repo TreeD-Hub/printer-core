@@ -327,7 +327,6 @@ STEPS=(
 
   # Конфигурация Klipper/Moonraker/камера/UI.
   "klipper-sync"             # Репозиторные конфиги -> staging: ~/treed/klipper.
-  "klipper-profiles"         # Применение профиля V2 и идентификаторов main/CAN MCU в staging.
   "klipper-core"             # Раскладка staging -> runtime: ~/printer_data/config.
   "klipper-anti-shutdown"    # Сброс MCU shutdown при обнаружении после раскладки.
   "mainsail-web"             # Развертывание Mainsail web-layer + nginx reverse proxy.

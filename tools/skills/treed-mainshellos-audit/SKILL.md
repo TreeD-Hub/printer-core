@@ -22,14 +22,14 @@ description: Проводить read-only аудит репозитория tree
 
 - Читать исходники и конфиги точечно, не перегружая контекст.
 - На каждое замечание фиксировать доказательство в формате `path:line`.
-- Для поиска использовать `git grep`; для статической валидации конфигов Klipper использовать `python tools/validate_klipper_configs.py`, если аудит затрагивает `klipper/**`.
+- Для поиска использовать `git grep`.
 
 ### Шаг 3. Пройти проектный чеклист
 
 - Использовать полный чеклист: [references/audit-checklist.md](references/audit-checklist.md).
 - Обязательно проверять:
   - `loader/**`: идемпотентность шагов, fail-fast для критичных сервисов, корректный best-effort для опциональных.
-  - `klipper/**` и `moonraker/**`: include-цепочку, ownership/source-of-truth конфигурации.
+  - `klipper/**` и `moonraker/**`: ownership/source-of-truth конфигурации.
   - `docs/**` и `README.md`: соответствие фактическому коду и структуре каталогов.
   - `loader/**`, `runtime-scripts/**`, `moonraker/**`, `plymouth/**`, `tools/**`: соответствие формату комментариев проекта.
 

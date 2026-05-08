@@ -21,19 +21,18 @@
 | 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 16 | `klipper-profiles.sh` | required | Профиль V2: CAN UUID Octopus/EBB/Eddy, X/Y sensorless, Z0 через Eddy и Zmax sensorless. |
-| 17 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 18 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
-| 19 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
-| 20 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
-| 21 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
-| 22 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
-| 23 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 24 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
-| 25 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
-| 26 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
-| 27 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 28 | `verify.sh` | required | Финальная валидация V2-контура с паритетной отчетностью; runtime config-checks включаются отдельно через `TREED_VERIFY_CONFIG=1`. |
+| 16 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
+| 17 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
+| 18 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
+| 19 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
+| 20 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
+| 21 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
+| 22 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
+| 23 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
+| 24 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
+| 25 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
+| 26 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
+| 27 | `verify.sh` | required | Финальная валидация V2-контура (boot/service/http/CAN/camera), без проверки runtime-конфигов. |
 
 ## Контракт для step-скриптов
 
@@ -81,8 +80,6 @@
 - `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
-- `TREED_Z_ENDSTOP_PIN` (default `PG10`, used when `TREED_EDDY_ENABLED=0`)
-- `TREED_Z_POSITION_ENDSTOP` (default `0.5`, used when `TREED_EDDY_ENABLED=0`)
 
 ### Firmware build
 
@@ -160,14 +157,12 @@
 - `TREED_TIMEZONE` (default `Europe/Moscow`)
 - `TREED_ENABLE_NTP` (default `1`)
 - `TREED_MASK_TTY1` (default `1`)
-- `TREED_VERIFY_CAMERA` (`auto|0|1`, default `auto`; в `auto` HTTP-проверки камеры запускаются только при наличии webcam-fragment и `crowsnest.service`)
+- `TREED_VERIFY_CAMERA` (`auto|0|1`, default `auto`; в `auto` HTTP-проверки камеры запускаются только при наличии `crowsnest.service`)
 - `TREED_CAM_HTTP_RETRIES` (default `3`)
 - `TREED_CAM_HTTP_TIMEOUT` (default `8`)
 - `TREED_MOONRAKER_HTTP_RETRIES` (default `30`)
 - `TREED_KLIPPER_START_REQUIRE_ACTIVE` (`0|1`, default `0`; при `0` ожидание `klipper.service active` в `maintenance-start` диагностическое)
 - `TREED_REQUIRE_KLIPPER_READY` (`0|1`, default `0`; при `1` `verify.sh` считает `Klippy state!=ready` блокирующей ошибкой)
-- `TREED_VERIFY_CAN_MCU_REQUIRED` (`0|1`, default `1`; при `1` `verify.sh` блокирует deploy, если `klipper.service` не поднял все ожидаемые CAN-MCU: `mcu`, `EBBCan`, и `eddy` при `TREED_EDDY_ENABLED=1`)
-- `TREED_VERIFY_CONFIG` (`0|1`, default `0`; при `1` включает проверки runtime-профиля Klipper: include-цепочка, CAN UUID/interface и sensorless-контур)
 - `TREED_ARMBIAN_VERBOSITY` (default `1`)
 - `TREED_ARMBIAN_BOOTLOGO` (default `true`)
 - `TREED_ARMBIAN_CONSOLE` (default `both`)
@@ -210,12 +205,11 @@
 - `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: в default-режиме (`TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0`) проверяется только состояние `can0`, а `canbus_query.py` не запускается; strict UUID-gate включается через `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
 - `runtime-bootstrap.sh` устанавливает/обновляет Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`; при `TREED_CAMERA_REQUIRED=1` ошибки Crowsnest становятся блокирующими.
 - `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.
-- `klipper-profiles.sh` подставляет зафиксированные CAN UUID Octopus/EBB/Eddy и fail-fast при невалидном hex-формате.
-- `klipper-profiles.sh` включает Eddy include по умолчанию (`TREED_EDDY_ENABLED=1`).
+- `klipper-core.sh` раскладывает `printer_data/config` напрямую из staging-дерева `klipper/` (источник правды — репозиторий).
 - Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. При Eddy enabled `G28 Z`/UI Home Z паркует стол к Zmax через TMC5160 DIAG на `PG10`, а `TREED_Z_PARK_ZERO_EDDY` используется стартом печати для рабочего Z0 после сохраненной Eddy-калибровки.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
-- `verify.sh` разделяет fatal и diagnostic: сервисы/HTTP/boot-путь, startup-связность CAN-MCU (`mcu`, `EBBCan`, optional `eddy`) и прочие required-checks остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-параметры CAN-интерфейса по умолчанию диагностические.
-- Конфиг-проверки runtime-профиля (`printer.cfg`, include-цепочка, CAN UUID/interface, sensorless X/Y/Z, Eddy include) по умолчанию отключены и выполняются только при `TREED_VERIFY_CONFIG=1`.
+- `verify.sh` разделяет fatal и diagnostic: сервисы/HTTP/boot-путь, а также доступность MCU-объектов Klipper (`mcu`, `mcu EBBCan`, optional `mcu eddy`) остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-параметры CAN-интерфейса по умолчанию диагностические.
+- `verify.sh` не проверяет runtime-конфиги Klipper (`printer.cfg`, include-цепочку, sensorless-параметры): этап оставлен только для runtime-сервисов и доступности контуров.

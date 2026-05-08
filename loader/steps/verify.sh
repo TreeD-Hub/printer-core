@@ -61,29 +61,6 @@ is_true() {
   esac
 }
 
-extract_cfg_value() {
-  local key_regex="$1"
-  local file="$2"
-  sed -nE "s|^[[:space:]]*${key_regex}[[:space:]]*:[[:space:]]*([^[:space:]#]+).*|\\1|p" "${file}" | head -n 1 || true
-}
-
-read_klipperscreen_main_theme() {
-  local cfg="$1"
-  awk '
-    BEGIN { in_main = 0 }
-    /^[[:space:]]*\[main\][[:space:]]*$/ { in_main = 1; next }
-    in_main && /^[[:space:]]*\[[^]]+\][[:space:]]*$/ { in_main = 0 }
-    in_main && /^[[:space:]]*theme[[:space:]]*[:=]/ {
-      line = $0
-      sub(/^[[:space:]]*theme[[:space:]]*[:=][[:space:]]*/, "", line)
-      sub(/[[:space:]]*(#|;).*$/, "", line)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-      print line
-      exit
-    }
-  ' "${cfg}"
-}
-
 read_extlinux_append() {
   local cfg="$1"
   awk '
@@ -160,30 +137,6 @@ verify_video_token_policy() {
       pass "${scope} video check skipped (TREED_HDMI_MODE=off)"
       ;;
   esac
-}
-
-extract_required_theme_icons() {
-  local style_file="$1"
-  if [ ! -f "${style_file}" ]; then
-    return 0
-  fi
-
-  grep -Eo "images/[^\"' )?#;]+" "${style_file}" 2>/dev/null \
-    | sed 's|^images/||' \
-    | sort -u
-}
-
-missing_required_icons() {
-  local images_dir="$1"
-  local required_icons="$2"
-  local icon=""
-
-  while IFS= read -r icon; do
-    [ -z "${icon}" ] && continue
-    if [ ! -f "${images_dir}/${icon}" ]; then
-      printf '%s\n' "${icon}"
-    fi
-  done <<< "${required_icons}"
 }
 
 check_required_service_active() {
@@ -394,64 +347,86 @@ klipper_mcu_journal_clean_check() {
   rm -f "${tmp}"
 }
 
-can_mcu_check_fail() {
-  local message="$1"
-  if is_true "${TREED_VERIFY_CAN_MCU_REQUIRED:-1}"; then
-    failf "${message}"
-  else
-    diagnostic_failf "${message}"
-  fi
-}
-
 klipper_can_mcus_connected_check() {
   local check_name="$1"
-  local unit="klipper.service"
-  local since=""
-  local tmp=""
-  local mcu=""
-  local patterns=""
-  local error_patterns=""
-  local expected_mcus="mcu EBBCan"
+  local list_url="http://127.0.0.1:7125/printer/objects/list"
+  local query_base_url="http://127.0.0.1:7125/printer/objects/query"
+  local retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
+  local list_tmp query_tmp code attempt query_string encoded
+  local -a expected_mcus
+  local mcu_name
 
-  if ! command -v journalctl >/dev/null 2>&1; then
-    can_mcu_check_fail "${check_name} (journalctl missing)"
+  if ! command -v curl >/dev/null 2>&1; then
+    failf "${check_name} (curl missing)"
     return 0
   fi
 
-  since="$(systemctl show -p ActiveEnterTimestamp --value "${unit}" 2>/dev/null | tr -d '\r\n')"
-  case "${since}" in
-    ""|"n/a") since="-20 min" ;;
-  esac
-
-  tmp="$(mktemp "/tmp/treed_verify_klipper_can_mcu_XXXXXX.log")"
-  if journalctl -u "${unit}" --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
-    :
-  else
-    can_mcu_check_fail "${check_name} (cannot read journal since=${since})"
-    rm -f "${tmp}"
-    return 0
-  fi
-
+  expected_mcus=("mcu" "mcu EBBCan")
   if [ "${TREED_EDDY_ENABLED:-1}" = "1" ]; then
-    expected_mcus="${expected_mcus} eddy"
+    expected_mcus+=("mcu eddy")
   fi
 
-  for mcu in ${expected_mcus}; do
-    patterns="Loaded MCU '${mcu}'|Configured MCU '${mcu}'"
-    error_patterns="MCU '${mcu}' shutdown|mcu '${mcu}': Unable to connect|Lost communication with MCU '${mcu}'|Timeout with MCU '${mcu}'"
+  list_tmp="$(mktemp "/tmp/treed_verify_mcu_objects_XXXXXX.json")"
+  code=""
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${list_tmp}" -w '%{http_code}' "${list_url}" || true)"
+    if [ "${code}" = "200" ] && grep -qE '"objects"[[:space:]]*:' "${list_tmp}"; then
+      break
+    fi
+    sleep 1
+  done
 
-    if grep -Eiq "${patterns}" "${tmp}"; then
-      if grep -Eiq "${error_patterns}" "${tmp}"; then
-        can_mcu_check_fail "${check_name}: MCU '${mcu}' has connection errors since=${since}"
-      else
-        pass "${check_name}: MCU '${mcu}' connected"
-      fi
+  if [ "${code}" != "200" ] || ! grep -qE '"objects"[[:space:]]*:' "${list_tmp}"; then
+    failf "${check_name}: cannot read object list (http=${code:-n/a}, retries=${retries})"
+    rm -f "${list_tmp}"
+    return 0
+  fi
+
+  for mcu_name in "${expected_mcus[@]}"; do
+    if grep -Fq "\"${mcu_name}\"" "${list_tmp}"; then
+      pass "${check_name}: object '${mcu_name}' present"
     else
-      can_mcu_check_fail "${check_name}: MCU '${mcu}' has no startup markers since=${since}"
+      failf "${check_name}: object '${mcu_name}' missing"
     fi
   done
 
-  rm -f "${tmp}"
+  query_string=""
+  for mcu_name in "${expected_mcus[@]}"; do
+    encoded="${mcu_name// /%20}"
+    if [ -n "${query_string}" ]; then
+      query_string="${query_string}&"
+    fi
+    query_string="${query_string}${encoded}"
+  done
+
+  query_tmp="$(mktemp "/tmp/treed_verify_mcu_query_XXXXXX.json")"
+  code=""
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(
+      curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${query_tmp}" -w '%{http_code}' \
+        "${query_base_url}?${query_string}" || true
+    )"
+    if [ "${code}" = "200" ] && grep -qE '"status"[[:space:]]*:' "${query_tmp}"; then
+      break
+    fi
+    sleep 1
+  done
+
+  if [ "${code}" != "200" ] || ! grep -qE '"status"[[:space:]]*:' "${query_tmp}"; then
+    failf "${check_name}: cannot query MCU status (http=${code:-n/a}, retries=${retries})"
+    rm -f "${list_tmp}" "${query_tmp}"
+    return 0
+  fi
+
+  for mcu_name in "${expected_mcus[@]}"; do
+    if grep -Fq "\"${mcu_name}\":" "${query_tmp}"; then
+      pass "${check_name}: MCU '${mcu_name}' online"
+    else
+      failf "${check_name}: MCU '${mcu_name}' missing in status"
+    fi
+  done
+
+  rm -f "${list_tmp}" "${query_tmp}"
 }
 
 http_snapshot_check() {
@@ -674,16 +649,6 @@ TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-1000000}}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-${CAN_ENV_TXQUEUE:-1024}}"
 TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-${CAN_ENV_RESTART_MS:-100}}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
-TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
-TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
-
-PROFILE_DIR="${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1"
-PRINTER_CFG_RUNTIME="${PI_HOME}/printer_data/config/printer.cfg"
-MAIN_CFG_RUNTIME="${PROFILE_DIR}/mcu_main_octopus_can.cfg"
-EBB_CFG_RUNTIME="${PROFILE_DIR}/ebb42_can.cfg"
-EDDY_CFG_RUNTIME="${PROFILE_DIR}/probe_eddy_duo_optional.cfg"
-STEPPERS_CFG_RUNTIME="${PROFILE_DIR}/steppers.cfg"
-INPUT_SHAPER_CFG="${PROFILE_DIR}/input_shaper.cfg"
 
 TREED_REQUIRE_KLIPPER_READY="${TREED_REQUIRE_KLIPPER_READY:-0}"
 case "${TREED_REQUIRE_KLIPPER_READY}" in
@@ -691,24 +656,6 @@ case "${TREED_REQUIRE_KLIPPER_READY}" in
   *)
     failf "TREED_REQUIRE_KLIPPER_READY is valid (0|1, current=${TREED_REQUIRE_KLIPPER_READY})"
     TREED_REQUIRE_KLIPPER_READY="0"
-    ;;
-esac
-
-TREED_VERIFY_CONFIG="${TREED_VERIFY_CONFIG:-0}"
-case "${TREED_VERIFY_CONFIG}" in
-  0|1|true|TRUE|yes|YES|on|ON|false|FALSE|no|NO|off|OFF) ;;
-  *)
-    failf "TREED_VERIFY_CONFIG is valid (0|1, current=${TREED_VERIFY_CONFIG})"
-    TREED_VERIFY_CONFIG="0"
-    ;;
-esac
-
-TREED_VERIFY_CAN_MCU_REQUIRED="${TREED_VERIFY_CAN_MCU_REQUIRED:-1}"
-case "${TREED_VERIFY_CAN_MCU_REQUIRED}" in
-  0|1|true|TRUE|yes|YES|on|ON|false|FALSE|no|NO|off|OFF) ;;
-  *)
-    failf "TREED_VERIFY_CAN_MCU_REQUIRED is valid (0|1, current=${TREED_VERIFY_CAN_MCU_REQUIRED})"
-    TREED_VERIFY_CAN_MCU_REQUIRED="1"
     ;;
 esac
 
@@ -722,9 +669,7 @@ MOONRAKER_BASE_CORE_RUNTIME="${PI_HOME}/printer_data/config/moonraker/base/00-co
 MAINSAIL_HTTP_ROOT_URL="http://127.0.0.1/"
 MAINSAIL_MOONRAKER_PROXY_INFO_URL="http://127.0.0.1/server/info"
 
-KS_CONFIG_FILE="${PI_HOME}/printer_data/config/KlipperScreen.conf"
 KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
-TREED_KS_THEME_EXPECTED="${TREED_KS_THEME:-treed-oled}"
 TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-1}"
 TREED_KLIPPERSCREEN_HOME_RAW="${TREED_KLIPPERSCREEN_HOME:-}"
 if [ -n "${TREED_KLIPPERSCREEN_HOME_RAW}" ]; then
@@ -738,8 +683,6 @@ else
     log_info "VERIFY KlipperScreen home unresolved (service may be absent)"
   fi
 fi
-KS_THEME_RUNTIME_STYLE="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/style.css"
-KS_THEME_RUNTIME_IMAGES_DIR="${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled/images"
 
 # Блок 4: Проверки initramfs/boot backend/cmdline.
 if [ -f "${INITRD}" ]; then
@@ -1062,320 +1005,7 @@ else
   diagnostic_failf "CAN restart-ms ${TREED_CAN_RESTART_MS}"
 fi
 
-# Блок 8-9: Проверки runtime-профиля V2 и MCU binding (опционально).
-if is_true "${TREED_VERIFY_CONFIG}"; then
-# Блок 8: Проверки runtime-профиля V2 и MCU binding.
-for required_file in "${PRINTER_CFG_RUNTIME}" "${MAIN_CFG_RUNTIME}" "${EBB_CFG_RUNTIME}" "${EDDY_CFG_RUNTIME}" "${STEPPERS_CFG_RUNTIME}" "${INPUT_SHAPER_CFG}"; do
-  if [ -f "${required_file}" ]; then
-    pass "runtime file present (${required_file})"
-  else
-    failf "runtime file present (${required_file})"
-  fi
-done
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qF "[include profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg]" "${PRINTER_CFG_RUNTIME}"; then
-  pass "printer.cfg includes V2 main MCU config"
-else
-  failf "printer.cfg includes V2 main MCU config"
-fi
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qF "[include profiles/treed_v2_corexy_v1/ebb42_can.cfg]" "${PRINTER_CFG_RUNTIME}"; then
-  pass "printer.cfg includes V2 EBB config"
-else
-  failf "printer.cfg includes V2 EBB config"
-fi
-
-runtime_main_uuid=""
-if [ -f "${MAIN_CFG_RUNTIME}" ]; then
-  runtime_main_uuid="$(extract_cfg_value "canbus_uuid" "${MAIN_CFG_RUNTIME}")"
-fi
-if [ -n "${runtime_main_uuid}" ] && ! printf '%s' "${runtime_main_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
-  pass "main MCU canbus_uuid is hex"
-else
-  failf "main MCU canbus_uuid is hex"
-fi
-
-if [ -n "${runtime_main_uuid}" ] && [ "${runtime_main_uuid}" = "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
-  pass "main MCU canbus_uuid matches ${TREED_MAIN_MCU_CANBUS_UUID}"
-else
-  failf "main MCU canbus_uuid matches ${TREED_MAIN_MCU_CANBUS_UUID}"
-fi
-
-if [ -f "${MAIN_CFG_RUNTIME}" ] \
-  && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${MAIN_CFG_RUNTIME}"; then
-  pass "main MCU canbus_interface is ${TREED_CAN_IFACE}"
-else
-  failf "main MCU canbus_interface is ${TREED_CAN_IFACE}"
-fi
-
-runtime_ebb_uuid=""
-if [ -f "${EBB_CFG_RUNTIME}" ]; then
-  runtime_ebb_uuid="$(extract_cfg_value "canbus_uuid" "${EBB_CFG_RUNTIME}")"
-fi
-if [ -n "${runtime_ebb_uuid}" ] && ! printf '%s' "${runtime_ebb_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
-  pass "EBB canbus_uuid is hex"
-else
-  failf "EBB canbus_uuid is hex"
-fi
-
-if [ -f "${EBB_CFG_RUNTIME}" ] \
-  && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${EBB_CFG_RUNTIME}"; then
-  pass "EBB canbus_interface is ${TREED_CAN_IFACE}"
-else
-  failf "EBB canbus_interface is ${TREED_CAN_IFACE}"
-fi
-
-if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/input_shaper\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-  pass "Input Shaper include enabled in printer.cfg"
-else
-  failf "Input Shaper include enabled in printer.cfg"
-fi
-
-if [ -f "${INPUT_SHAPER_CFG}" ] && grep -qE '^[[:space:]]*\[input_shaper\][[:space:]]*$' "${INPUT_SHAPER_CFG}"; then
-  pass "Input Shaper config present (${INPUT_SHAPER_CFG})"
-else
-  failf "Input Shaper config present (${INPUT_SHAPER_CFG})"
-fi
-
-# Проверки sensorless X/Y: tmc5160 SPI + virtual endstop + retract=0.
-SENSORLESS_XY_TMC_DRIVER=""
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_x\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}" \
-  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_y\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
-  SENSORLESS_XY_TMC_DRIVER="tmc5160"
-  pass "sensorless X/Y: tmc5160 sections present"
-else
-  failf "sensorless X/Y: tmc5160 sections present"
-fi
-
-if [ -n "${SENSORLESS_XY_TMC_DRIVER}" ] \
-  && [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk -v expected="${SENSORLESS_XY_TMC_DRIVER}_stepper_x:virtual_endstop" '
-    /^\[stepper_x\][[:space:]]*$/ { in_section = 1; next }
-    in_section && /^\[[^]]+\][[:space:]]*$/ { in_section = 0 }
-    in_section && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
-      value = $0
-      sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
-      sub(/[[:space:]]*(#.*)?$/, "", value)
-      found = (value == expected)
-    }
-    END { exit found ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "sensorless X: virtual endstop"
-else
-  failf "sensorless X: virtual endstop"
-fi
-
-if [ -n "${SENSORLESS_XY_TMC_DRIVER}" ] \
-  && [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk -v expected="${SENSORLESS_XY_TMC_DRIVER}_stepper_y:virtual_endstop" '
-    /^\[stepper_y\][[:space:]]*$/ { in_section = 1; next }
-    in_section && /^\[[^]]+\][[:space:]]*$/ { in_section = 0 }
-    in_section && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
-      value = $0
-      sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
-      sub(/[[:space:]]*(#.*)?$/, "", value)
-      found = (value == expected)
-    }
-    END { exit found ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "sensorless Y: virtual endstop"
-else
-  failf "sensorless Y: virtual endstop"
-fi
-
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
-    /^\[stepper_x\][[:space:]]*$/ { in_x = 1; next }
-    in_x && /^\[[^]]+\][[:space:]]*$/ { in_x = 0 }
-    in_x && /^[[:space:]]*homing_retract_dist[[:space:]]*:/ {
-      value = $0
-      sub(/^[[:space:]]*homing_retract_dist[[:space:]]*:[[:space:]]*/, "", value)
-      sub(/[[:space:]]*(#.*)?$/, "", value)
-      found = 1
-      is_zero = ((value + 0) == 0)
-    }
-    END { exit (found && is_zero) ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "sensorless X: homing_retract_dist=0"
-else
-  failf "sensorless X: homing_retract_dist=0"
-fi
-
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
-    /^\[stepper_y\][[:space:]]*$/ { in_y = 1; next }
-    in_y && /^\[[^]]+\][[:space:]]*$/ { in_y = 0 }
-    in_y && /^[[:space:]]*homing_retract_dist[[:space:]]*:/ {
-      value = $0
-      sub(/^[[:space:]]*homing_retract_dist[[:space:]]*:[[:space:]]*/, "", value)
-      sub(/[[:space:]]*(#.*)?$/, "", value)
-      found = 1
-      is_zero = ((value + 0) == 0)
-    }
-    END { exit (found && is_zero) ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "sensorless Y: homing_retract_dist=0"
-else
-  failf "sensorless Y: homing_retract_dist=0"
-fi
-
-# Проверки Z-драйвера: TMC5160 SPI на слоте MOTOR2_1.
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && grep -qE '^[[:space:]]*\[tmc5160[[:space:]]+stepper_z\][[:space:]]*$' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "stepper_z: tmc5160 section present"
-else
-  failf "stepper_z: tmc5160 section present"
-fi
-
-if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-  && awk '
-    /^\[tmc5160[[:space:]]+stepper_z\][[:space:]]*$/ { in_z = 1; next }
-    in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-    in_z && /^[[:space:]]*cs_pin[[:space:]]*:/ {
-      value = $0
-      sub(/^[[:space:]]*cs_pin[[:space:]]*:[[:space:]]*/, "", value)
-      sub(/[[:space:]]*(#.*)?$/, "", value)
-      found = (value == "PC6")
-    }
-    END { exit found ? 0 : 1 }
-  ' "${STEPPERS_CFG_RUNTIME}"; then
-  pass "stepper_z: tmc5160 cs_pin=PC6"
-else
-  failf "stepper_z: tmc5160 cs_pin=PC6"
-fi
-
-# Блок 9: Optional Eddy-контур.
-case "${TREED_EDDY_ENABLED}" in
-  0|1) ;;
-  *)
-    failf "TREED_EDDY_ENABLED is valid (0|1, current=${TREED_EDDY_ENABLED})"
-    TREED_EDDY_ENABLED="0"
-    ;;
-esac
-
-EDDY_INCLUDE_LINE="[include profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg]"
-if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
-  if [ -f "${PRINTER_CFG_RUNTIME}" ] && grep -qF "${EDDY_INCLUDE_LINE}" "${PRINTER_CFG_RUNTIME}"; then
-    pass "Eddy include enabled in printer.cfg"
-  else
-    failf "Eddy include enabled in printer.cfg"
-  fi
-
-  runtime_eddy_uuid=""
-  if [ -f "${EDDY_CFG_RUNTIME}" ]; then
-    runtime_eddy_uuid="$(extract_cfg_value "canbus_uuid" "${EDDY_CFG_RUNTIME}")"
-  fi
-  if [ -n "${runtime_eddy_uuid}" ] && ! printf '%s' "${runtime_eddy_uuid}" | grep -qE '[^0-9A-Fa-f]'; then
-    pass "Eddy canbus_uuid is hex"
-  else
-    failf "Eddy canbus_uuid is hex"
-  fi
-
-  if [ -f "${EDDY_CFG_RUNTIME}" ] \
-    && grep -qE "^[[:space:]]*canbus_interface:[[:space:]]*${TREED_CAN_IFACE}[[:space:]]*$" "${EDDY_CFG_RUNTIME}"; then
-    pass "Eddy canbus_interface is ${TREED_CAN_IFACE}"
-  else
-    failf "Eddy canbus_interface is ${TREED_CAN_IFACE}"
-  fi
-
-  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-    && awk '
-      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
-      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-      in_z && /^[[:space:]]*endstop_pin:[[:space:]]*tmc5160_stepper_z:virtual_endstop[[:space:]]*$/ { found = 1 }
-      END { exit found ? 0 : 1 }
-    ' "${STEPPERS_CFG_RUNTIME}"; then
-    pass "stepper_z uses sensorless Zmax virtual endstop"
-  else
-    failf "stepper_z uses sensorless Zmax virtual endstop"
-  fi
-
-  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-    && awk '
-      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
-      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-      in_z && /^[[:space:]]*position_endstop:[[:space:]]*200[[:space:]]*$/ { found = 1 }
-      END { exit found ? 0 : 1 }
-    ' "${STEPPERS_CFG_RUNTIME}"; then
-    pass "stepper_z position_endstop is Zmax"
-  else
-    failf "stepper_z position_endstop is Zmax"
-  fi
-
-  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-    && awk '
-      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
-      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-      in_z && /^[[:space:]]*homing_positive_dir:[[:space:]]*true[[:space:]]*$/ { found = 1 }
-      END { exit found ? 0 : 1 }
-    ' "${STEPPERS_CFG_RUNTIME}"; then
-    pass "stepper_z homes toward Zmax"
-  else
-    failf "stepper_z homes toward Zmax"
-  fi
-
-  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-    && awk '
-      /^\[tmc5160 stepper_z\][[:space:]]*$/ { in_z_tmc = 1; next }
-      in_z_tmc && /^\[[^]]+\][[:space:]]*$/ { in_z_tmc = 0 }
-      in_z_tmc && /^[[:space:]]*diag1_pin:[[:space:]]*\^!PG10[[:space:]]*$/ { found = 1 }
-      END { exit found ? 0 : 1 }
-    ' "${STEPPERS_CFG_RUNTIME}"; then
-    pass "stepper_z: tmc5160 diag1_pin=^!PG10"
-  else
-    failf "stepper_z: tmc5160 diag1_pin=^!PG10"
-  fi
-else
-  if [ -f "${PRINTER_CFG_RUNTIME}" ] \
-    && grep -qE '^[[:space:]]*#[[:space:]]*\[include[[:space:]]+profiles/treed_v2_corexy_v1/probe_eddy_duo_optional\.cfg\][[:space:]]*$' "${PRINTER_CFG_RUNTIME}"; then
-    pass "Eddy include disabled in printer.cfg"
-  else
-    failf "Eddy include disabled in printer.cfg"
-  fi
-
-  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-    && awk -v expected="${TREED_Z_ENDSTOP_PIN}" '
-      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
-      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-      in_z && /^[[:space:]]*endstop_pin[[:space:]]*:/ {
-        value = $0
-        sub(/^[[:space:]]*endstop_pin[[:space:]]*:[[:space:]]*/, "", value)
-        sub(/[[:space:]]*(#.*)?$/, "", value)
-        found = (value == expected)
-      }
-      END { exit found ? 0 : 1 }
-    ' "${STEPPERS_CFG_RUNTIME}"; then
-    pass "stepper_z uses physical Z endstop ${TREED_Z_ENDSTOP_PIN}"
-  else
-    failf "stepper_z uses physical Z endstop ${TREED_Z_ENDSTOP_PIN}"
-  fi
-
-  if [ -f "${STEPPERS_CFG_RUNTIME}" ] \
-    && awk -v expected="${TREED_Z_POSITION_ENDSTOP}" '
-      /^\[stepper_z\][[:space:]]*$/ { in_z = 1; next }
-      in_z && /^\[[^]]+\][[:space:]]*$/ { in_z = 0 }
-      in_z && /^[[:space:]]*position_endstop[[:space:]]*:/ {
-        value = $0
-        sub(/^[[:space:]]*position_endstop[[:space:]]*:[[:space:]]*/, "", value)
-        sub(/[[:space:]]*(#.*)?$/, "", value)
-        found = (value == expected)
-      }
-      END { exit found ? 0 : 1 }
-    ' "${STEPPERS_CFG_RUNTIME}"; then
-    pass "stepper_z position_endstop ${TREED_Z_POSITION_ENDSTOP}"
-  else
-    failf "stepper_z position_endstop ${TREED_Z_POSITION_ENDSTOP}"
-  fi
-fi
-else
-  log_info "VERIFY runtime profile checks skipped (TREED_VERIFY_CONFIG=${TREED_VERIFY_CONFIG})"
-fi
-
-# Блок 10: Проверки состояния KlipperScreen (required/optional режимы).
+# Блок 8: Проверки состояния KlipperScreen (required/optional режимы).
 KS_SERVICE_PRESENT=0
 if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
   KS_SERVICE_PRESENT=1
@@ -1423,58 +1053,8 @@ else
   fi
 fi
 
-if [ "${TREED_KS_THEME_EXPECTED}" = "keep" ]; then
-  log_info "VERIFY KlipperScreen theme check skipped (TREED_KS_THEME=keep)"
-elif [ "${KS_SERVICE_PRESENT}" = "1" ]; then
-  if [ -f "${KS_CONFIG_FILE}" ]; then
-    ks_theme_actual="$(read_klipperscreen_main_theme "${KS_CONFIG_FILE}" | tr -d '\r\n' || true)"
-    if [ "${ks_theme_actual}" = "${TREED_KS_THEME_EXPECTED}" ]; then
-      pass "KlipperScreen configured theme (${TREED_KS_THEME_EXPECTED})"
-    else
-      failf "KlipperScreen configured theme (${TREED_KS_THEME_EXPECTED}, current=${ks_theme_actual:-missing})"
-    fi
-  else
-    failf "KlipperScreen config present (${KS_CONFIG_FILE})"
-  fi
-
-  if [ "${TREED_KS_THEME_EXPECTED}" = "treed-oled" ]; then
-    required_ks_icons=""
-    missing_ks_icons=""
-    if [ -f "${KS_THEME_RUNTIME_STYLE}" ]; then
-      pass "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
-      required_ks_icons="$(extract_required_theme_icons "${KS_THEME_RUNTIME_STYLE}" || true)"
-      if [ -n "${required_ks_icons}" ]; then
-        pass "KlipperScreen treed-oled style icon refs parsed"
-      fi
-    else
-      failf "KlipperScreen treed-oled style deployed (${KS_THEME_RUNTIME_STYLE})"
-    fi
-
-    if [ -d "${KS_THEME_RUNTIME_IMAGES_DIR}" ] \
-      && [ -n "$(find "${KS_THEME_RUNTIME_IMAGES_DIR}" -maxdepth 1 -type f -print -quit 2>/dev/null)" ]; then
-      pass "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
-    else
-      failf "KlipperScreen treed-oled icon pack deployed (${KS_THEME_RUNTIME_IMAGES_DIR})"
-    fi
-
-    if [ -n "${required_ks_icons}" ]; then
-      missing_ks_icons="$(missing_required_icons "${KS_THEME_RUNTIME_IMAGES_DIR}" "${required_ks_icons}" || true)"
-      if [ -z "${missing_ks_icons}" ]; then
-        pass "KlipperScreen treed-oled required icons present"
-      else
-        failf "KlipperScreen treed-oled required icons present (missing=$(printf '%s' "${missing_ks_icons}" | tr '\n' ' '))"
-      fi
-    fi
-  fi
-else
-  log_info "VERIFY KlipperScreen theme check skipped (service not installed)"
-fi
-
-# Блок 11: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
+# Блок 9: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
 CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
-CROWSNEST_CFG="${PI_HOME}/printer_data/config/crowsnest.conf"
-MOONRAKER_CFG="${PI_HOME}/printer_data/config/moonraker.conf"
-MOONRAKER_WEBCAM_FRAGMENT="${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf"
 
 TREED_VERIFY_CAMERA="${TREED_VERIFY_CAMERA:-auto}"
 camera_checks_enabled=0
@@ -1489,27 +1069,21 @@ case "${TREED_VERIFY_CAMERA}" in
     camera_checks_reason="disabled by TREED_VERIFY_CAMERA"
     ;;
   auto|AUTO|'')
-    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ] && systemctl cat crowsnest.service >/dev/null 2>&1; then
+    if systemctl cat crowsnest.service >/dev/null 2>&1; then
       camera_checks_enabled=1
-      camera_checks_reason="auto: webcam fragment and crowsnest.service present"
-    elif [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
-      camera_checks_enabled=0
-      camera_checks_reason="auto: crowsnest.service missing"
+      camera_checks_reason="auto: crowsnest.service present"
     else
       camera_checks_enabled=0
-      camera_checks_reason="auto: webcam fragment missing"
+      camera_checks_reason="auto: crowsnest.service missing"
     fi
     ;;
   *)
-    if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ] && systemctl cat crowsnest.service >/dev/null 2>&1; then
+    if systemctl cat crowsnest.service >/dev/null 2>&1; then
       camera_checks_enabled=1
-      camera_checks_reason="auto fallback: webcam fragment and crowsnest.service present"
-    elif [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
-      camera_checks_enabled=0
-      camera_checks_reason="auto fallback: crowsnest.service missing"
+      camera_checks_reason="auto fallback: crowsnest.service present"
     else
       camera_checks_enabled=0
-      camera_checks_reason="auto fallback: webcam fragment missing"
+      camera_checks_reason="auto fallback: crowsnest.service missing"
     fi
     log_warn "VERIFY invalid TREED_VERIFY_CAMERA='${TREED_VERIFY_CAMERA}', using ${camera_checks_reason}"
     ;;
@@ -1525,11 +1099,6 @@ if [ "${camera_checks_enabled}" = "1" ]; then
 fi
 
 if [ "${camera_checks_enabled}" = "1" ]; then
-  byid_index0_available=0
-  if find /dev/v4l/by-id -maxdepth 1 -type l -name '*-video-index0' -print -quit 2>/dev/null | grep -q .; then
-    byid_index0_available=1
-  fi
-
   for f in session_start.sh snapshot.sh session_stop.sh; do
     if [ -x "${CAM_BIN_DIR}/${f}" ]; then
       pass "cam script executable ${CAM_BIN_DIR}/${f}"
@@ -1537,60 +1106,6 @@ if [ "${camera_checks_enabled}" = "1" ]; then
       camera_failf "cam script executable ${CAM_BIN_DIR}/${f}"
     fi
   done
-
-  if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ] \
-    && grep -qE '^\[webcam treed\]\s*$' "${MOONRAKER_WEBCAM_FRAGMENT}" \
-    && grep -qE '^[[:space:]]*service[[:space:]]*[:=][[:space:]]*mjpegstreamer[[:space:]]*$' "${MOONRAKER_WEBCAM_FRAGMENT}"; then
-    pass "moonraker webcam treed service=mjpegstreamer (${MOONRAKER_WEBCAM_FRAGMENT})"
-  else
-    camera_failf "moonraker webcam treed service=mjpegstreamer (${MOONRAKER_WEBCAM_FRAGMENT})"
-  fi
-
-  if [ -f "${MOONRAKER_CFG}" ]; then
-    if grep -qE '^\[include[[:space:]]+moonraker/generated/\*\.conf\][[:space:]]*$' "${MOONRAKER_CFG}"; then
-      pass "moonraker include generated/*.conf"
-    else
-      camera_failf "moonraker include generated/*.conf"
-    fi
-  else
-    camera_failf "moonraker config present (${MOONRAKER_CFG})"
-  fi
-
-  if [ -f "${CROWSNEST_CFG}" ]; then
-    cam_device_cfg="$(
-      awk '
-        /^[[:space:]]*device[[:space:]]*:/ {
-          v = substr($0, index($0, ":") + 1)
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
-          print v
-          exit
-        }
-      ' "${CROWSNEST_CFG}"
-    )"
-
-    if [ -n "${cam_device_cfg}" ]; then
-      pass "crowsnest camera device configured (${cam_device_cfg})"
-      if [ -e "${cam_device_cfg}" ] || [ -L "${cam_device_cfg}" ]; then
-        pass "crowsnest camera device exists (${cam_device_cfg})"
-      else
-        camera_failf "crowsnest camera device exists (${cam_device_cfg})"
-      fi
-    else
-      camera_failf "crowsnest camera device configured"
-    fi
-
-    if [ "${byid_index0_available}" = "1" ]; then
-      if printf '%s' "${cam_device_cfg:-}" | grep -qE '^/dev/v4l/by-id/.+-video-index0$'; then
-        pass "crowsnest prefers /dev/v4l/by-id/*-video-index0"
-      else
-        camera_failf "crowsnest prefers /dev/v4l/by-id/*-video-index0"
-      fi
-    else
-      pass "no /dev/v4l/by-id/*-video-index0 on host (fallback allowed)"
-    fi
-  else
-    camera_failf "crowsnest config present (${CROWSNEST_CFG})"
-  fi
 
   if command -v curl >/dev/null 2>&1; then
     http_snapshot_check "camera direct snapshot :8080" "http://127.0.0.1:8080/?action=snapshot"

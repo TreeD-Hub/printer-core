@@ -41,19 +41,18 @@
 | 13 | `plymouth-cmdline` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
 | 14 | `plymouth-systemd` | required | Политика `getty@tty1` и unit Plymouth. |
 | 15 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
-| 16 | `klipper-profiles` | required | Профиль V2: CAN UUID Octopus/EBB/Eddy, Z0 через Eddy и Zmax sensorless. |
-| 17 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
-| 18 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
-| 19 | `mainsail-web` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
-| 20 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
-| 21 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
-| 22 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
-| 23 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
-| 24 | `klipperscreen-install` | required | Managed-установка/проверка KlipperScreen. |
-| 25 | `klipperscreen-theme` | required | Деплой темы/шрифта KlipperScreen. |
-| 26 | `klipperscreen-integr` | required | Systemd override KlipperScreen. |
-| 27 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
-| 28 | `verify` | required | Финальная валидация V2-контура с разделением fatal/diagnostic проверок. |
+| 16 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
+| 17 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
+| 18 | `mainsail-web` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
+| 19 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
+| 20 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
+| 21 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
+| 22 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
+| 23 | `klipperscreen-install` | required | Managed-установка/проверка KlipperScreen. |
+| 24 | `klipperscreen-theme` | required | Деплой темы/шрифта KlipperScreen. |
+| 25 | `klipperscreen-integr` | required | Systemd override KlipperScreen. |
+| 26 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
+| 27 | `verify` | required | Финальная валидация V2-контура с разделением fatal/diagnostic проверок. |
 
 ## Ключевые переменные
 
@@ -75,8 +74,6 @@
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
 - `TREED_EDDY_ENABLED` — `0|1`, default `1`.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
-- `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
-- `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.
 - `TREED_FIRMWARE_BUILD_ENABLED` — `0|1`, default `1`.
 - `TREED_KLIPPER_SRC_DIR` — default `${PI_HOME}/klipper`.

@@ -58,8 +58,6 @@ TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}"
 TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED="${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED:-0}"
-TREED_Z_ENDSTOP_PIN="${TREED_Z_ENDSTOP_PIN:-PG10}"
-TREED_Z_POSITION_ENDSTOP="${TREED_Z_POSITION_ENDSTOP:-0.5}"
 TREED_BOOT_BACKEND="${TREED_BOOT_BACKEND:-}"
 TREED_NONINTERACTIVE="${TREED_NONINTERACTIVE:-1}"
 TREED_KLIPPERSCREEN_INSTALL_SERVICE="${TREED_KLIPPERSCREEN_INSTALL_SERVICE:-1}"
@@ -164,19 +162,6 @@ if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
       exit 1
       ;;
   esac
-else
-  if [ -z "${TREED_Z_ENDSTOP_PIN}" ] || ! printf '%s' "${TREED_Z_ENDSTOP_PIN}" | grep -Eq '^[!^~]*[A-Za-z0-9_.:-]+$'; then
-    log_error "check-env: TREED_Z_ENDSTOP_PIN has invalid format: ${TREED_Z_ENDSTOP_PIN}"
-    exit 1
-  fi
-  if [ "${TREED_Z_ENDSTOP_PIN}" = "probe:z_virtual_endstop" ]; then
-    log_error "check-env: TREED_Z_ENDSTOP_PIN=probe:z_virtual_endstop requires TREED_EDDY_ENABLED=1"
-    exit 1
-  fi
-  if ! printf '%s' "${TREED_Z_POSITION_ENDSTOP}" | grep -Eq '^-?([0-9]+([.][0-9]+)?|[.][0-9]+)$'; then
-    log_error "check-env: TREED_Z_POSITION_ENDSTOP must be numeric, got: ${TREED_Z_POSITION_ENDSTOP}"
-    exit 1
-  fi
 fi
 
 if ! printf '%s' "${TREED_CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then

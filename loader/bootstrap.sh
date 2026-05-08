@@ -32,7 +32,7 @@ fi
 
 # ---- V2 defaults ------------------------------------------------------------
 # Все значения можно переопределить снаружи:
-# sudo TREED_CAN_BITRATE=500000 TREED_EDDY_ENABLED=0 bash install.sh
+# sudo TREED_CAN_BITRATE=500000 bash install.sh
 
 : "${TREED_MAIN_MCU_CANBUS_UUID:=d372e54bf965}"
 
@@ -48,9 +48,6 @@ fi
 : "${TREED_EBB_CANBUS_UUID:=efaf957ab20f}"
 : "${TREED_EDDY_ENABLED:=1}"
 : "${TREED_EDDY_CANBUS_UUID:=95485b93332a}"
-
-: "${TREED_Z_ENDSTOP_PIN:=PG10}"
-: "${TREED_Z_POSITION_ENDSTOP:=0.5}"
 
 : "${TREED_NONINTERACTIVE:=1}"
 
@@ -96,9 +93,6 @@ export TREED_KLIPPER_START_REQUIRE_ACTIVE
 export TREED_EBB_CANBUS_UUID
 export TREED_EDDY_ENABLED
 export TREED_EDDY_CANBUS_UUID
-
-export TREED_Z_ENDSTOP_PIN
-export TREED_Z_POSITION_ENDSTOP
 
 export TREED_NONINTERACTIVE
 

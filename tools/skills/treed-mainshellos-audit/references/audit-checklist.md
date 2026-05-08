@@ -29,18 +29,11 @@
 
 Проверять в `klipper/**` и `moonraker/**`:
 
-- Валидность include-цепочки.
 - Отсутствие конфликтов ownership/source-of-truth.
 - Для `klipper/profiles/treed_v2_corexy_v1`:
   - Модульность (один файл = одна зона ответственности).
   - Отсутствие необоснованного разнесения одной сущности по разным файлам.
   - Сохранение runtime override-механизмов как локальных.
-
-При затрагивании `klipper/**` запускать:
-
-```bash
-python tools/validate_klipper_configs.py
-```
 
 ## 5) Формат комментариев в коде
 
@@ -64,7 +57,7 @@ python tools/validate_klipper_configs.py
 
 - Для shell-скриптов: синтакс-проверка `bash -n` (или явная фиксация ограничения среды).
 - Для loader-изменений: идемпотентность, fail-fast/best-effort, отсутствие silent skip.
-- Для Klipper/Moonraker: валидность include-цепочки и отсутствие конфликтов ownership.
+- Для Klipper/Moonraker: отсутствие конфликтов ownership.
 - Если часть проверок не выполнена локально, это должно быть явно отмечено.
 
 ## 8) Ограничения среды

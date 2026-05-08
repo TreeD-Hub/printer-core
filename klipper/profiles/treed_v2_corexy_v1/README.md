@@ -19,17 +19,14 @@
 10. `local_overrides.cfg`
 
 Optional include:
-- `profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg` включается loader-шагом `klipper-profiles.sh` только при `TREED_EDDY_ENABLED=1`.
+- `profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg` включен в `klipper/printer.cfg` репозиторно; loader include-цепочку не переключает.
 
 ## Контракт loader
 
-Шаг `loader/steps/klipper-profiles.sh`:
-- подставляет `canbus_uuid` и `canbus_interface` main MCU в `mcu_main_octopus_can.cfg`;
-- подставляет `canbus_uuid` и `canbus_interface` EBB в `ebb42_can.cfg`;
-- управляет include Eddy в `printer.cfg` (по умолчанию включен);
-- при `TREED_EDDY_ENABLED=1` подставляет `canbus_uuid` и `canbus_interface` Eddy в `probe_eddy_duo_optional.cfg`;
-- при `TREED_EDDY_ENABLED=1` переводит `stepper_z.endstop_pin` на `tmc5160_stepper_z:virtual_endstop` для sensorless-парковки Zmax;
-- при `TREED_EDDY_ENABLED=0` возвращает physical Z endstop из `TREED_Z_ENDSTOP_PIN` и `TREED_Z_POSITION_ENDSTOP`.
+Текущий install pipeline:
+- `loader/steps/klipper-sync.sh` синхронизирует дерево `klipper/` в staging без правок профиля;
+- `loader/steps/klipper-core.sh` раскладывает staging в runtime без post-deploy подстановок в `printer.cfg`/`profiles/*`;
+- `TREED_EDDY_ENABLED` влияет на firmware/build и CAN-проверки, но не переключает include-цепочку профиля.
 
 ## X/Y sensorless (TMC5160 SPI) и Z (TMC5160 SPI)
 
@@ -84,5 +81,3 @@ Z имеет два раздельных сервисных контура:
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`.
 - `TREED_EDDY_ENABLED` — `0|1`, default `1`.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
-- `TREED_Z_ENDSTOP_PIN` — physical Z endstop when Eddy is disabled, default `PG10`.
-- `TREED_Z_POSITION_ENDSTOP` — Z endstop coordinate when Eddy is disabled, default `0.5`.

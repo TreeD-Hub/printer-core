@@ -24,19 +24,18 @@ Entrypoint:
 13. `plymouth-cmdline`
 14. `plymouth-systemd`
 15. `klipper-sync`
-16. `klipper-profiles`
-17. `klipper-core`
-18. `klipper-anti-shutdown`
-19. `mainsail-web`
-20. `moonraker-config`
-21. `crowsnest-webcam`
-22. `treed-cam`
-23. `klipper-mainsail-theme`
-24. `klipperscreen-install`
-25. `klipperscreen-theme`
-26. `klipperscreen-integr`
-27. `maintenance-start`
-28. `verify`
+16. `klipper-core`
+17. `klipper-anti-shutdown`
+18. `mainsail-web`
+19. `moonraker-config`
+20. `crowsnest-webcam`
+21. `treed-cam`
+22. `klipper-mainsail-theme`
+23. `klipperscreen-install`
+24. `klipperscreen-theme`
+25. `klipperscreen-integr`
+26. `maintenance-start`
+27. `verify`
 
 ## 2. Слои и source of truth
 
@@ -99,8 +98,6 @@ Optional:
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`)
 - `TREED_EDDY_ENABLED` (`0|1`, default `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
-- `TREED_Z_ENDSTOP_PIN` (default `PG10`, используется при `TREED_EDDY_ENABLED=0`)
-- `TREED_Z_POSITION_ENDSTOP` (default `0.5`, используется при `TREED_EDDY_ENABLED=0`)
 
 При `TREED_EDDY_ENABLED=1` профиль использует два раздельных Z-контура:
 - `G28 Z` и UI Home Z опускают стол к Zmax через `tmc5160_stepper_z:virtual_endstop`;

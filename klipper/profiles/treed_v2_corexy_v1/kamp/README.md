@@ -20,4 +20,3 @@
 1. Скопировать нужные файлы из `Configuration/` upstream-репозитория.
 2. Обновить commit в этом README.
 3. Проверить, что `macros_kamp.cfg` не требует правок под новый upstream.
-4. Запустить `python tools/validate_klipper_configs.py`.

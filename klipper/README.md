@@ -11,7 +11,7 @@
 Деплой:
 - staging: `/home/pi/treed/klipper` (шаг `loader/steps/klipper-sync.sh`)
 - runtime: `/home/pi/printer_data/config` (шаг `loader/steps/klipper-core.sh`)
-- подстановка идентификаторов main/CAN MCU: `loader/steps/klipper-profiles.sh`
+- `canbus_uuid` и `canbus_interface` для MCU берутся напрямую из репозиторных файлов профиля (loader их не переписывает).
 
 Важно:
 - источник истины по структуре — репозиторий, не runtime-файлы на Pi;
