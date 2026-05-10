@@ -96,14 +96,14 @@ Optional:
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`)
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`)
-- `TREED_EDDY_ENABLED` (`0|1`, default `1`)
+- `TREED_EDDY_ENABLED` (legacy `0|1`, default `1`; для активного Klipper-профиля должно оставаться `1`)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
 
-При `TREED_EDDY_ENABLED=1` профиль использует Eddy как штатный рабочий Z-контур:
+Активный профиль `treed_v2_corexy_v1` использует Eddy как обязательный штатный Z-контур:
 - `stepper_z` работает через `probe:z_virtual_endstop`;
-- `G28` остается штатной командой Klipper без macro override;
+- `G28` переопределен профилем и маршрутизирует Z-home в `_TREED_EDDY_HOME_Z`;
 - `G28 Z` и полный `G28` используют Eddy как штатный `probe:z_virtual_endstop`;
-- `TREED_Z_PARK_ZERO_EDDY` дополнительно уточняет рабочий Z0 через `PROBE` и `SET_Z_FROM_PROBE`;
+- `TREED_Z_PARK_ZERO_EDDY` остается публичной командой рабочего Z0 через Eddy;
 - Zmax sensorless DIAG оставлен только как аппаратный резерв вне основного Eddy-профиля.
 
 Fail-fast сценарии:

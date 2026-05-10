@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v
 - Octopus Pro: `d372e54bf965`;
 - EBB42: `efaf957ab20f`;
 - Eddy: `95485b93332a`;
-- Eddy включен по умолчанию (`TREED_EDDY_ENABLED=1`).
+- Eddy обязателен для активного Klipper-профиля (`TREED_EDDY_ENABLED` должен оставаться `1`).
 
 ## 4. Что проверить после запуска
 

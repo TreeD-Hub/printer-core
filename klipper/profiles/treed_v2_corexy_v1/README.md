@@ -2,7 +2,7 @@
 
 Профиль задает V2-контур Klipper для ветки `treed-v2`:
 - host: Rock Pi (Armbian Debian 12);
-- CAN: U2C -> Octopus Pro (main MCU, required), EBB42 (required), Eddy Duo (enabled by default).
+- CAN: U2C -> Octopus Pro (main MCU, required), EBB42 (required), Eddy Duo (required).
 
 ## Include-цепочка
 
@@ -10,36 +10,37 @@
 1. `profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg`
 2. `profiles/treed_v2_corexy_v1/ebb42_can.cfg`
 3. `profiles/treed_v2_corexy_v1/printer_base.cfg`
-4. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
-5. `profiles/treed_v2_corexy_v1/probe_eddy_duo_optional.cfg`
-6. `profiles/treed_v2_corexy_v1/steppers.cfg`
-7. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
-8. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-9. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-10. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-11. `profiles/treed_v2_corexy_v1/macros.cfg`
-12. `profiles/treed_v2_corexy_v1/ui.cfg`
-13. `local_overrides.cfg`
+4. `profiles/treed_v2_corexy_v1/geometry.cfg`
+5. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
+6. `profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg`
+7. `profiles/treed_v2_corexy_v1/steppers.cfg`
+8. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
+9. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+10. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+11. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+12. `profiles/treed_v2_corexy_v1/macros.cfg`
+13. `profiles/treed_v2_corexy_v1/ui.cfg`
+14. `local_overrides.cfg`
 
 ## Контракт loader
 
 Текущий install pipeline:
 - `loader/steps/klipper-sync.sh` синхронизирует дерево `klipper/` в staging без правок профиля;
 - `loader/steps/klipper-core.sh` раскладывает staging в runtime без post-deploy подстановок в `printer.cfg`/`profiles/*`;
-- `TREED_EDDY_ENABLED` влияет на firmware/build и CAN-проверки, но не переключает include-цепочку профиля.
+- Eddy является обязательным для этого профиля; `TREED_EDDY_ENABLED=0` не поддерживается как runtime-профиль без Eddy.
 
 ## X/Y sensorless (TMC5160 SPI) и Z через активный endstop профиля
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
 Профиль подключает override `G28`, который:
 - для `G28 X`, `G28 Y` и `G28 X Y` вызывает штатный `G28_BASE`, затем делает отход на 10 мм от X-max/Y-max и паузу 1 секунду для сброса stall-флага TMC5160;
-- перед `G28 Z` переводит голову в безопасную точку `X122.5 Y122.5`, если X/Y уже захоумлены или будут захоумлены в этом же вызове `G28`;
-- для `G28 Z` оставляет штатный endstop активного профиля.
+- для `G28 Z` переводит голову в центр пластины из `_TREED_GEOMETRY_CFG`, затем вызывает базовый `G28.1 Z` с `probe:z_virtual_endstop`;
 - если `G28 Z` вызван без готовых X/Y, макрос завершится с явной ошибкой и подсказкой сначала выполнить `G28` или `G28 X Y`.
 
 В текущем Eddy-профиле `stepper_z.endstop_pin = probe:z_virtual_endstop`, поэтому:
-- `G28 Z` / кнопка Home Z в UI используют штатный Z-endstop активного профиля, а при наличии (или запланированном в текущем макросе) homed X/Y сначала едут в безопасную точку стола;
-- `TREED_Z_PARK_ZERO_EDDY` остается рабочим макросом поиска Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`.
+- `G28 Z` / кнопка Home Z в UI используют Eddy как обязательный Z-endstop;
+- `TREED_Z_PARK_ZERO_EDDY` остается публичным рабочим макросом поиска Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`;
+- `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;
@@ -75,8 +76,10 @@
 Базовый порядок:
 1. Навести датчик примерно в центр стола и около 20 мм над поверхностью.
 2. Выполнить `LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy`, затем `TREED_SAVE_CONFIG`.
-3. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`.
-4. Снова выполнить `TREED_SAVE_CONFIG`.
+3. Временно подключить `[include profiles/treed_v2_corexy_v1/eddy_force_move_calibration.cfg]` в `local_overrides.cfg`.
+4. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`.
+5. Снова выполнить `TREED_SAVE_CONFIG`.
+6. Убрать calibration-only include `eddy_force_move_calibration.cfg` из `local_overrides.cfg`.
 
 После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper. Для обычных повторных раскладок использовать `preserve` или `auto` на ветке `treed-v2`.
 
@@ -85,5 +88,5 @@
 - `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, default `d372e54bf965`.
 - `TREED_CAN_IFACE` — интерфейс CAN, default `can0`.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`.
-- `TREED_EDDY_ENABLED` — `0|1`, default `1`.
+- `TREED_EDDY_ENABLED` — legacy-переменная loader; для этого Klipper-профиля должно оставаться `1`.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.

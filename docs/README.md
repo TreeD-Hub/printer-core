@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` — default `1`; интервал повторной проверки.
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` — `0|1`, default `0`; при `1` strict UUID-gate через `canbus_query.py`, при `0` query не запускается.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
-- `TREED_EDDY_ENABLED` — `0|1`, default `1`.
+- `TREED_EDDY_ENABLED` — legacy `0|1`, default `1`; для активного Klipper-профиля должно оставаться `1`.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; disables apt/dpkg/needrestart prompts.
 - `TREED_KLIPPERSCREEN_INSTALL_SERVICE` — answer for KlipperScreen service install, default `1`.

@@ -12,11 +12,11 @@
 - `Line_Purge.cfg`
 
 Контракт интеграции:
-- Upstream-файлы в этом каталоге не редактируются вручную.
-- Подключение и fail-fast логика находятся в `macros_kamp.cfg`.
-- Включены только `Smart_Park` и `Line_Purge` (без adaptive mesh).
+- Upstream-файлы в этом каталоге являются read-only reference snapshot.
+- Активная TreeD-реализация `SMART_PARK`, `LINE_PURGE` и `_KAMP_Settings` находится в `../macros_kamp.cfg`.
+- Профиль не включает файлы этого каталога напрямую, чтобы purge/park использовали `_TREED_GEOMETRY_CFG`.
 
 Как обновлять snapshot:
 1. Скопировать нужные файлы из `Configuration/` upstream-репозитория.
 2. Обновить commit в этом README.
-3. Проверить, что `macros_kamp.cfg` не требует правок под новый upstream.
+3. Сверить, нужны ли изменения в TreeD-реализации `macros_kamp.cfg`.
