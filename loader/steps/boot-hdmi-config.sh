@@ -13,9 +13,11 @@ set -euo pipefail
 # Контур:
 # - required (формирует boot-конфиг дисплея и параметры boot UI).
 
+# Блок 1: Библиотеки boot-aware шага.
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/boot-env.sh"
 
+# Блок 2: Helper-функции нормализации HDMI/kernel video параметров.
 remove_extraargs_tokens_by_prefix() {
   local extraargs="${1:-}"
   local prefix="${2:-}"
@@ -135,6 +137,7 @@ normalize_hdmi_mode() {
   esac
 }
 
+# Блок 3: Старт шага и расчет host boot-контекста.
 log_info "Step boot-hdmi-config: configuring HDMI output backend-aware"
 
 BOOT_DIR="$(detect_boot_dir)"

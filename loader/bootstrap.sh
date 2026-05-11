@@ -8,20 +8,22 @@ set -euo pipefail
 # - держит дефолты V2 runtime-переменных вне README;
 # - нормализует shell-файлы после Windows checkout;
 # - запускает основной loader-оркестратор.
-#
-# Важно:
+# Контур:
+# - required entrypoint перед loader/loader.sh;
 # - внешние env override сохраняются;
-# - bootstrap не прошивает MCU сам, этим управляет loader/steps/firmware-build.sh;
-# - bootstrap должен запускаться через sudo.
+# - bootstrap не прошивает MCU сам, этим управляет loader/steps/firmware-build.sh.
 
+# Блок 1: Определение корня репозитория и bootstrap entrypoint.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Блок 2: Проверка root-контракта запуска.
 if [ "${EUID}" -ne 0 ]; then
   echo "[bootstrap] ERROR: run as root: sudo bash install.sh" >&2
   exit 1
 fi
 
+# Блок 3: Определение deploy-пользователя и home-каталога.
 DEPLOY_USER="${PI_USER:-${SUDO_USER:-$(id -un)}}"
 DEPLOY_HOME="$(getent passwd "${DEPLOY_USER}" | cut -d: -f6 || true)"
 
@@ -30,7 +32,7 @@ if [ -z "${DEPLOY_HOME}" ] || [ ! -d "${DEPLOY_HOME}" ]; then
   exit 1
 fi
 
-# ---- V2 defaults ------------------------------------------------------------
+# Блок 4: V2 defaults с сохранением внешних env override.
 # Все значения можно переопределить снаружи:
 # sudo TREED_CAN_BITRATE=500000 bash install.sh
 
@@ -43,13 +45,23 @@ fi
 : "${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:=12}"
 : "${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:=1}"
 : "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED:=0}"
-: "${TREED_KLIPPER_START_REQUIRE_ACTIVE:=0}"
+: "${TREED_KLIPPER_START_REQUIRE_ACTIVE:=1}"
 
 : "${TREED_EBB_CANBUS_UUID:=efaf957ab20f}"
 : "${TREED_EDDY_ENABLED:=1}"
 : "${TREED_EDDY_CANBUS_UUID:=95485b93332a}"
 
 : "${TREED_NONINTERACTIVE:=1}"
+: "${TREED_LOADER_MODE:=apply}"
+
+case "${TREED_LOADER_MODE}" in
+  apply|check)
+    ;;
+  *)
+    echo "[bootstrap] ERROR: invalid TREED_LOADER_MODE=${TREED_LOADER_MODE} (allowed: apply|check)" >&2
+    exit 1
+    ;;
+esac
 
 : "${TREED_KLIPPERSCREEN_INSTALL_SERVICE:=1}"
 : "${TREED_KLIPPERSCREEN_BACKEND:=X}"
@@ -77,6 +89,7 @@ fi
 : "${TREED_FW_EBB_CONFIG:=${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
 : "${TREED_FW_EDDY_CONFIG:=${REPO_DIR}/firmware/configs/treed_v2/eddy_can_rp2040.config}"
 
+# Блок 5: Экспорт runtime-контракта для loader/steps.
 export REPO_DIR
 
 export TREED_MAIN_MCU_CANBUS_UUID
@@ -95,6 +108,7 @@ export TREED_EDDY_ENABLED
 export TREED_EDDY_CANBUS_UUID
 
 export TREED_NONINTERACTIVE
+export TREED_LOADER_MODE
 
 export TREED_KLIPPERSCREEN_INSTALL_SERVICE
 export TREED_KLIPPERSCREEN_BACKEND
@@ -126,6 +140,7 @@ if [ "${TREED_NONINTERACTIVE}" = "1" ]; then
   export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 fi
 
+# Блок 6: Стартовая диагностика bootstrap.
 echo "[bootstrap] REPO_DIR=${REPO_DIR}"
 echo "[bootstrap] DEPLOY_USER=${DEPLOY_USER}"
 echo "[bootstrap] DEPLOY_HOME=${DEPLOY_HOME}"
@@ -133,17 +148,19 @@ echo "[bootstrap] TREED_MAIN_MCU_CANBUS_UUID=${TREED_MAIN_MCU_CANBUS_UUID}"
 echo "[bootstrap] TREED_CAN_IFACE=${TREED_CAN_IFACE}"
 echo "[bootstrap] TREED_CAN_BITRATE=${TREED_CAN_BITRATE}"
 echo "[bootstrap] TREED_KLIPPER_PREFLIGHT=${TREED_KLIPPER_PREFLIGHT}"
+echo "[bootstrap] TREED_LOADER_MODE=${TREED_LOADER_MODE}"
 echo "[bootstrap] TREED_EDDY_ENABLED=${TREED_EDDY_ENABLED}"
 echo "[bootstrap] TREED_FIRMWARE_BUILD_ENABLED=${TREED_FIRMWARE_BUILD_ENABLED}"
 echo "[bootstrap] TREED_CROWSNEST_INSTALL=${TREED_CROWSNEST_INSTALL}"
 
-# ---- Normalize loader shell files ------------------------------------------
-if [ -d "${REPO_DIR}/loader" ]; then
+# Блок 7: Нормализация shell-файлов loader после Windows checkout.
+if [ "${TREED_LOADER_MODE}" != "check" ] && [ -d "${REPO_DIR}/loader" ]; then
   find "${REPO_DIR}/loader" -type f -name '*.sh' -print0 | xargs -0 -r sed -i 's/\r$//'
   chmod +x "${REPO_DIR}/loader/loader.sh"
   find "${REPO_DIR}/loader/steps" -type f -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 fi
 
+# Блок 8: Проверка наличия и запуск основного оркестратора.
 if [ ! -f "${REPO_DIR}/loader/loader.sh" ]; then
   echo "[bootstrap] ERROR: missing ${REPO_DIR}/loader/loader.sh" >&2
   exit 1

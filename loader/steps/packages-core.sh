@@ -13,10 +13,10 @@ set -euo pipefail
 . "${REPO_DIR}/loader/lib/common.sh"
 ensure_root
 
-# Блок 2: Установка базового пакета зависимостей.
+# Блок 2: Проверка и установка базового пакета зависимостей.
 log_info "Step packages-core: installing core packages"
-apt_update_noninteractive
-apt_get_noninteractive install \
+
+CORE_PACKAGES=(
   plymouth plymouth-themes plymouth-label \
   rsync curl v4l-utils git acl \
   python3 python3-pip python3-venv python3-dev \
@@ -24,6 +24,36 @@ apt_get_noninteractive install \
   build-essential libffi-dev libssl-dev \
   gcc-avr binutils-avr avr-libc \
   gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
+)
+
+package_installed() {
+  local package="$1"
+
+  dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q '^install ok installed$'
+}
+
+packages_core_current() {
+  local package=""
+
+  if ! command -v dpkg-query >/dev/null 2>&1; then
+    return 1
+  fi
+
+  for package in "${CORE_PACKAGES[@]}"; do
+    if ! package_installed "${package}"; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+if packages_core_current; then
+  log_info "packages-core: core package set already current, apt install skipped"
+else
+  apt_update_noninteractive
+  apt_get_noninteractive install "${CORE_PACKAGES[@]}"
+fi
 
 # Блок 3: Санитарная проверка socat (битый бинарник удаляем).
 # TreeD работает через python3 и Unix-сокеты, поэтому битый socat удаляем.

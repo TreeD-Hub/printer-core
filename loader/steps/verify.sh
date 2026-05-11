@@ -950,7 +950,7 @@ else
 fi
 
 # Блок 7: Проверки сервисов, Moonraker API и CAN-интерфейса.
-check_required_service_active "klipper.service" "running" "diagnostic"
+check_required_service_active "klipper.service"
 check_required_service_active "moonraker.service"
 check_required_service_active "nginx.service"
 check_required_service_active "${CAN_UNIT}" "running exited"
@@ -1059,35 +1059,40 @@ CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"
 TREED_VERIFY_CAMERA="${TREED_VERIFY_CAMERA:-auto}"
 camera_checks_enabled=0
 camera_checks_reason=""
-case "${TREED_VERIFY_CAMERA}" in
-  1|true|TRUE|yes|YES)
-    camera_checks_enabled=1
-    camera_checks_reason="forced"
-    ;;
-  0|false|FALSE|no|NO)
-    camera_checks_enabled=0
-    camera_checks_reason="disabled by TREED_VERIFY_CAMERA"
-    ;;
-  auto|AUTO|'')
-    if systemctl cat crowsnest.service >/dev/null 2>&1; then
+if is_true "${TREED_CAMERA_REQUIRED:-0}"; then
+  camera_checks_enabled=1
+  camera_checks_reason="required by TREED_CAMERA_REQUIRED=1"
+else
+  case "${TREED_VERIFY_CAMERA}" in
+    1|true|TRUE|yes|YES)
       camera_checks_enabled=1
-      camera_checks_reason="auto: crowsnest.service present"
-    else
+      camera_checks_reason="forced"
+      ;;
+    0|false|FALSE|no|NO)
       camera_checks_enabled=0
-      camera_checks_reason="auto: crowsnest.service missing"
-    fi
-    ;;
-  *)
-    if systemctl cat crowsnest.service >/dev/null 2>&1; then
-      camera_checks_enabled=1
-      camera_checks_reason="auto fallback: crowsnest.service present"
-    else
-      camera_checks_enabled=0
-      camera_checks_reason="auto fallback: crowsnest.service missing"
-    fi
-    log_warn "VERIFY invalid TREED_VERIFY_CAMERA='${TREED_VERIFY_CAMERA}', using ${camera_checks_reason}"
-    ;;
-esac
+      camera_checks_reason="disabled by TREED_VERIFY_CAMERA"
+      ;;
+    auto|AUTO|'')
+      if systemctl cat crowsnest.service >/dev/null 2>&1; then
+        camera_checks_enabled=1
+        camera_checks_reason="auto: crowsnest.service present"
+      else
+        camera_checks_enabled=0
+        camera_checks_reason="auto: crowsnest.service missing"
+      fi
+      ;;
+    *)
+      if systemctl cat crowsnest.service >/dev/null 2>&1; then
+        camera_checks_enabled=1
+        camera_checks_reason="auto fallback: crowsnest.service present"
+      else
+        camera_checks_enabled=0
+        camera_checks_reason="auto fallback: crowsnest.service missing"
+      fi
+      log_warn "VERIFY invalid TREED_VERIFY_CAMERA='${TREED_VERIFY_CAMERA}', using ${camera_checks_reason}"
+      ;;
+  esac
+fi
 
 if [ "${camera_checks_enabled}" = "1" ]; then
   if systemctl cat crowsnest.service >/dev/null 2>&1; then

@@ -98,18 +98,91 @@ if [ "${BUILD_JOBS}" -le 0 ]; then
   BUILD_JOBS=1
 fi
 
-# Блок 3: Подготовка каталога артефактов и отчетов.
+# Блок 3: Проверка актуальности входов и подготовка каталога артефактов.
+firmware_config_sha() {
+  local path="$1"
+
+  sha256sum "${path}" | awk '{print $1}'
+}
+
+KLIPPER_HEAD="unknown"
+if command -v git >/dev/null 2>&1 && git -C "${TREED_KLIPPER_SRC_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  KLIPPER_HEAD="$(git -C "${TREED_KLIPPER_SRC_DIR}" rev-parse HEAD 2>/dev/null || printf '%s' "unknown")"
+fi
+
+FW_MAIN_SHA="$(firmware_config_sha "${TREED_FW_MAIN_CONFIG}")"
+FW_EBB_SHA="$(firmware_config_sha "${TREED_FW_EBB_CONFIG}")"
+FW_EDDY_SHA="disabled"
+if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
+  FW_EDDY_SHA="$(firmware_config_sha "${TREED_FW_EDDY_CONFIG}")"
+fi
+
+LATEST_LINK="${TREED_FIRMWARE_ARTIFACTS_DIR}/latest"
+
+firmware_inputs_current() {
+  local latest_dir=""
+  local inputs_file=""
+  local manifest_file=""
+  local header=""
+  local target=""
+  local artifact=""
+  local sha=""
+  local config=""
+  local artifact_count=0
+
+  if [ ! -e "${LATEST_LINK}" ]; then
+    return 1
+  fi
+
+  latest_dir="$(readlink -f "${LATEST_LINK}" 2>/dev/null || true)"
+  if [ -z "${latest_dir}" ] || [ ! -d "${latest_dir}" ]; then
+    return 1
+  fi
+
+  inputs_file="${latest_dir}/inputs.env"
+  manifest_file="${latest_dir}/manifest.tsv"
+  if [ ! -f "${inputs_file}" ] || [ ! -f "${manifest_file}" ] || [ ! -f "${latest_dir}/checksums.sha256" ]; then
+    return 1
+  fi
+
+  grep -Fx "klipper_head=${KLIPPER_HEAD}" "${inputs_file}" >/dev/null || return 1
+  grep -Fx "main_config_sha256=${FW_MAIN_SHA}" "${inputs_file}" >/dev/null || return 1
+  grep -Fx "ebb_config_sha256=${FW_EBB_SHA}" "${inputs_file}" >/dev/null || return 1
+  grep -Fx "eddy_enabled=${TREED_EDDY_ENABLED}" "${inputs_file}" >/dev/null || return 1
+  grep -Fx "eddy_config_sha256=${FW_EDDY_SHA}" "${inputs_file}" >/dev/null || return 1
+
+  while IFS=$'\t' read -r target artifact sha config; do
+    if [ -z "${header}" ]; then
+      header=1
+      continue
+    fi
+    [ -n "${artifact}" ] || return 1
+    [ -f "${artifact}" ] || return 1
+    artifact_count=$((artifact_count+1))
+  done < "${manifest_file}"
+
+  [ "${artifact_count}" -gt 0 ] || return 1
+  sha256sum -c "${latest_dir}/checksums.sha256" >/dev/null 2>&1 || return 1
+
+  return 0
+}
+
+ensure_dir "${TREED_FIRMWARE_ARTIFACTS_DIR}"
+if firmware_inputs_current; then
+  log_info "firmware-build: existing artifacts match current inputs, skipping rebuild (${LATEST_LINK})"
+  exit 0
+fi
+
 RUN_ID="$(date +"%Y%m%d-%H%M%S")"
 RUN_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR}/${RUN_ID}"
-LATEST_LINK="${TREED_FIRMWARE_ARTIFACTS_DIR}/latest"
 LOG_DIR="${RUN_DIR}/logs"
 CFG_DIR="${RUN_DIR}/configs"
 ART_DIR="${RUN_DIR}/artifacts"
 REPORT_FILE="${RUN_DIR}/build-report.txt"
 MANIFEST_FILE="${RUN_DIR}/manifest.tsv"
 CHECKSUM_FILE="${RUN_DIR}/checksums.sha256"
+INPUTS_FILE="${RUN_DIR}/inputs.env"
 
-ensure_dir "${TREED_FIRMWARE_ARTIFACTS_DIR}"
 ensure_dir "${RUN_DIR}"
 ensure_dir "${LOG_DIR}"
 ensure_dir "${CFG_DIR}"
@@ -120,8 +193,20 @@ TreeD V2 firmware build report
 started_at=$(date -Iseconds)
 run_id=${RUN_ID}
 klipper_src=${TREED_KLIPPER_SRC_DIR}
+klipper_head=${KLIPPER_HEAD}
 build_jobs=${BUILD_JOBS}
 eddy_enabled=${TREED_EDDY_ENABLED}
+EOF
+
+cat > "${INPUTS_FILE}" <<EOF
+klipper_head=${KLIPPER_HEAD}
+main_config=${TREED_FW_MAIN_CONFIG}
+main_config_sha256=${FW_MAIN_SHA}
+ebb_config=${TREED_FW_EBB_CONFIG}
+ebb_config_sha256=${FW_EBB_SHA}
+eddy_enabled=${TREED_EDDY_ENABLED}
+eddy_config=${TREED_FW_EDDY_CONFIG}
+eddy_config_sha256=${FW_EDDY_SHA}
 EOF
 
 printf 'target\tartifact\tsha256\tconfig\n' > "${MANIFEST_FILE}"

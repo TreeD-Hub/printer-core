@@ -11,13 +11,23 @@ set -euo pipefail
 # - required-steps: любая ошибка завершает loader с ненулевым кодом,
 # - optional-steps: ошибка логируется и не прерывает provisioning.
 
-# Блок 1: Определение корня репозитория и базовой рабочей директории.
+# Блок 1: Определение корня репозитория и раннего режима loader.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TREED_LOADER_MODE="${TREED_LOADER_MODE:-apply}"
+
+case "${TREED_LOADER_MODE}" in
+  apply|check)
+    ;;
+  *)
+    echo "[loader] ERROR: invalid TREED_LOADER_MODE=${TREED_LOADER_MODE} (allowed: apply|check)" >&2
+    exit 1
+    ;;
+esac
 
 # Блок 2: Нормализация shell-скриптов loader после Windows checkout.
 # - Убираем CRLF для *.sh в loader/**,
 # - Восстанавливаем executable-бит для entrypoint и step-скриптов.
-if [ -d "${REPO_DIR}/loader" ]; then
+if [ "${TREED_LOADER_MODE}" != "check" ] && [ -d "${REPO_DIR}/loader" ]; then
   find "${REPO_DIR}/loader" -type f -name "*.sh" -print0 | xargs -0 -r sed -i 's/\r$//'
   chmod +x "${REPO_DIR}/loader/loader.sh" || true
   chmod +x "${REPO_DIR}/loader/steps/"*.sh 2>/dev/null || true
@@ -108,7 +118,18 @@ export EXTLINUX_FILE
 TREED_MAINTENANCE_MODE="${TREED_MAINTENANCE_MODE:-1}"
 TREED_STATE_DIR="/run/treed-loader"
 TREED_STATE_FILE="/run/treed-loader/state.env"
+
+case "${TREED_LOADER_MODE}" in
+  apply|check)
+    ;;
+  *)
+    log_error "Invalid TREED_LOADER_MODE=${TREED_LOADER_MODE} (allowed: apply|check)"
+    exit 1
+    ;;
+esac
+
 export TREED_MAINTENANCE_MODE
+export TREED_LOADER_MODE
 export TREED_STATE_DIR
 export TREED_STATE_FILE
 
@@ -244,6 +265,7 @@ TREED_KLIPPER_ACTIVE_STATE=${TREED_KLIPPER_ACTIVE_STATE}
 TREED_MOONRAKER_ACTIVE_STATE=${TREED_MOONRAKER_ACTIVE_STATE}
 TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE:-auto}
 TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE:-}
+TREED_LOADER_MODE=${TREED_LOADER_MODE}
 EOF
   chmod 0644 "${TREED_STATE_FILE}"
 }
@@ -295,21 +317,153 @@ resolve_deploy_mode() {
   export TREED_DEPLOY_BRANCH
 }
 
-# Блок 12: Подключение доп. библиотек, снимок состояния и deploy-режим.
+# Блок 12: Read-only проверка актуальности runtime-состояния.
+CHECK_OK=0
+CHECK_WARN=0
+CHECK_FAIL=0
+
+check_pass() {
+  CHECK_OK=$((CHECK_OK+1))
+  log_info "CHECK $*: current"
+}
+
+check_warn() {
+  CHECK_WARN=$((CHECK_WARN+1))
+  log_warn "CHECK $*: warning"
+}
+
+check_fail() {
+  CHECK_FAIL=$((CHECK_FAIL+1))
+  log_error "CHECK $*: drift"
+}
+
+check_file_present() {
+  local label="$1"
+  local path="$2"
+
+  if [ -f "${path}" ]; then
+    check_pass "${label} (${path})"
+  else
+    check_fail "${label} (${path})"
+  fi
+}
+
+check_dir_present() {
+  local label="$1"
+  local path="$2"
+
+  if [ -d "${path}" ]; then
+    check_pass "${label} (${path})"
+  else
+    check_fail "${label} (${path})"
+  fi
+}
+
+check_unit_present() {
+  local unit="$1"
+
+  if unit_exists "${unit}"; then
+    check_pass "${unit} present"
+  else
+    check_fail "${unit} present"
+  fi
+}
+
+check_unit_active() {
+  local unit="$1"
+  local state=""
+
+  if ! unit_exists "${unit}"; then
+    check_fail "${unit} active (unit missing)"
+    return 0
+  fi
+
+  if systemctl is-active --quiet "${unit}"; then
+    check_pass "${unit} active"
+  else
+    state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
+    check_fail "${unit} active (state=${state:-unknown})"
+  fi
+}
+
+run_check_mode() {
+  local firmware_dir="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
+  local mainsail_web_path="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
+  local crowsnest_conf="${PI_HOME}/printer_data/config/crowsnest.conf"
+  local webcam_fragment="${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf"
+
+  log_info "TreeD loader check mode: read-only actuality check"
+  log_info "TREED_DEVICE_STATE=${TREED_DEVICE_STATE} (${TREED_DEVICE_STATE_REASON})"
+  log_info "TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}"
+
+  check_dir_present "printer_data" "${PI_HOME}/printer_data"
+  check_dir_present "runtime config dir" "${PI_HOME}/printer_data/config"
+  check_file_present "runtime printer.cfg" "${PI_HOME}/printer_data/config/printer.cfg"
+
+  check_dir_present "Klipper source checkout" "${PI_HOME}/klipper"
+  check_dir_present "Moonraker source checkout" "${PI_HOME}/moonraker"
+  check_unit_present "klipper.service"
+  check_unit_present "moonraker.service"
+  check_unit_present "treed-can-setup.service"
+  check_unit_present "nginx.service"
+
+  check_unit_active "klipper.service"
+  check_unit_active "moonraker.service"
+  check_unit_active "nginx.service"
+
+  check_file_present "Mainsail release_info" "${mainsail_web_path}/release_info.json"
+  check_file_present "Mainsail index" "${mainsail_web_path}/index.html"
+
+  if [ "${TREED_FIRMWARE_BUILD_ENABLED:-1}" = "1" ]; then
+    check_file_present "firmware manifest" "${firmware_dir}/latest/manifest.tsv"
+    check_file_present "firmware checksums" "${firmware_dir}/latest/checksums.sha256"
+  else
+    check_warn "firmware artifact check skipped (TREED_FIRMWARE_BUILD_ENABLED=0)"
+  fi
+
+  if [ "${TREED_KLIPPERSCREEN_REQUIRED:-1}" = "1" ]; then
+    check_unit_present "KlipperScreen.service"
+    check_unit_active "KlipperScreen.service"
+  else
+    check_warn "KlipperScreen checks skipped (TREED_KLIPPERSCREEN_REQUIRED=0)"
+  fi
+
+  if [ "${TREED_CAMERA_REQUIRED:-0}" = "1" ]; then
+    check_unit_present "crowsnest.service"
+    check_unit_active "crowsnest.service"
+    check_file_present "crowsnest config" "${crowsnest_conf}"
+    check_file_present "Moonraker webcam fragment" "${webcam_fragment}"
+  elif unit_exists "crowsnest.service"; then
+    check_warn "camera is optional, crowsnest.service is present"
+  else
+    check_warn "camera checks skipped (TREED_CAMERA_REQUIRED=0)"
+  fi
+
+  if [ "${CHECK_FAIL}" -eq 0 ]; then
+    log_info "TreeD loader check mode: CURRENT (${CHECK_OK} current, ${CHECK_WARN} warning)"
+    return 0
+  fi
+
+  log_error "TreeD loader check mode: DRIFT (${CHECK_FAIL} drift, ${CHECK_OK} current, ${CHECK_WARN} warning)"
+  return 1
+}
+
+# Блок 13: Подключение доп. библиотек, снимок состояния и deploy-режим.
 . "${REPO_DIR}/loader/lib/plymouth.sh"
 detect_device_state
 resolve_deploy_mode
-write_device_state_snapshot
+if [ "${TREED_LOADER_MODE}" != "check" ]; then
+  write_device_state_snapshot
+fi
 
-# Блок 13: Глобальный trap ошибок.
+# Блок 14: Глобальный trap ошибок.
 # Логирует имя шага, код, строку и команду, после чего завершает loader.
 trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BASH_LINENO[0]} cmd=${BASH_COMMAND}"; exit ${rc}' ERR
 
-# Блок 14: Реестр шагов оркестрации (порядок критичен).
+# Блок 15: Реестр шагов оркестрации (порядок критичен).
 STEPS=(
   # Предварительные проверки и подготовка окружения.
   "check-env"                # Контракт окружения: root, PI_USER/PI_HOME, OS sanity.
-  "detect-boot-env"          # Host-aware определение boot backend и boot-файлов.
   "timezone-sync"            # Синхронизация timezone/NTP для корректного времени UI/логов.
   "maintenance-stop"         # Остановка runtime-сервисов перед изменением конфигов.
 
@@ -343,15 +497,20 @@ STEPS=(
   "verify"                   # Финальная валидация всего контура (must-pass).
 )
 
-# Блок 15: Явный список optional-шагов (не прерывают provisioning при ошибке).
+# Блок 16: Явный список optional-шагов (не прерывают provisioning при ошибке).
 OPTIONAL_STEPS=(
   "crowsnest-webcam"         # Камера может быть недоступна на конкретном хосте.
 )
 
-# Блок 16: Helper-проверка принадлежности шага к optional-контуру.
+# Блок 17: Helper-проверка принадлежности шага к optional-контуру.
 is_optional_step() {
   local step_name="$1"
   local opt=""
+
+  if [ "${step_name}" = "crowsnest-webcam" ] && [ "${TREED_CAMERA_REQUIRED:-0}" = "1" ]; then
+    return 1
+  fi
+
   for opt in "${OPTIONAL_STEPS[@]}"; do
     if [ "${opt}" = "${step_name}" ]; then
       return 0
@@ -360,7 +519,7 @@ is_optional_step() {
   return 1
 }
 
-# Блок 17: Унифицированный запуск step-скрипта.
+# Блок 18: Унифицированный запуск step-скрипта.
 # Если у файла нет executable-бита, запускаем через bash явно.
 run_step_script() {
   local script_path="$1"
@@ -371,15 +530,23 @@ run_step_script() {
   fi
 }
 
-# Блок 18: Стартовая диагностика оркестратора.
+# Блок 19: Стартовая диагностика оркестратора.
 log_info "TreeD loader starting"
 log_info "REPO_DIR=${REPO_DIR}, PI_USER=${PI_USER}, PI_HOME=${PI_HOME}, BOOT_BACKEND=${TREED_BOOT_BACKEND}"
 log_info "BOOT_DIR=${BOOT_DIR}, CMDLINE_FILE=${CMDLINE_FILE:-<none>}, CONFIG_FILE=${CONFIG_FILE:-<none>}, ARMBIAN_ENV_FILE=${ARMBIAN_ENV_FILE:-<none>}, EXTLINUX_FILE=${EXTLINUX_FILE:-<none>}"
 log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
+log_info "TREED_LOADER_MODE=${TREED_LOADER_MODE}"
 log_info "TREED_DEVICE_STATE=${TREED_DEVICE_STATE} (${TREED_DEVICE_STATE_REASON}), state_file=${TREED_STATE_FILE}"
 log_info "TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE}, TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}, TREED_DEPLOY_BRANCH=${TREED_DEPLOY_BRANCH:-unknown}"
 
-# Блок 19: Основной цикл выполнения шагов по реестру STEPS.
+if [ "${TREED_LOADER_MODE}" = "check" ]; then
+  if run_check_mode; then
+    exit 0
+  fi
+  exit 1
+fi
+
+# Блок 20: Основной цикл выполнения шагов по реестру STEPS.
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"
   script="${REPO_DIR}/loader/steps/${step}.sh"
@@ -413,6 +580,6 @@ for step in "${STEPS[@]}"; do
   fi
 done
 
-# Блок 20: Успешное завершение полного контура provisioning.
+# Блок 21: Успешное завершение полного контура provisioning.
 write_device_state_snapshot
 log_info "TreeD loader finished successfully"

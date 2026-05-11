@@ -7,6 +7,9 @@ set -euo pipefail
 # Назначение:
 # - Определяет host boot-backend и boot-пути.
 # - Дает helper-функции для безопасной работы с boot-файлами и armbianEnv.txt/extlinux.
+# Контур:
+# - required library для boot-aware шагов loader.
+# - read-only функции детекта не меняют систему; set_* helper меняет только явно переданный файл.
 
 # Блок 1: Подключение общей библиотеки loader.
 . "${REPO_DIR}/loader/lib/common.sh"

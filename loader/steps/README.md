@@ -7,32 +7,33 @@
 | # | Шаг | Тип | Назначение |
 |---|---|---|---|
 | 1 | `check-env.sh` | required | Проверка V2-контракта переменных и базового окружения loader. |
-| 2 | `detect-boot-env.sh` | required | Host-aware определение backend (`rpi|armbian|extlinux`) и boot-путей. |
-| 3 | `timezone-sync.sh` | required | Синхронизация timezone/NTP. |
-| 4 | `maintenance-stop.sh` | required | Остановка runtime-сервисов перед provisioning. |
-| 5 | `packages-core.sh` | required | Базовые системные пакеты и numpy/matplotlib/BLAS-зависимости. |
-| 6 | `runtime-bootstrap.sh` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов. |
-| 7 | `can-setup.sh` | required | Подъем CAN интерфейса (`can0`) через systemd oneshot + `ip link`. |
-| 8 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum. |
-| 9 | `boot-hdmi-config.sh` | required | Backend-aware HDMI policy: `auto` (удаляет forced `video=`), `fixed` (добавляет `video=`), `off` (не трогает `video=`). |
-| 10 | `plymouth-theme-install.sh` | required | Установка темы Plymouth. |
-| 11 | `plymouth-initramfs.sh` | required | Пересборка initramfs. |
-| 12 | `plymouth-initramfs-config.sh` | required | RPi/Armbian/Extlinux backend-aware валидация initrd. |
-| 13 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
-| 14 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
-| 15 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
-| 16 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 17 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
-| 18 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
-| 19 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
-| 20 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
-| 21 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
-| 22 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 23 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
-| 24 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
-| 25 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
-| 26 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 27 | `verify.sh` | required | Финальная валидация V2-контура (boot/service/http/CAN/camera), без проверки runtime-конфигов. |
+| 2 | `timezone-sync.sh` | required | Синхронизация timezone/NTP. |
+| 3 | `maintenance-stop.sh` | required | Остановка runtime-сервисов перед provisioning. |
+| 4 | `packages-core.sh` | required | Базовые системные пакеты и numpy/matplotlib/BLAS-зависимости. |
+| 5 | `runtime-bootstrap.sh` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов. |
+| 6 | `can-setup.sh` | required | Подъем CAN интерфейса (`can0`) через systemd oneshot + `ip link`. |
+| 7 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum. |
+| 8 | `boot-hdmi-config.sh` | required | Backend-aware HDMI policy: `auto` (удаляет forced `video=`), `fixed` (добавляет `video=`), `off` (не трогает `video=`). |
+| 9 | `plymouth-theme-install.sh` | required | Установка темы Plymouth. |
+| 10 | `plymouth-initramfs.sh` | required | Пересборка initramfs. |
+| 11 | `plymouth-initramfs-config.sh` | required | RPi/Armbian/Extlinux backend-aware валидация initrd. |
+| 12 | `plymouth-cmdline.sh` | required | RPi: `cmdline.txt`; Armbian: `extraargs`; Extlinux: `append` в `extlinux.conf`. |
+| 13 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
+| 14 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
+| 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
+| 16 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
+| 17 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
+| 18 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
+| 19 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
+| 20 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
+| 21 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
+| 22 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
+| 23 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
+| 24 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
+| 25 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
+| 26 | `verify.sh` | required | Финальная валидация V2-контура (boot/service/http/CAN/camera), без проверки runtime-конфигов. |
+
+`detect-boot-env.sh` оставлен как ручной диагностический step. В основном реестре он не запускается, потому что parent-shell оркестратор уже определяет и экспортирует boot-контекст до выполнения шагов.
 
 ## Контракт для step-скриптов
 
@@ -54,6 +55,7 @@
 - `CMDLINE_FILE`, `CONFIG_FILE` (для `rpi` backend)
 - `ARMBIAN_ENV_FILE` (для `armbian` backend)
 - `EXTLINUX_FILE` (для `extlinux` backend)
+- `TREED_LOADER_MODE` (`apply|check`, default `apply`; `check` не запускает step-скрипты и только сверяет runtime-состояние)
 - `TREED_DEPLOY_MODE` (`auto|clean|preserve`, default `auto`)
 - `TREED_DEPLOY_MODE_EFFECTIVE` (`clean|preserve`)
 - `TREED_DEVICE_STATE` (`fresh|update|recover`)
@@ -161,7 +163,7 @@
 - `TREED_CAM_HTTP_RETRIES` (default `3`)
 - `TREED_CAM_HTTP_TIMEOUT` (default `8`)
 - `TREED_MOONRAKER_HTTP_RETRIES` (default `30`)
-- `TREED_KLIPPER_START_REQUIRE_ACTIVE` (`0|1`, default `0`; при `0` ожидание `klipper.service active` в `maintenance-start` диагностическое)
+- `TREED_KLIPPER_START_REQUIRE_ACTIVE` (`0|1`, default `1`; при `0` ожидание `klipper.service active` в `maintenance-start` диагностическое)
 - `TREED_REQUIRE_KLIPPER_READY` (`0|1`, default `0`; при `1` `verify.sh` считает `Klippy state!=ready` блокирующей ошибкой)
 - `TREED_ARMBIAN_VERBOSITY` (default `1`)
 - `TREED_ARMBIAN_BOOTLOGO` (default `true`)
@@ -199,7 +201,9 @@
 ## Практические замечания
 
 - `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen`, `restart-ms`, ждет появление интерфейса и выполняет reinit-циклы при старте.
+- `packages-core.sh` перед `apt update/install` сверяет установленный пакетный набор через `dpkg-query`; если все пакеты уже актуально установлены, apt-фаза пропускается.
 - `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
+- `firmware-build.sh` перед сборкой сверяет `inputs.env` в `latest`: commit Klipper и checksum target-конфигов; при совпадении входов повторная сборка пропускается.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
 - `runtime-bootstrap.sh` после подготовки `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}` проверяет импорт `numpy` и `matplotlib`: если пакет уже есть, логирует skip; если нет, ставит текущий стабильный релиз через pip.
