@@ -35,12 +35,13 @@
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
 Профиль подключает override `G28`, который:
 - для `G28 X`, `G28 Y` и `G28 X Y` вызывает штатный `G28_BASE`, затем делает отход на 10 мм от X-max/Y-max и паузу 1 секунду для сброса stall-флага TMC5160;
-- для `G28 Z` переводит голову в центр пластины из `_TREED_GEOMETRY_CFG`, затем вызывает базовый `G28.1 Z` с `probe:z_virtual_endstop`;
+- для `G28 Z` переводит голову в центр пластины из `_TREED_GEOMETRY_CFG`, вызывает базовый `G28.1 Z` с `probe:z_virtual_endstop`, затем уточняет Z через `PROBE` и `SET_KINEMATIC_POSITION`;
 - если `G28 Z` вызван без готовых X/Y, макрос завершится с явной ошибкой и подсказкой сначала выполнить `G28` или `G28 X Y`.
 
 В текущем Eddy-профиле `stepper_z.endstop_pin = probe:z_virtual_endstop`, поэтому:
-- `G28 Z` / кнопка Home Z в UI используют Eddy как обязательный Z-endstop;
+- `G28 Z` / кнопка Home Z в UI используют Eddy как обязательный Z-endstop и сразу делают точную PROBE-коррекцию;
 - `TREED_Z_PARK_ZERO_EDDY` остается публичным рабочим макросом поиска Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`;
+- `[force_move] enable_force_move: True` входит в штатный профиль, потому что `SET_KINEMATIC_POSITION` нужен для Eddy Z-home correction;
 - `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`.
 
 Обязательные аппаратные предпосылки перед запуском loader:
@@ -82,7 +83,7 @@ SFS V2.0 использует разветвитель: 4-pin коннектор
 1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
 2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
 3. Зафиксировать финальные `driver_SGT` в рабочем диапазоне без ложных срабатываний.
-4. Критерий приемки: `G28 X` и `G28 Y` делают single touch, отход на 10 мм и паузу 1 секунду; полный `G28` перед `G28 Z` переводит голову в `X122.5 Y122.5`, затем `G28 Z` использует штатный Z-endstop активного профиля и, после калибровки Eddy, `TREED_Z_PARK_ZERO_EDDY`; отдельный `G28 Z` без предварительного/встроенного XY homing дает явную ошибку.
+4. Критерий приемки: `G28 X` и `G28 Y` делают single touch, отход на 10 мм и паузу 1 секунду; полный `G28` перед `G28 Z` переводит голову в `X122.5 Y122.5`, затем `G28 Z` делает `G28.1 Z` и `PROBE`-коррекцию Eddy; отдельный `G28 Z` без предварительного/встроенного XY homing дает явную ошибку.
 
 ## Первичная калибровка Eddy
 
@@ -91,10 +92,10 @@ SFS V2.0 использует разветвитель: 4-pin коннектор
 Базовый порядок:
 1. Навести датчик примерно в центр стола и около 20 мм над поверхностью.
 2. Выполнить `LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy`, затем `TREED_SAVE_CONFIG`.
-3. Временно подключить `[include profiles/treed_v2_corexy_v1/eddy_force_move_calibration.cfg]` в `local_overrides.cfg`.
-4. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`.
-5. Снова выполнить `TREED_SAVE_CONFIG`.
-6. Убрать calibration-only include `eddy_force_move_calibration.cfg` из `local_overrides.cfg`.
+3. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`.
+4. Снова выполнить `TREED_SAVE_CONFIG`.
+
+`eddy_force_move_calibration.cfg` больше не нужен для первичной калибровки: runtime `[force_move]` живет в `probe_eddy_duo.cfg`. Старый include оставлен пустым только для совместимости с локальными конфигами.
 
 После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper. Для обычных повторных раскладок использовать `preserve` или `auto` на ветке `treed-v2`.
 

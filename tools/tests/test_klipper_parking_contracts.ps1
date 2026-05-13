@@ -86,16 +86,26 @@ function Get-GcodeMacroBlock {
 
 # Блок 2: Загрузка проверяемых макросов и примеров override.
 $macrosCore = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_core.cfg"
+$macrosHoming = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_homing.cfg"
 $macrosFlow = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_print_flow.cfg"
 $macrosPause = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg"
 $localOverrides = Read-RepoFile "klipper/local_overrides.example.cfg"
 
+$g28 = Get-GcodeMacroBlock $macrosHoming "G28"
+$zHopBeforeXy = Get-GcodeMacroBlock $macrosCore "_TREED_Z_HOP_BEFORE_XY"
 $endPrint = Get-GcodeMacroBlock $macrosFlow "END_PRINT"
 $pauseCfg = Get-GcodeMacroBlock $macrosCore "_TREED_PAUSE_PARK_CFG"
 $pauseExec = Get-GcodeMacroBlock $macrosPause "_TREED_PAUSE_EXEC"
 $cancelPrint = Get-GcodeMacroBlock $macrosPause "CANCEL_PRINT"
 
 # Блок 3: Проверка контрактов конечной парковки, паузы и аварийной отмены.
+Assert-Contains $zHopBeforeXy '(?m)^\s*G1 Z\{z_hop\} F1500\s*$' "Z-hop helper must always issue the Z move"
+Assert-NotContains $zHopBeforeXy 'homed_axes' "Z-hop helper must not skip the move based on homed axes"
+Assert-NotContains $macrosCore '(?m)^\[gcode_macro _TREED_HOME_XY_SENSORLESS\]' "G28 owns X/Y homing; extra X/Y homing wrapper must not exist"
+
+Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G28\.1 X\s*$' "G28 must run Z-hop before X homing"
+Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G28\.1 Y\s*$' "G28 must run Z-hop before Y homing"
+
 Assert-Contains $endPrint 'printer\["gcode_macro G28"\]\.xy_backoff_mm' "END_PRINT uses the same XY backoff as homing"
 Assert-Contains $endPrint 'set park_x = x_max - xy_backoff' "END_PRINT parks X at the homing backoff point"
 Assert-Contains $endPrint 'set park_y = y_max - xy_backoff' "END_PRINT parks Y at the homing backoff point"
