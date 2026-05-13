@@ -98,7 +98,7 @@ SFS V2.0 использует разветвитель: 4-pin коннектор
 2. Выполнить `LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy`, затем `TREED_SAVE_CONFIG`.
 3. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`.
 4. Снова выполнить `TREED_SAVE_CONFIG`.
-5. Для компенсации thermal drift выполнить `SET_IDLE_TIMEOUT TIMEOUT=36000`, затем `TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4`, пройти запрошенные paper test шаги и сохранить через `TREED_SAVE_CONFIG`.
+5. После рестарта выполнить `G28`, затем для компенсации thermal drift выполнить `SET_IDLE_TIMEOUT TIMEOUT=36000`, `TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4`, пройти запрошенные paper test шаги и сохранить через `TREED_SAVE_CONFIG`.
    Если камера/датчик стабильно выходят выше 56C, `TARGET` подбирать по фактической максимальной температуре Eddy.
 
 `eddy_force_move_calibration.cfg` больше не нужен для первичной калибровки: runtime `[force_move]` живет в `probe_eddy_duo.cfg`. Старый include оставлен пустым только для совместимости с локальными конфигами.

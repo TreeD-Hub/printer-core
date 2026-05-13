@@ -46,6 +46,55 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 
 `SAVE_CONFIG` в стартовый G-code добавлять не нужно: сетка активируется для текущей печати, а сохранение конфигурации остается ручной сервисной операцией.
 
+## Калибровка Eddy
+
+До сохраненной калибровки `PROBE_EDDY_CURRENT_CALIBRATE` команды `PROBE`, `BED_MESH_CALIBRATE`, `START_PRINT` с mesh-контуром и `TREED_Z_PARK_ZERO_EDDY` будут падать с ошибкой `Must calibrate probe_eddy_current first`.
+
+Базовый порядок первичной калибровки:
+
+1. Навести Eddy примерно в центр стола и поставить датчик около 20 мм над поверхностью.
+2. Выполнить калибровку drive current:
+
+```gcode
+LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy
+TREED_SAVE_CONFIG
+```
+
+3. После рестарта выполнить автоматизированную калибровку Eddy через проектный макрос:
+
+```gcode
+PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy
+```
+
+4. Пройти paper test, выполнить `ACCEPT`, затем сохранить:
+
+```gcode
+TREED_SAVE_CONFIG
+```
+
+5. После рестарта снова выполнить homing, затем запустить компенсацию температурного дрейфа:
+
+```gcode
+G28
+SET_IDLE_TIMEOUT TIMEOUT=36000
+TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4
+```
+
+6. Пройти запрошенные paper test шаги, выполнить `ACCEPT`, затем сохранить:
+
+```gcode
+TREED_SAVE_CONFIG
+```
+
+После этого рабочая проверка Z0:
+
+```gcode
+G28
+TREED_Z_PARK_ZERO_EDDY
+```
+
+`PROBE_EDDY_CURRENT_CALIBRATE_AUTO` сам использует runtime `[force_move]`, ставит Eddy в центр пластины с учетом offset и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`. После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper; использовать `preserve` или `auto`.
+
 ## Сервисные тесты движения
 
 `TREED_XY_MOTION_TEST` — ручной XY stress-test без печати. Макрос сам делает `G28`, поднимается на безопасный Z, гоняет периметр, диагонали, зигзаг, круг, мелкие перемещения вокруг центра и ромбовую восьмерку. Во время активной печати или паузы запуск запрещен.
