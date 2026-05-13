@@ -111,6 +111,9 @@ Assert-NotContains $macrosCore '(?m)^\[gcode_macro _TREED_HOME_XY_SENSORLESS\]' 
 
 Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G28\.1 X\s*$' "G28 must run Z-hop before X homing"
 Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G28\.1 Y\s*$' "G28 must run Z-hop before Y homing"
+Assert-NotContains $g28 '(?m)^\s*SAVE_GCODE_STATE\b' "G28 must not save parser XYZ before homing"
+Assert-NotContains $g28 '(?m)^\s*RESTORE_GCODE_STATE\b' "G28 must not restore stale parser XYZ after homing"
+Assert-Contains $g28 'printer\.gcode_move\.absolute_coordinates' "G28 must preserve only coordinate mode explicitly"
 
 Assert-Contains $endPrint 'printer\["gcode_macro G28"\]\.xy_backoff_mm' "END_PRINT uses the same XY backoff as homing"
 Assert-Contains $endPrint 'set park_x = x_max - xy_backoff' "END_PRINT parks X at the homing backoff point"
