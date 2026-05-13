@@ -89,14 +89,19 @@ $macrosCore = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_core.cfg
 $macrosHoming = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_homing.cfg"
 $macrosFlow = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_print_flow.cfg"
 $macrosPause = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg"
+$macrosKamp = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_kamp.cfg"
 $localOverrides = Read-RepoFile "klipper/local_overrides.example.cfg"
 
 $g28 = Get-GcodeMacroBlock $macrosHoming "G28"
 $zHopBeforeXy = Get-GcodeMacroBlock $macrosCore "_TREED_Z_HOP_BEFORE_XY"
 $endPrint = Get-GcodeMacroBlock $macrosFlow "END_PRINT"
+$startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
 $pauseCfg = Get-GcodeMacroBlock $macrosCore "_TREED_PAUSE_PARK_CFG"
 $pauseExec = Get-GcodeMacroBlock $macrosPause "_TREED_PAUSE_EXEC"
 $cancelPrint = Get-GcodeMacroBlock $macrosPause "CANCEL_PRINT"
+$kampSettings = Get-GcodeMacroBlock $macrosKamp "_KAMP_Settings"
+$smartPark = Get-GcodeMacroBlock $macrosKamp "SMART_PARK"
+$linePurge = Get-GcodeMacroBlock $macrosKamp "LINE_PURGE"
 
 # Блок 3: Проверка контрактов конечной парковки, паузы и аварийной отмены.
 Assert-Contains $zHopBeforeXy '(?m)^\s*FORCE_MOVE STEPPER=stepper_z DISTANCE=\{z_hop\} VELOCITY=5 ACCEL=100\s*$' "Z-hop helper must use FORCE_MOVE before homing"
@@ -123,5 +128,12 @@ Assert-Contains $cancelPrint 'G1 Z\{target_z\} F300' "CANCEL_PRINT keeps the Z-h
 Assert-NotContains $cancelPrint '(?m)^\s*G[01]\s+.*\bX' "CANCEL_PRINT must not issue XY moves with X"
 Assert-NotContains $cancelPrint '(?m)^\s*G[01]\s+.*\bY' "CANCEL_PRINT must not issue XY moves with Y"
 Assert-NotContains $cancelPrint '(?m)^\s*G28\b' "CANCEL_PRINT must not home axes"
+
+# Блок 4: Проверка KAMP-порядка перед purge.
+Assert-Contains $kampSettings 'variable_smart_park_height:\s*0\.0' "SMART_PARK default heat position must be at bed Z0"
+Assert-ContainsBefore $smartPark '(?m)^\s*G0 X\{park_x\} Y\{park_y\} F\{travel_speed\}\s*$' '(?m)^\s*G0 Z\{z_height\} F\{travel_speed\}\s*$' "SMART_PARK must move XY before lowering to heat Z"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_FINAL_HEAT\s*$' '(?m)^\s*_TREED_START_KAMP_PURGE\s*$' "START_PRINT must heat nozzle before LINE_PURGE"
+Assert-ContainsBefore $linePurge '(?m)^\s*G0 Z\{purge_height\}\s*$' '(?m)^\s*G0 X\{purge_x_center\} Y\{purge_y_origin\}\s*$' "LINE_PURGE must raise to purge height before horizontal XY move"
+Assert-ContainsBefore $linePurge '(?m)^\s*G0 Z\{purge_height\}\s*$' '(?m)^\s*G0 X\{purge_x_origin\} Y\{purge_y_center\}\s*$' "LINE_PURGE must raise to purge height before vertical XY move"
 
 Write-Output "PASS: klipper parking contracts"
