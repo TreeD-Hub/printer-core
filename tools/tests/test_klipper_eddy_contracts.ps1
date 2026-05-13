@@ -89,14 +89,20 @@ function Get-GcodeMacroBlock {
 $RemovedZ0Adjust = "z0" + "_adjust"
 $probeEddy = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
 $forceMoveCompat = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/eddy_force_move_calibration.cfg"
+$macrosFlow = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_print_flow.cfg"
+$profileReadme = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/README.md"
 
 $eddyHomeZ = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_HOME_Z"
 $reloadZOffset = Get-GcodeMacroBlock $probeEddy "_RELOAD_Z_OFFSET_FROM_PROBE"
 $setZFromProbe = Get-GcodeMacroBlock $probeEddy "SET_Z_FROM_PROBE"
 $captureLiveZ = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET"
+$startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
+$startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
 
 # Блок 3: Проверка штатного Eddy Z-home без постоянного z0_adjust.
 Assert-Contains $probeEddy '(?ms)^\[force_move\]\s+enable_force_move:\s*True' "Eddy runtime profile must enable SET_KINEMATIC_POSITION"
+Assert-Contains $probeEddy '(?ms)^\[temperature_probe btt_eddy\]\s+sensor_type:\s*Generic 3950\s+sensor_pin:\s*eddy:gpio26\s+min_temp:\s*10\s+max_temp:\s*100\s+horizontal_move_z:\s*2' "Eddy profile must expose linked temperature_probe for thermal drift calibration"
+Assert-Contains $profileReadme 'TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4' "Eddy README must document temperature drift calibration"
 Assert-NotContains $forceMoveCompat '(?m)^\[force_move\]' "legacy Eddy calibration include must not duplicate runtime force_move section"
 
 Assert-NotContains $probeEddy $RemovedZ0Adjust "Eddy profile must not use fixed base Z adjustment"
@@ -107,5 +113,14 @@ Assert-ContainsBefore $eddyHomeZ '(?m)^\s*G28\.1 Z\s*$' '(?m)^\s*SET_Z_FROM_PROB
 Assert-ContainsBefore $setZFromProbe '(?m)^\s*PROBE\b' '(?m)^\s*_RELOAD_Z_OFFSET_FROM_PROBE\s*$' "SET_Z_FROM_PROBE must probe before reloading Z"
 Assert-Contains $reloadZOffset 'printer\.probe\.last_probe_position\.z' "Z reload must use the last PROBE result"
 Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.probe\.last_probe_position\.z\}\s*$' "Z reload must rewrite kinematic Z from PROBE result"
+
+# Блок 4: START_PRINT должен строить Z0, mesh и park только на прогретом столе.
+Assert-NotContains $startMachinePrep '(?m)^\s*_TREED_HOME_ALL\s*$' "START machine prep must not home before bed preheat"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREHEAT\s*$' '(?m)^\s*_TREED_HOME_ALL\s*$' "START_PRINT must wait for bed preheat before Eddy homing"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_HOME_ALL\s*$' '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "START_PRINT must enable print offset only after hot Eddy homing"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)^\s*_TREED_START_KAMP_PREP\s*$' "START_PRINT must prepare mesh and smart park after hot homing"
+Assert-Contains $macrosFlow 'DEFAULT_MESH_METHOD = "scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must prefer scan over rapid_scan for precision"
+Assert-NotContains $macrosFlow 'mesh_method\|default\("rapid_scan"\)' "Adaptive mesh fallback must not silently return to rapid_scan"
+Assert-NotContains $macrosFlow 'DEFAULT_MESH_METHOD = "rapid_scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must not use rapid_scan in precision profile"
 
 Write-Output "PASS: klipper eddy contracts"
