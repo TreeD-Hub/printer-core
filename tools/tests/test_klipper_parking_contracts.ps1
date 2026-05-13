@@ -46,6 +46,29 @@ function Assert-NotContains {
   }
 }
 
+function Assert-ContainsBefore {
+  param(
+    [string]$Content,
+    [string]$FirstPattern,
+    [string]$SecondPattern,
+    [string]$Message
+  )
+
+  $first = [regex]::Match($Content, $FirstPattern)
+  if (-not $first.Success) {
+    throw "FAIL: $Message (first pattern not found)"
+  }
+
+  $second = [regex]::Match($Content, $SecondPattern)
+  if (-not $second.Success) {
+    throw "FAIL: $Message (second pattern not found)"
+  }
+
+  if ($first.Index -gt $second.Index) {
+    throw "FAIL: $Message"
+  }
+}
+
 function Get-GcodeMacroBlock {
   param(
     [string]$Content,
@@ -69,6 +92,7 @@ $localOverrides = Read-RepoFile "klipper/local_overrides.example.cfg"
 
 $endPrint = Get-GcodeMacroBlock $macrosFlow "END_PRINT"
 $pauseCfg = Get-GcodeMacroBlock $macrosCore "_TREED_PAUSE_PARK_CFG"
+$pauseExec = Get-GcodeMacroBlock $macrosPause "_TREED_PAUSE_EXEC"
 $cancelPrint = Get-GcodeMacroBlock $macrosPause "CANCEL_PRINT"
 
 # Блок 3: Проверка контрактов конечной парковки, паузы и аварийной отмены.
@@ -76,11 +100,13 @@ Assert-Contains $endPrint 'printer\["gcode_macro G28"\]\.xy_backoff_mm' "END_PRI
 Assert-Contains $endPrint 'set park_x = x_max - xy_backoff' "END_PRINT parks X at the homing backoff point"
 Assert-Contains $endPrint 'set park_y = y_max - xy_backoff' "END_PRINT parks Y at the homing backoff point"
 Assert-NotContains $endPrint 'set park_x = x_min \+ 10\.0' "END_PRINT must not park at the opposite X edge"
+Assert-ContainsBefore $endPrint '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G1 X\{park_x\} Y\{park_y\} F6000\s*$' "END_PRINT must run Z-hop before parking XY"
 
 Assert-Contains $pauseCfg 'variable_park_x_raw: 122\.5' "PAUSE default X park is the middle of the 245 mm X travel"
 Assert-Contains $pauseCfg 'variable_park_y_raw: 0\.0' "PAUSE default Y park is the front service edge"
 Assert-Contains $localOverrides 'park_x_raw VALUE=122\.5' "local override example documents the PAUSE X middle default"
 Assert-Contains $localOverrides 'park_y_raw VALUE=0\.0' "local override example documents the PAUSE Y0 default"
+Assert-ContainsBefore $pauseExec '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G1 X\{exec_state\.park_x\|float\} Y\{exec_state\.park_y\|float\} F6000\s*$' "PAUSE must run Z-hop before parking XY"
 
 Assert-Contains $cancelPrint 'G1 Z\{target_z\} F300' "CANCEL_PRINT keeps the Z-hop"
 Assert-NotContains $cancelPrint '(?m)^\s*G[01]\s+.*\bX' "CANCEL_PRINT must not issue XY moves with X"
