@@ -15,12 +15,13 @@
 6. `profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg`
 7. `profiles/treed_v2_corexy_v1/steppers.cfg`
 8. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
-9. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-10. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-11. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-12. `profiles/treed_v2_corexy_v1/macros.cfg`
-13. `profiles/treed_v2_corexy_v1/ui.cfg`
-14. `local_overrides.cfg`
+9. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
+10. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+11. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+12. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+13. `profiles/treed_v2_corexy_v1/macros.cfg`
+14. `profiles/treed_v2_corexy_v1/ui.cfg`
+15. `local_overrides.cfg`
 
 ## Контракт loader
 
@@ -50,6 +51,20 @@
 - Z-драйвер TMC5160/TMC5160T Pro стоит в слоте `MOTOR2_1`;
 - Z DIAG-джампер на `PG10` остается аппаратным резервом для fallback-сценариев;
 - рабочий Z0 ищется через Eddy.
+
+## Датчик филамента
+
+В профиль включен BTT Smart Filament Sensor SFS V2.0:
+- конфиг: `filament_sensor.cfg`;
+- разъем Octopus Pro для switch-канала: `FIL-DET0` / `material_0`;
+- сигнал switch-канала: `PG12`, в Klipper указан как `^PG12`;
+- разъем Octopus Pro для encoder/motion-канала: `FIL-DET1` / `material_1`;
+- сигнал encoder/motion-канала: `PG13`, в Klipper указан как `^PG13`;
+- питание датчика: `+5V` и `GND` на штатных filament-разъемах.
+
+SFS V2.0 использует разветвитель: 4-pin коннектор подключается к датчику, два 3-pin коннектора подключаются к плате. Коннектор switch-канала подключить в `FIL-DET0`, encoder/motion-канала — в `FIL-DET1`.
+
+Стартовое `detection_length` для encoder/motion-канала — `3.0`. Если будут ложные срабатывания, увеличивать параметр в `filament_sensor.cfg` шагом по 1 мм.
 
 База пинов (Octopus Pro):
 - `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
