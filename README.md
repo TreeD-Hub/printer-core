@@ -46,6 +46,34 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 
 `SAVE_CONFIG` в стартовый G-code добавлять не нужно: сетка активируется для текущей печати, а сохранение конфигурации остается ручной сервисной операцией.
 
+## Сервисные тесты движения
+
+`TREED_XY_MOTION_TEST` — ручной XY stress-test без печати. Макрос сам делает `G28`, поднимается на безопасный Z, гоняет периметр, диагонали, зигзаг, круг, мелкие перемещения вокруг центра и ромбовую восьмерку. Во время активной печати или паузы запуск запрещен.
+
+Базовый безопасный прогон:
+
+```gcode
+TREED_XY_MOTION_TEST SPEED=150 ACCEL=3000 ITER=1 Z=20 END_Z=100
+```
+
+Рабочий прогон для проверки скорости, ускорений и ремней:
+
+```gcode
+TREED_XY_MOTION_TEST SPEED=250 ACCEL=7000 ITER=2 SCV=8 SMALL_STEP=5 SMALL_REPEATS=8 ZIGZAG_STEPS=5 Z=20 END_Z=100
+```
+
+Стресс-прогон с кругом и мелкими разворотами:
+
+```gcode
+TREED_XY_MOTION_TEST SPEED=350 ACCEL=10000 ITER=3 SCV=9 CIRCLE_RADIUS=70 SMALL_STEP=5 SMALL_REPEATS=12 ZIGZAG_STEPS=8 Z=20 END_Z=120
+```
+
+После теста макрос восстанавливает `VELOCITY`, `ACCEL` и `SQUARE_CORNER_VELOCITY` из состояния до запуска. Если нужно вручную вернуть лимиты из `[printer]`, выполнить:
+
+```gcode
+TREED_MOTION_LIMITS_DEFAULT
+```
+
 ## Карта слоев
 
 1. Репозиторий (source of truth)
