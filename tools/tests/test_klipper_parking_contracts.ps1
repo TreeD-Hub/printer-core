@@ -99,8 +99,9 @@ $pauseExec = Get-GcodeMacroBlock $macrosPause "_TREED_PAUSE_EXEC"
 $cancelPrint = Get-GcodeMacroBlock $macrosPause "CANCEL_PRINT"
 
 # Блок 3: Проверка контрактов конечной парковки, паузы и аварийной отмены.
-Assert-Contains $zHopBeforeXy '(?m)^\s*G1 Z\{z_hop\} F1500\s*$' "Z-hop helper must always issue the Z move"
-Assert-NotContains $zHopBeforeXy 'homed_axes' "Z-hop helper must not skip the move based on homed axes"
+Assert-Contains $zHopBeforeXy '(?m)^\s*FORCE_MOVE STEPPER=stepper_z DISTANCE=\{z_hop\} VELOCITY=5 ACCEL=100\s*$' "Z-hop helper must use FORCE_MOVE before homing"
+Assert-Contains $zHopBeforeXy '(?m)^\s*G1 Z\{target_z\} F1500\s*$' "Z-hop helper must use normal G1 when Z is already homed"
+Assert-NotContains $zHopBeforeXy 'пропущен' "Z-hop helper must not skip the move"
 Assert-NotContains $macrosCore '(?m)^\[gcode_macro _TREED_HOME_XY_SENSORLESS\]' "G28 owns X/Y homing; extra X/Y homing wrapper must not exist"
 
 Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G28\.1 X\s*$' "G28 must run Z-hop before X homing"
