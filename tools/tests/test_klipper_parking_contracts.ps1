@@ -84,6 +84,21 @@ function Get-GcodeMacroBlock {
   return $match.Value
 }
 
+function Get-ConfigSectionBlock {
+  param(
+    [string]$Content,
+    [string]$SectionName
+  )
+
+  $escapedName = [regex]::Escape($SectionName)
+  $match = [regex]::Match($Content, "(?ms)^\[$escapedName\].*?(?=^\[|\z)")
+  if (-not $match.Success) {
+    throw "FAIL: section $SectionName not found"
+  }
+
+  return $match.Value
+}
+
 # Блок 2: Загрузка проверяемых макросов и примеров override.
 $macrosCore = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_core.cfg"
 $macrosHoming = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_homing.cfg"
@@ -105,6 +120,10 @@ $cancelPrint = Get-GcodeMacroBlock $macrosPause "CANCEL_PRINT"
 $kampSettings = Get-GcodeMacroBlock $macrosKamp "_KAMP_Settings"
 $smartPark = Get-GcodeMacroBlock $macrosKamp "SMART_PARK"
 $linePurge = Get-GcodeMacroBlock $macrosKamp "LINE_PURGE"
+$stepperX = Get-ConfigSectionBlock $steppers "stepper_x"
+$stepperY = Get-ConfigSectionBlock $steppers "stepper_y"
+$tmcX = Get-ConfigSectionBlock $steppers "tmc5160 stepper_x"
+$tmcY = Get-ConfigSectionBlock $steppers "tmc5160 stepper_y"
 
 # Блок 3: Проверка контрактов конечной парковки, паузы и аварийной отмены.
 Assert-Contains $zHopBeforeXy '(?m)^\s*FORCE_MOVE STEPPER=stepper_z DISTANCE=\{z_hop\} VELOCITY=5 ACCEL=100\s*$' "Z-hop helper must use FORCE_MOVE before homing"
@@ -116,6 +135,14 @@ Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G28\.1 
 Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' '(?m)^\s*G28\.1 Y\s*$' "G28 must run Z-hop before Y homing"
 Assert-Contains $steppers '(?ms)^\[stepper_x\].*?position_endstop:\s*0\b.*?homing_positive_dir:\s*false\b' "X homing must define the left edge as raw X0"
 Assert-Contains $steppers '(?ms)^\[stepper_y\].*?position_endstop:\s*245\b.*?homing_positive_dir:\s*true\b' "Y homing must keep the far edge as raw Y245"
+Assert-Contains $stepperX '(?m)^\s*step_pin:\s*PG0\s*$' "CoreXY X mirror correction must route stepper_x to MOTOR1"
+Assert-Contains $stepperX '(?m)^\s*dir_pin:\s*!PG1\s*$' "CoreXY X mirror correction must invert MOTOR1 direction"
+Assert-Contains $stepperY '(?m)^\s*step_pin:\s*PF13\s*$' "CoreXY X mirror correction must route stepper_y to MOTOR0"
+Assert-Contains $stepperY '(?m)^\s*dir_pin:\s*!PF12\s*$' "CoreXY X mirror correction must invert MOTOR0 direction"
+Assert-Contains $tmcX '(?m)^\s*cs_pin:\s*PD11\s*$' "tmc5160 stepper_x must follow MOTOR1 CS after CoreXY remap"
+Assert-Contains $tmcX '(?m)^\s*diag1_pin:\s*\^!PG9\s*$' "tmc5160 stepper_x must follow MOTOR1 DIAG after CoreXY remap"
+Assert-Contains $tmcY '(?m)^\s*cs_pin:\s*PC4\s*$' "tmc5160 stepper_y must follow MOTOR0 CS after CoreXY remap"
+Assert-Contains $tmcY '(?m)^\s*diag1_pin:\s*\^!PG6\s*$' "tmc5160 stepper_y must follow MOTOR0 DIAG after CoreXY remap"
 Assert-Contains $g28 '(?m)^\s*G1 X\{xy_backoff_mm\} F\{x_retract_speed \* 60\}\s*$' "G28 X backoff must move away from X0 in the positive direction"
 Assert-Contains $g28 '(?m)^\s*G1 Y-\{xy_backoff_mm\} F\{y_retract_speed \* 60\}\s*$' "G28 Y backoff must move away from Y max in the negative direction"
 Assert-NotContains $g28 '(?m)^\s*SAVE_GCODE_STATE\b' "G28 must not save parser XYZ before homing"

@@ -77,10 +77,13 @@ SFS V2.0 использует разветвитель: 4-pin коннектор
 Стартовое `detection_length` для encoder/motion-канала — `3.0`. Если будут ложные срабатывания, увеличивать параметр в `filament_sensor.cfg` шагом по 1 мм.
 
 База пинов (Octopus Pro):
-- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
-- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
+- `stepper_x`: `step_pin=PG0`, `dir_pin=!PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
+- `stepper_y`: `step_pin=PF13`, `dir_pin=!PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
 - `stepper_z`: `step_pin=PF11`, `dir_pin=!PG3`, `enable_pin=!PG5`, `cs_pin=PC6`, `diag1_pin=^!PG10`;
 - общая software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
+
+Для CoreXY X-знак развернут не одиночной инверсией `dir_pin`, а парной перестановкой MOTOR0/MOTOR1 с инверсией обоих направлений.
+Это сохраняет направление Y и переводит `X0` в левый край.
 
 Стартовые параметры X/Y:
 - `homing_speed: 20`, `homing_retract_dist: 0` (второй проход отключен);
