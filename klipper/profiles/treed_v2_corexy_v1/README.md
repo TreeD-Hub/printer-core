@@ -46,9 +46,7 @@
 
 `START_PRINT` сначала прогревает стол до `BED_TEMP` и делает preheat сопла, затем выполняет рабочий Eddy Z-home, включает print-offset, строит/загружает mesh и только после этого делает `SMART_PARK`.
 Так Z0, mesh и парковка фиксируются в тепловом состоянии печати.
-`SMART_PARK` паркует голову у стола на Z0 перед финальным нагревом сопла.
-Финальный нагрев задает `EXTRUDER_TEMP`, но ждет только нижнюю готовность `EXTRUDER_TEMP - HOTEND_READY_MARGIN` (`3C` по умолчанию), поэтому штатный overshoot выше цели не блокирует старт purge/первого слоя.
-`LINE_PURGE` после готовности сопла сначала поднимается на `purge_height`, затем едет к старту purge-линии.
+`SMART_PARK` паркует голову у стола на Z0 перед финальным нагревом сопла; `LINE_PURGE` после нагрева сначала поднимается на `purge_height`, затем едет к старту purge-линии.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;
@@ -74,8 +72,8 @@ SFS V2.0 использует разветвитель: 4-pin коннектор
 Стартовое `detection_length` для encoder/motion-канала — `3.0`. Если будут ложные срабатывания, увеличивать параметр в `filament_sensor.cfg` шагом по 1 мм.
 
 База пинов (Octopus Pro):
-- `stepper_x`: `step_pin=PG0`, `dir_pin=!PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
-- `stepper_y`: `step_pin=PF13`, `dir_pin=!PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
+- `stepper_x`: `step_pin=PF13`, `dir_pin=PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
+- `stepper_y`: `step_pin=PG0`, `dir_pin=PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
 - `stepper_z`: `step_pin=PF11`, `dir_pin=!PG3`, `enable_pin=!PG5`, `cs_pin=PC6`, `diag1_pin=^!PG10`;
 - общая software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
 
