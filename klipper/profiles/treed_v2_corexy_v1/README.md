@@ -23,6 +23,8 @@
 14. `profiles/treed_v2_corexy_v1/ui.cfg`
 15. `local_overrides.cfg`
 
+`macros.cfg` дополнительно подключает `macros_input_shaper.cfg` перед `macros_print_flow.cfg`, чтобы `START_PRINT` мог вызвать TreeD-калибровку input shaper.
+
 ## Контракт loader
 
 Текущий install pipeline:
@@ -112,6 +114,28 @@ SFS V2.0 использует разветвитель: 4-pin коннектор
 `eddy_force_move_calibration.cfg` больше не нужен для первичной калибровки: runtime `[force_move]` живет в `probe_eddy_duo.cfg`. Старый include оставлен пустым только для совместимости с локальными конфигами.
 
 После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper. Для обычных повторных раскладок использовать `preserve` или `auto` на ветке `treed-v2`.
+
+## Калибровка input shaper
+
+ADXL345 подключен на EBB42 в `ebb42_can.cfg`. Секция `input_shaper.cfg` намеренно не содержит частоты, типы и damping ratio: эти значения живут в stock `SAVE_CONFIG`-блоке `printer.cfg`, чтобы `SHAPER_CALIBRATE` мог сохранять новые результаты без конфликта с include.
+
+Ручная full-калибровка:
+
+```gcode
+TREED_SHAPER_CALIBRATE_FULL ACCEL=25000
+```
+
+Макрос делает homing, запускает быстрый sweep X/Y, затем вызывает `TREED_SAVE_CONFIG`. После сохранения Klipper штатно перезапускается.
+
+Легкий прогон перед печатью:
+
+```gcode
+START_PRINT BED_TEMP=... EXTRUDER_TEMP=... MESH=adaptive SHAPER=light SHAPER_ACCEL=12000
+```
+
+`SHAPER=light` измеряет узкие диапазоны вокруг сохраненных `shaper_freq_x/y`, применяет новые значения на текущую сессию и не вызывает `SAVE_CONFIG`.
+
+PID хотэнда и стола также не задаются в профильных include-файлах. После `PID_CALIBRATE HEATER=extruder ...` или `PID_CALIBRATE HEATER=heater_bed ...` сохранять через `TREED_SAVE_CONFIG`.
 
 ## Переменные окружения
 

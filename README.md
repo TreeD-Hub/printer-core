@@ -30,6 +30,18 @@ Loader сам определяет `fresh|update|recover`, выбирает `cle
 START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] MESH=load MESH_PROFILE=default
 ```
 
+Дополнительно можно включить быструю TreeD-калибровку input shaper перед печатью:
+
+```gcode
+START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] MESH=adaptive SHAPER=light SHAPER_ACCEL=12000
+```
+
+Параметры shaper-контура:
+- `SHAPER=none` — не трогать input shaper перед печатью (default).
+- `SHAPER=light` — быстрый прогон вокруг уже сохраненных частот X/Y, применяет результат на текущую печать без `SAVE_CONFIG`.
+- `SHAPER=full` — полный быстрый sweep X/Y перед печатью, но из `START_PRINT` всегда без сохранения, чтобы не перезапускать Klipper.
+- `SHAPER_ACCEL=...` — целевое ускорение калибровки. Можно передать число из профиля/слайсера; если не передано, `light` берет текущий live `max_accel`, а ручной `full` использует `25000`.
+
 Варианты mesh-контура:
 - `MESH=load MESH_PROFILE=default` — использовать сохраненную сетку без новой калибровки.
 - `MESH=adaptive MESH_METHOD=scan` — повседневный вариант: прогреть стол, сделать Eddy Z-home, построить адаптивную сетку рядом с моделью и выполнить KAMP purge.
@@ -44,7 +56,29 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] MESH=calibrate MESH_METHOD=rapid_scan MESH_PROFILE=treed_full
 ```
 
-`SAVE_CONFIG` в стартовый G-code добавлять не нужно: сетка активируется для текущей печати, а сохранение конфигурации остается ручной сервисной операцией.
+`SAVE_CONFIG` в стартовый G-code добавлять не нужно: mesh и `SHAPER=light` активируются для текущей печати, а сохранение конфигурации остается ручной сервисной операцией.
+
+## Калибровка input shaper
+
+В профиле включен ADXL345 на EBB42 и TreeD-макросы:
+
+```gcode
+TREED_SHAPER_CALIBRATE_FULL
+TREED_SHAPER_CALIBRATE_LIGHT
+```
+
+`TREED_SHAPER_CALIBRATE_FULL` делает `G28`, запускает быстрый полный sweep X/Y на `ACCEL=25000` по умолчанию, сохраняет результат через `TREED_SAVE_CONFIG` и перезапускает Klipper штатным `SAVE_CONFIG`.
+
+`TREED_SHAPER_CALIBRATE_LIGHT` делает `G28`, измеряет узкие диапазоны вокруг сохраненных `shaper_freq_x/y`, применяет результат сразу и не сохраняет конфиг.
+
+Если нужно задать ускорение явно:
+
+```gcode
+TREED_SHAPER_CALIBRATE_FULL ACCEL=25000
+TREED_SHAPER_CALIBRATE_LIGHT ACCEL=12000
+```
+
+PID хотэнда/стола и параметры input shaper хранятся в stock `SAVE_CONFIG`-блоке `printer.cfg`. В профильных include-файлах они не задаются, чтобы `PID_CALIBRATE` и `SHAPER_CALIBRATE` могли сохранять новые значения без конфликта.
 
 ## Калибровка Eddy
 
