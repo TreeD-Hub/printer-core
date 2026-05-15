@@ -135,7 +135,7 @@ START_PRINT BED_TEMP=... EXTRUDER_TEMP=... MESH=adaptive SHAPER=light SHAPER_ACC
 
 `SHAPER=light` измеряет узкие диапазоны вокруг сохраненных `shaper_freq_x/y`, применяет новые значения на текущую сессию и не вызывает `SAVE_CONFIG`.
 
-PID хотэнда и стола также не задаются в профильных include-файлах. После `PID_CALIBRATE HEATER=extruder ...` или `PID_CALIBRATE HEATER=heater_bed ...` сохранять через `TREED_SAVE_CONFIG`.
+PID хотэнда и стола остается в профильных heater-секциях, потому что Klipper требует `pid_Kp/Ki/Kd` при загрузке `control: pid`. После `PID_CALIBRATE HEATER=extruder ...` или `PID_CALIBRATE HEATER=heater_bed ...` новые значения нужно перенести в `ebb42_can.cfg` или `bed_heater_dc.cfg`.
 
 ## Переменные окружения
 

@@ -78,7 +78,7 @@ TREED_SHAPER_CALIBRATE_FULL ACCEL=25000
 TREED_SHAPER_CALIBRATE_LIGHT ACCEL=12000
 ```
 
-PID хотэнда/стола и параметры input shaper хранятся в stock `SAVE_CONFIG`-блоке `printer.cfg`. В профильных include-файлах они не задаются, чтобы `PID_CALIBRATE` и `SHAPER_CALIBRATE` могли сохранять новые значения без конфликта.
+PID хотэнда/стола сейчас задается в профильных heater-секциях, потому что Klipper требует `pid_Kp/Ki/Kd` при загрузке `control: pid`. После `PID_CALIBRATE` новые значения нужно перенести в `ebb42_can.cfg` или `bed_heater_dc.cfg`; параметры input shaper остаются в stock `SAVE_CONFIG`-блоке `printer.cfg`.
 
 ## Калибровка Eddy
 
