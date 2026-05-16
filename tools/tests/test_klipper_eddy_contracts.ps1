@@ -97,6 +97,7 @@ $eddyZ0Cfg = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_Z0_CFG"
 $reloadZOffset = Get-GcodeMacroBlock $probeEddy "_RELOAD_Z_OFFSET_FROM_PROBE"
 $setZFromProbe = Get-GcodeMacroBlock $probeEddy "SET_Z_FROM_PROBE"
 $captureLiveZ = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET"
+$eddyMesh = Get-GcodeMacroBlock $probeEddy "TREED_BED_MESH_CALIBRATE_EDDY"
 $startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
 
@@ -127,5 +128,11 @@ Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)
 Assert-Contains $macrosFlow 'DEFAULT_MESH_METHOD = "scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must prefer scan over rapid_scan for precision"
 Assert-NotContains $macrosFlow 'mesh_method\|default\("rapid_scan"\)' "Adaptive mesh fallback must not silently return to rapid_scan"
 Assert-NotContains $macrosFlow 'DEFAULT_MESH_METHOD = "rapid_scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must not use rapid_scan in precision profile"
+
+# Блок 5: Bed mesh не должен безусловно переhome-ить уже известные оси.
+Assert-NotContains $eddyMesh '(?ms)^\s*BED_MESH_CLEAR\s*$\s*^\s*G28\s*$' "Eddy mesh must not unconditionally run full G28 after a successful START_PRINT homing"
+Assert-Contains $eddyMesh 'printer\.toolhead\.homed_axes\|lower' "Eddy mesh must inspect current homed axes before deciding on homing"
+Assert-ContainsBefore $eddyMesh '(?m)^\s*{% if ''x'' not in homed or ''y'' not in homed %}\s*$' '(?m)^\s*G28\s*$' "Eddy mesh must full-home only when X or Y is unknown"
+Assert-ContainsBefore $eddyMesh '(?m)^\s*{% elif ''z'' not in homed %}\s*$' '(?m)^\s*G28 Z\s*$' "Eddy mesh must home only Z when X/Y are already known"
 
 Write-Output "PASS: klipper eddy contracts"
