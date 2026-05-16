@@ -1,0 +1,17 @@
+[
+  {
+    "name": "major",
+    "color": "B60205",
+    "description": "Ломающее изменение: следующий релиз увеличивает major"
+  },
+  {
+    "name": "minor",
+    "color": "0E8A16",
+    "description": "Новый функционал или заметное расширение без breaking changes"
+  },
+  {
+    "name": "patch",
+    "color": "1D76DB",
+    "description": "Исправление, мелкая доработка или сервисное изменение без new feature"
+  }
+]

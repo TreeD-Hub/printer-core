@@ -1,0 +1,294 @@
+name: release-treed-v2-main
+
+on:
+  push:
+    branches: [treed-v2_main]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-treed-v2-main
+  cancel-in-progress: false
+
+jobs:
+  publish-release:
+    name: Publish treed-v2_main release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository with full tag history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate push, calculate version and publish release
+        uses: actions/github-script@v9
+        env:
+          RELEASE_BRANCH: treed-v2_main
+          RELEASE_NOTES_SECTION: Описание релиза
+        with:
+          script: |
+            const core = require('@actions/core');
+            const { execFileSync } = require('node:child_process');
+
+            const releaseBranch = process.env.RELEASE_BRANCH;
+            const releaseNotesSection = process.env.RELEASE_NOTES_SECTION;
+            const allowedLabels = ['major', 'minor', 'patch'];
+            const bumpPriority = { patch: 0, minor: 1, major: 2 };
+            const currentBranch = context.ref.replace('refs/heads/', '');
+            const before = context.payload.before;
+            const after = context.payload.after;
+            const { owner, repo } = context.repo;
+
+            if (currentBranch !== releaseBranch) {
+              core.setFailed(`Release blocked: expected branch ${releaseBranch}, got ${currentBranch}`);
+              return;
+            }
+
+            if (!before || /^0+$/.test(before)) {
+              core.setFailed('Release blocked: initial branch creation is not a releasable push');
+              return;
+            }
+
+            function runGit(args, allowFailure = false) {
+              try {
+                return execFileSync('git', args, { encoding: 'utf8' }).trim();
+              } catch (error) {
+                if (allowFailure) {
+                  return '';
+                }
+                throw error;
+              }
+            }
+
+            function listSemverTagsMergedInto(ref) {
+              const output = runGit(['tag', '--merged', ref, '--list', 'v*.*.*', '--sort=-v:refname'], true);
+              return output ? output.split(/\r?\n/).filter(Boolean) : [];
+            }
+
+            function listSemverTagsAt(ref) {
+              const output = runGit(['tag', '--points-at', ref, '--list', 'v*.*.*', '--sort=-v:refname'], true);
+              return output ? output.split(/\r?\n/).filter(Boolean) : [];
+            }
+
+            function resolveTagCommit(tagName) {
+              return runGit(['rev-list', '-n', '1', tagName], true);
+            }
+
+            function parseVersion(tagName) {
+              if (!tagName) {
+                return { major: 0, minor: 0, patch: 0 };
+              }
+
+              const match = tagName.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+              if (!match) {
+                throw new Error(`Invalid semver tag: ${tagName}`);
+              }
+
+              return {
+                major: Number(match[1]),
+                minor: Number(match[2]),
+                patch: Number(match[3]),
+              };
+            }
+
+            function bumpVersion(previousTag, bumpKind) {
+              const version = parseVersion(previousTag);
+
+              if (!previousTag) {
+                if (bumpKind === 'major') {
+                  return 'v1.0.0';
+                }
+                if (bumpKind === 'minor') {
+                  return 'v0.1.0';
+                }
+                return 'v0.0.1';
+              }
+
+              if (bumpKind === 'major') {
+                return `v${version.major + 1}.0.0`;
+              }
+              if (bumpKind === 'minor') {
+                return `v${version.major}.${version.minor + 1}.0`;
+              }
+              return `v${version.major}.${version.minor}.${version.patch + 1}`;
+            }
+
+            function extractReleaseDescription(bodyText) {
+              const body = bodyText || '';
+              const escapedHeading = releaseNotesSection.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const match = body.match(new RegExp(`(?:^|\\r?\\n)##\\s*${escapedHeading}\\s*\\r?\\n([\\s\\S]*?)(?=\\r?\\n##\\s+|$)`, 'i'));
+              return match ? match[1].trim() : '';
+            }
+
+            const compare = await github.request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+              owner,
+              repo,
+              basehead: `${before}...${after}`,
+            });
+
+            const commits = compare.data.commits || [];
+            if (commits.length === 0) {
+              core.setFailed('Release blocked: push range does not contain commits');
+              return;
+            }
+
+            const prMap = new Map();
+            const unmatchedCommits = [];
+
+            for (const commit of commits) {
+              const associatedPrsResponse = await github.request(
+                'GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls',
+                {
+                  owner,
+                  repo,
+                  commit_sha: commit.sha,
+                  per_page: 100,
+                }
+              );
+
+              const associatedPrs = associatedPrsResponse.data || [];
+
+              const matchedPrs = associatedPrs.filter((pr) => pr.base.ref === releaseBranch && pr.merged_at);
+
+              if (matchedPrs.length === 0) {
+                unmatchedCommits.push(`${commit.sha.slice(0, 7)} ${commit.commit.message.split('\n')[0]}`);
+                continue;
+              }
+
+              for (const pr of matchedPrs) {
+                if (!prMap.has(pr.number)) {
+                  prMap.set(pr.number, pr);
+                }
+              }
+            }
+
+            // direct push without PR context is forbidden for release automation.
+            if (prMap.size === 0) {
+              core.setFailed('Release blocked: direct push without merged PR context is not allowed on treed-v2_main');
+              return;
+            }
+
+            if (unmatchedCommits.length > 0) {
+              core.setFailed(
+                `Release blocked: direct push or unknown commit(s) detected in push range:\n- ${unmatchedCommits.join('\n- ')}`
+              );
+              return;
+            }
+
+            const orderedPrs = Array
+              .from(prMap.values())
+              .sort((left, right) => new Date(left.merged_at).getTime() - new Date(right.merged_at).getTime());
+
+            const releaseDescriptionParts = [];
+            let highestBump = 'patch';
+
+            for (const pr of orderedPrs) {
+              const releaseLabels = pr.labels
+                .map((label) => label.name)
+                .filter((labelName) => allowedLabels.includes(labelName));
+
+              if (releaseLabels.length !== 1) {
+                core.setFailed(
+                  `Release blocked: PR #${pr.number} must have exactly one release label (${allowedLabels.join(', ')}), got ${releaseLabels.join(', ') || 'none'}`
+                );
+                return;
+              }
+
+              const releaseDescription = extractReleaseDescription(pr.body);
+              if (!releaseDescription) {
+                core.setFailed(`Release blocked: PR #${pr.number} must have a non-empty "## ${releaseNotesSection}" section`);
+                return;
+              }
+
+              const bumpKind = releaseLabels[0];
+              if (bumpPriority[bumpKind] > bumpPriority[highestBump]) {
+                highestBump = bumpKind;
+              }
+
+              releaseDescriptionParts.push(
+                `### PR #${pr.number} — ${pr.title}\n${releaseDescription}`
+              );
+            }
+
+            const headTags = listSemverTagsAt(after);
+            if (headTags.length > 1) {
+              core.setFailed(`Release blocked: multiple semver tags already point to ${after}: ${headTags.join(', ')}`);
+              return;
+            }
+
+            let previousTag = '';
+            let nextTag = '';
+
+            if (headTags.length === 1) {
+              nextTag = headTags[0];
+              previousTag = listSemverTagsMergedInto(after).filter((tagName) => tagName !== nextTag)[0] || '';
+
+              try {
+                await github.request('GET /repos/{owner}/{repo}/releases/tags/{tag}', {
+                  owner,
+                  repo,
+                  tag: nextTag,
+                });
+                core.notice(`idempotent rerun: release ${nextTag} already exists for ${after}`);
+                return;
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            } else {
+              previousTag = listSemverTagsMergedInto(after)[0] || '';
+              nextTag = bumpVersion(previousTag, highestBump);
+
+              const existingTagCommit = resolveTagCommit(nextTag);
+              if (existingTagCommit && existingTagCommit !== after) {
+                core.setFailed(`Release blocked: tag ${nextTag} already points to ${existingTagCommit}, expected ${after}`);
+                return;
+              }
+
+              try {
+                await github.request('GET /repos/{owner}/{repo}/releases/tags/{tag}', {
+                  owner,
+                  repo,
+                  tag: nextTag,
+                });
+                core.setFailed(`Release blocked: release ${nextTag} already exists on another commit`);
+                return;
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+              }
+            }
+
+            const manualDescription = [
+              '## Описание релиза',
+              '',
+              ...releaseDescriptionParts,
+            ].join('\n\n');
+
+            const generatedNotes = await github.request('POST /repos/{owner}/{repo}/releases/generate-notes', {
+              owner,
+              repo,
+              tag_name: nextTag,
+              target_commitish: after,
+              previous_tag_name: previousTag || undefined,
+              configuration_file_path: '.github/release.yml',
+            });
+
+            await github.request('POST /repos/{owner}/{repo}/releases', {
+              owner,
+              repo,
+              tag_name: nextTag,
+              target_commitish: after,
+              name: nextTag,
+              body: `${manualDescription}\n\n---\n\n${generatedNotes.data.body}`,
+              draft: false,
+              prerelease: false,
+              make_latest: 'true',
+            });
+
+            core.notice(`Published release ${nextTag} from ${releaseBranch} (${highestBump})`);

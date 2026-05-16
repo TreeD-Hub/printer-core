@@ -1,0 +1,74 @@
+name: sync-release-labels
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+      - treed-v2
+      - treed-v2_main
+      - main
+    paths:
+      - .github/labels.json
+      - .github/workflows/sync-release-labels.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync-labels:
+    name: Sync release labels
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Create or update release labels
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+
+            const { owner, repo } = context.repo;
+            const labelsPath = path.join(process.env.GITHUB_WORKSPACE, '.github', 'labels.json');
+            const labels = JSON.parse(fs.readFileSync(labelsPath, 'utf8'));
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner,
+                  repo,
+                  name: label.name,
+                });
+
+                await github.rest.issues.updateLabel({
+                  owner,
+                  repo,
+                  name: label.name,
+                  new_name: label.name,
+                  color: label.color,
+                  description: label.description,
+                });
+
+                core.info(`Updated label ${label.name}`);
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description,
+                });
+
+                core.info(`Created label ${label.name}`);
+              }
+            }
