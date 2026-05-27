@@ -1,6 +1,5 @@
 > Root project map: `README.md`
 > Canonical config ownership model: `docs/config-ownership.md`
-> Релизный поток `treed-v2_main`: `docs/release-treed-v2-main.md`
 
 ## Быстрый install path (V2)
 

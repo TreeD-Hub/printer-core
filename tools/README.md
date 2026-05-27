@@ -29,5 +29,4 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_loader_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_eddy_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_parking_contracts.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_release_automation_contracts.ps1"
 ```
