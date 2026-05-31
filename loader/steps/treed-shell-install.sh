@@ -161,7 +161,7 @@ user_rust_version_ok() {
     CARGO_HOME="${PI_HOME}/.cargo" \
     RUSTUP_HOME="${PI_HOME}/.rustup" \
     PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}" \
-    sh -lc '
+    sh -c '
       . "$HOME/.cargo/env" 2>/dev/null || true
       command -v rustc >/dev/null 2>&1 || exit 1
       rustc --version | awk "
@@ -198,7 +198,7 @@ ensure_rust_runtime() {
       CARGO_HOME="${PI_HOME}/.cargo" \
       RUSTUP_HOME="${PI_HOME}/.rustup" \
       PATH="${BUILD_PATH}" \
-      sh -lc \
+      sh -c \
       'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable'
   fi
 
@@ -215,7 +215,7 @@ ensure_rust_runtime() {
       CARGO_HOME="${PI_HOME}/.cargo" \
       RUSTUP_HOME="${PI_HOME}/.rustup" \
       PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}" \
-      sh -lc '. "$HOME/.cargo/env" 2>/dev/null || true; rustc --version'
+      sh -c '. "$HOME/.cargo/env" 2>/dev/null || true; rustc --version'
   )"
   log_info "treed-shell-install: using ${rust_version}"
 }
@@ -336,7 +336,7 @@ build_treed_shell() {
   sudo -u "${PI_USER}" -H env PATH="${BUILD_PATH}" npm ci --no-audit --no-fund --prefix "${SHELL_HOME}"
 
   log_info "treed-shell-install: building printer Tauri profile"
-  sudo -u "${PI_USER}" -H env PATH="${BUILD_PATH}" sh -lc \
+  sudo -u "${PI_USER}" -H env PATH="${BUILD_PATH}" sh -c \
     "cd '${SHELL_HOME}' && npm run tauri:build:printer"
 
   release_bin="$(find_treed_shell_release_binary | tr -d '\r\n')"
