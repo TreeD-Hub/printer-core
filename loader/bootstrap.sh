@@ -17,6 +17,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Блок 1a: Нормализация PATH для sudo env-запусков.
+# Команды вроде nginx/systemctl часто лежат в sbin, которого нет в user PATH.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
 # Блок 2: Проверка root-контракта запуска.
 if [ "${EUID}" -ne 0 ]; then
   echo "[bootstrap] ERROR: run as root: sudo bash install.sh" >&2

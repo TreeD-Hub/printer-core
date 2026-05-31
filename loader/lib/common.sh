@@ -16,7 +16,11 @@ if [ -z "${REPO_DIR:-}" ]; then
   exit 1
 fi
 
-# Блок 1a: Noninteractive-контур системных установщиков.
+# Блок 1a: Нормализация PATH для root/systemd/apt-контуров.
+# При `sudo env PATH=...` user PATH может не содержать /usr/sbin.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
+# Блок 1b: Noninteractive-контур системных установщиков.
 # По умолчанию loader не должен ждать подтверждений apt/dpkg/needrestart.
 TREED_NONINTERACTIVE="${TREED_NONINTERACTIVE:-1}"
 export TREED_NONINTERACTIVE

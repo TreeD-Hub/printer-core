@@ -155,10 +155,34 @@ rust_version_ok() {
   '
 }
 
+user_rust_version_ok() {
+  sudo -u "${PI_USER}" -H env \
+    HOME="${PI_HOME}" \
+    CARGO_HOME="${PI_HOME}/.cargo" \
+    RUSTUP_HOME="${PI_HOME}/.rustup" \
+    PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}" \
+    sh -lc '
+      . "$HOME/.cargo/env" 2>/dev/null || true
+      command -v rustc >/dev/null 2>&1 || exit 1
+      rustc --version | awk "
+        {
+          split(\$2, parts, \".\")
+          major = parts[1] + 0
+          minor = parts[2] + 0
+          if (major > 1 || (major == 1 && minor >= 77)) {
+            exit 0
+          }
+          exit 1
+        }
+      "
+    '
+}
+
 ensure_rust_runtime() {
   local cargo_bin="${PI_HOME}/.cargo/bin/cargo"
   local rustc_bin="${PI_HOME}/.cargo/bin/rustc"
   local system_rustc=""
+  local rust_version=""
 
   system_rustc="$(command -v rustc || true)"
   if [ -n "${system_rustc}" ] && rust_version_ok "${system_rustc}"; then
@@ -167,19 +191,33 @@ ensure_rust_runtime() {
     return 0
   fi
 
-  if [ ! -x "${cargo_bin}" ] || ! rust_version_ok "${rustc_bin}"; then
+  if ! user_rust_version_ok; then
     log_info "treed-shell-install: installing Rust toolchain via rustup for ${PI_USER}"
-    sudo -u "${PI_USER}" -H env PATH="${BUILD_PATH}" sh -lc \
+    sudo -u "${PI_USER}" -H env \
+      HOME="${PI_HOME}" \
+      CARGO_HOME="${PI_HOME}/.cargo" \
+      RUSTUP_HOME="${PI_HOME}/.rustup" \
+      PATH="${BUILD_PATH}" \
+      sh -lc \
       'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable'
   fi
 
-  if [ ! -x "${cargo_bin}" ] || ! rust_version_ok "${rustc_bin}"; then
+  if ! user_rust_version_ok; then
     log_error "treed-shell-install: Rust toolchain is missing or too old after install"
+    ls -la "${PI_HOME}/.cargo/bin" 2>/dev/null || true
     exit 1
   fi
 
   BUILD_PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}"
-  log_info "treed-shell-install: using rustc $(${rustc_bin} --version)"
+  rust_version="$(
+    sudo -u "${PI_USER}" -H env \
+      HOME="${PI_HOME}" \
+      CARGO_HOME="${PI_HOME}/.cargo" \
+      RUSTUP_HOME="${PI_HOME}/.rustup" \
+      PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}" \
+      sh -lc '. "$HOME/.cargo/env" 2>/dev/null || true; rustc --version'
+  )"
+  log_info "treed-shell-install: using ${rust_version}"
 }
 
 ensure_build_dependencies() {
@@ -414,9 +452,9 @@ apply_selected_ui_mode() {
 
 # Блок 7: Основной сценарий установки.
 install_missing_packages git curl ca-certificates xinit dbus-x11
+deploy_treed_ui_command
 checkout_treed_shell_ref
 build_treed_shell
-deploy_treed_ui_command
 write_treed_shell_unit
 apply_selected_ui_mode
 
