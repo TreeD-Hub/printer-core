@@ -26,6 +26,10 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v
 - `TREED_KLIPPERSCREEN_BACKEND` — answer for KlipperScreen graphical backend, default `X`.
 - `TREED_KLIPPERSCREEN_NETWORK_MANAGER` — answer for NetworkManager install, default `N`.
 - `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` — answer for external installer service start, default `0`.
+- `TREED_UI_MODE` — `ts|ks`, default `ts`; selected screen UI (`ts` = TreeD Shell, `ks` = KlipperScreen).
+- `TREED_SHELL_REPO` — TreeD Shell repo, default `https://github.com/Yawllen/treed-shell.git`.
+- `TREED_SHELL_REF` — TreeD Shell ref for managed checkout, default `on-print`.
+- `TREED_SHELL_PRIMARY_BRANCH` — TreeD Shell branch for managed checkout, default `on-print`.
 
 ## Контракт железа
 

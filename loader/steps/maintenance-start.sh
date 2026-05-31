@@ -152,10 +152,33 @@ start_best_effort_service() {
   fi
 }
 
+start_selected_ui_service() {
+  local ui_mode=""
+
+  ui_mode="$(resolve_treed_ui_mode ts)"
+  case "${ui_mode}" in
+    ts)
+      if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+        systemctl stop KlipperScreen.service >/dev/null 2>&1 || true
+      fi
+      start_best_effort_service "treed-shell.service"
+      ;;
+    ks)
+      if systemctl cat treed-shell.service >/dev/null 2>&1; then
+        systemctl stop treed-shell.service >/dev/null 2>&1 || true
+      fi
+      start_best_effort_service "KlipperScreen.service"
+      ;;
+    *)
+      log_warn "maintenance-start: invalid UI mode ${ui_mode:-unknown}, UI start skipped"
+      ;;
+  esac
+}
+
 # Блок 5: Основной сценарий запуска сервисов.
 start_required_service "klipper.service" "${TREED_KLIPPER_START_REQUIRE_ACTIVE}"
 start_required_service "moonraker.service"
-start_best_effort_service "KlipperScreen.service"
+start_selected_ui_service
 start_best_effort_service "crowsnest.service"
 
 log_info "maintenance-start: OK"

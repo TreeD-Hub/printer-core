@@ -251,6 +251,9 @@ detect_device_state() {
 }
 
 write_device_state_snapshot() {
+  local ui_mode=""
+
+  ui_mode="$(resolve_treed_ui_mode ts)"
   ensure_dir "${TREED_STATE_DIR}"
   cat > "${TREED_STATE_FILE}" <<EOF
 TREED_DEVICE_STATE=${TREED_DEVICE_STATE}
@@ -266,6 +269,7 @@ TREED_MOONRAKER_ACTIVE_STATE=${TREED_MOONRAKER_ACTIVE_STATE}
 TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE:-auto}
 TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE:-}
 TREED_LOADER_MODE=${TREED_LOADER_MODE}
+TREED_UI_MODE=${ui_mode}
 EOF
   chmod 0644 "${TREED_STATE_FILE}"
 }
@@ -386,6 +390,33 @@ check_unit_active() {
   fi
 }
 
+check_active_ui_mode() {
+  local ui_mode=""
+
+  ui_mode="$(resolve_treed_ui_mode ts)"
+  log_info "CHECK active UI mode: ${ui_mode}"
+
+  case "${ui_mode}" in
+    ts)
+      check_unit_present "treed-shell.service"
+      check_unit_active "treed-shell.service"
+      if unit_exists "KlipperScreen.service" && systemctl is-active --quiet "KlipperScreen.service"; then
+        check_warn "KlipperScreen.service active while TREED_UI_MODE=ts"
+      fi
+      ;;
+    ks)
+      check_unit_present "KlipperScreen.service"
+      check_unit_active "KlipperScreen.service"
+      if unit_exists "treed-shell.service" && systemctl is-active --quiet "treed-shell.service"; then
+        check_warn "treed-shell.service active while TREED_UI_MODE=ks"
+      fi
+      ;;
+    *)
+      check_fail "active UI mode valid (current=${ui_mode:-unknown})"
+      ;;
+  esac
+}
+
 run_check_mode() {
   local firmware_dir="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/firmware-artifacts/treed-v2}"
   local mainsail_web_path="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
@@ -421,12 +452,7 @@ run_check_mode() {
     check_warn "firmware artifact check skipped (TREED_FIRMWARE_BUILD_ENABLED=0)"
   fi
 
-  if [ "${TREED_KLIPPERSCREEN_REQUIRED:-1}" = "1" ]; then
-    check_unit_present "KlipperScreen.service"
-    check_unit_active "KlipperScreen.service"
-  else
-    check_warn "KlipperScreen checks skipped (TREED_KLIPPERSCREEN_REQUIRED=0)"
-  fi
+  check_active_ui_mode
 
   if [ "${TREED_CAMERA_REQUIRED:-0}" = "1" ]; then
     check_unit_present "crowsnest.service"
@@ -491,6 +517,7 @@ STEPS=(
   "klipperscreen-install"    # Установка/health-check KlipperScreen.
   "klipperscreen-theme"      # Деплой темы/шрифта и обновление KlipperScreen.conf.
   "klipperscreen-integr"     # Systemd override KlipperScreen для корректного splash.
+  "treed-shell-install"      # Деплой TreeD Shell и команды переключения TS/KS.
 
   # Финализация и контроль.
   "maintenance-start"        # Запуск required/best-effort сервисов после provisioning.
@@ -538,6 +565,7 @@ log_info "TREED_MAINTENANCE_MODE=${TREED_MAINTENANCE_MODE}"
 log_info "TREED_LOADER_MODE=${TREED_LOADER_MODE}"
 log_info "TREED_DEVICE_STATE=${TREED_DEVICE_STATE} (${TREED_DEVICE_STATE_REASON}), state_file=${TREED_STATE_FILE}"
 log_info "TREED_DEPLOY_MODE=${TREED_DEPLOY_MODE}, TREED_DEPLOY_MODE_EFFECTIVE=${TREED_DEPLOY_MODE_EFFECTIVE}, TREED_DEPLOY_BRANCH=${TREED_DEPLOY_BRANCH:-unknown}"
+log_info "TREED_UI_MODE=$(resolve_treed_ui_mode ts)"
 
 if [ "${TREED_LOADER_MODE}" = "check" ]; then
   if run_check_mode; then

@@ -44,7 +44,46 @@ log_error() {
   echo "$(log_ts) [ERROR] $*" >&2
 }
 
-# Блок 3: Базовые проверки и файловые helper-функции.
+# Блок 3: Режим экранного UI (TreeD Shell/KlipperScreen).
+normalize_treed_ui_mode() {
+  local raw="${1:-}"
+
+  case "${raw}" in
+    ts|TS|treed-shell|treed_shell|shell)
+      printf '%s\n' "ts"
+      ;;
+    ks|KS|klipperscreen|KlipperScreen)
+      printf '%s\n' "ks"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_treed_ui_mode() {
+  local default_mode="${1:-ts}"
+  local env_file="${TREED_UI_ENV_FILE:-/etc/default/treed-ui}"
+  local raw_mode=""
+  local normalized=""
+
+  if [ -n "${TREED_UI_MODE:-}" ]; then
+    raw_mode="${TREED_UI_MODE}"
+  elif [ -f "${env_file}" ]; then
+    raw_mode="$(sed -nE 's|^[[:space:]]*TREED_UI_MODE=([A-Za-z0-9_-]+)[[:space:]]*$|\1|p' "${env_file}" | tail -n1 | tr -d '\r\n')"
+  fi
+
+  raw_mode="${raw_mode:-${default_mode}}"
+  if normalized="$(normalize_treed_ui_mode "${raw_mode}")"; then
+    printf '%s\n' "${normalized}"
+    return 0
+  fi
+
+  log_warn "Invalid TREED_UI_MODE=${raw_mode}; fallback to ${default_mode}"
+  normalize_treed_ui_mode "${default_mode}"
+}
+
+# Блок 4: Базовые проверки и файловые helper-функции.
 ensure_root() {
   if [ "$(id -u)" -ne 0 ]; then
     log_error "This script must be run as root (use sudo)"
@@ -93,7 +132,7 @@ backup_file_once() {
   fi
 }
 
-# Блок 4: Определение каталога KlipperScreen (systemd -> fallback).
+# Блок 5: Определение каталога KlipperScreen (systemd -> fallback).
 detect_klipperscreen_home() {
   local fallback_home="${1:-}"
   local workdir=""
@@ -114,7 +153,7 @@ detect_klipperscreen_home() {
   return 1
 }
 
-# Блок 5: Определение primary group пользователя для корректного chown.
+# Блок 6: Определение primary group пользователя для корректного chown.
 pi_primary_group() {
   local user="${1:-}"
   local grp=""

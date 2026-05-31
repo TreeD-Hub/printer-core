@@ -179,7 +179,15 @@ TREED_MOTION_LIMITS_DEFAULT
 - `/home/pi/treed/cam/bin`
 
 5. Сервисы и UI
-- `klipper`, `moonraker`, `crowsnest`, `KlipperScreen`, `mainsail`
+- `klipper`, `moonraker`, `crowsnest`, `treed-shell`, `KlipperScreen`, `mainsail`
+- активный экранный UI по умолчанию: TreeD Shell (`TREED_UI_MODE=ts`, repo `treed-shell`, ref `on-print`)
+- ручное переключение на Rock Pi:
+
+```bash
+sudo treed-ui ts
+sudo treed-ui ks
+treed-ui status
+```
 
 ## Документация
 

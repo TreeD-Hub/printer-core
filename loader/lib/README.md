@@ -13,6 +13,7 @@
 Базовая библиотека loader:
 
 - логирование: `log_ts`, `log_info`, `log_warn`, `log_error`;
+- UI-режим: `normalize_treed_ui_mode`, `resolve_treed_ui_mode`;
 - проверки и файловые helper-операции: `ensure_root`, `ensure_dir`, `backup_file_once`;
 - резолв путей/пользователей:
   - `detect_klipperscreen_home` — путь к KlipperScreen (`WorkingDirectory` -> fallback),

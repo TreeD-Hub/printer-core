@@ -670,7 +670,9 @@ MAINSAIL_HTTP_ROOT_URL="http://127.0.0.1/"
 MAINSAIL_MOONRAKER_PROXY_INFO_URL="http://127.0.0.1/server/info"
 
 KS_OVERRIDE_FILE="/etc/systemd/system/KlipperScreen.service.d/override.conf"
-TREED_KLIPPERSCREEN_REQUIRED="${TREED_KLIPPERSCREEN_REQUIRED:-1}"
+TREED_UI_MODE="$(resolve_treed_ui_mode ts)"
+TS_UNIT="treed-shell.service"
+KS_UNIT="KlipperScreen.service"
 TREED_KLIPPERSCREEN_HOME_RAW="${TREED_KLIPPERSCREEN_HOME:-}"
 if [ -n "${TREED_KLIPPERSCREEN_HOME_RAW}" ]; then
   TREED_KLIPPERSCREEN_HOME="${TREED_KLIPPERSCREEN_HOME_RAW}"
@@ -1005,53 +1007,75 @@ else
   diagnostic_failf "CAN restart-ms ${TREED_CAN_RESTART_MS}"
 fi
 
-# Блок 8: Проверки состояния KlipperScreen (required/optional режимы).
+# Блок 8: Проверки выбранного экранного UI (TreeD Shell или KlipperScreen).
 KS_SERVICE_PRESENT=0
-if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+TS_SERVICE_PRESENT=0
+if systemctl cat "${KS_UNIT}" >/dev/null 2>&1; then
   KS_SERVICE_PRESENT=1
 fi
-
-if is_true "${TREED_KLIPPERSCREEN_REQUIRED}"; then
-  if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
-    pass "KlipperScreen retains splash"
-  else
-    failf "KlipperScreen retains splash"
-  fi
-
-  if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
-    if systemctl is-active --quiet KlipperScreen.service; then
-      pass "KlipperScreen.service active"
-    else
-      failf "KlipperScreen.service active"
-    fi
-
-    ks_substate="$(systemctl show -p SubState --value KlipperScreen.service 2>/dev/null | tr -d '\r\n')"
-    if [ "${ks_substate}" = "running" ]; then
-      pass "KlipperScreen.service substate running"
-    else
-      failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
-    fi
-  else
-    failf "KlipperScreen.service present"
-  fi
-else
-  if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
-    pass "KlipperScreen retains splash (optional)"
-  else
-    log_info "VERIFY KlipperScreen optional: override missing or not configured"
-  fi
-
-  if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
-    if systemctl is-active --quiet KlipperScreen.service; then
-      pass "KlipperScreen.service active (optional)"
-    else
-      ks_state="$(systemctl is-active KlipperScreen.service 2>/dev/null || true)"
-      log_info "VERIFY KlipperScreen optional: service not active (state=${ks_state:-unknown})"
-    fi
-  else
-    log_info "VERIFY KlipperScreen optional: service not installed"
-  fi
+if systemctl cat "${TS_UNIT}" >/dev/null 2>&1; then
+  TS_SERVICE_PRESENT=1
 fi
+
+case "${TREED_UI_MODE}" in
+  ts)
+    if [ "${TS_SERVICE_PRESENT}" = "1" ]; then
+      if systemctl is-active --quiet "${TS_UNIT}"; then
+        pass "treed-shell.service active"
+      else
+        failf "treed-shell.service active"
+      fi
+
+      ts_substate="$(systemctl show -p SubState --value "${TS_UNIT}" 2>/dev/null | tr -d '\r\n')"
+      if [ "${ts_substate}" = "running" ]; then
+        pass "treed-shell.service substate running"
+      else
+        failf "treed-shell.service substate running (state=${ts_substate:-unknown})"
+      fi
+    else
+      failf "treed-shell.service present"
+    fi
+
+    if [ "${KS_SERVICE_PRESENT}" = "1" ] && systemctl is-active --quiet "${KS_UNIT}"; then
+      failf "KlipperScreen.service inactive when TREED_UI_MODE=ts"
+    else
+      pass "KlipperScreen.service inactive when TREED_UI_MODE=ts"
+    fi
+    ;;
+  ks)
+    if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
+      pass "KlipperScreen retains splash"
+    else
+      failf "KlipperScreen retains splash"
+    fi
+
+    if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
+      if systemctl is-active --quiet "${KS_UNIT}"; then
+        pass "KlipperScreen.service active"
+      else
+        failf "KlipperScreen.service active"
+      fi
+
+      ks_substate="$(systemctl show -p SubState --value "${KS_UNIT}" 2>/dev/null | tr -d '\r\n')"
+      if [ "${ks_substate}" = "running" ]; then
+        pass "KlipperScreen.service substate running"
+      else
+        failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
+      fi
+    else
+      failf "KlipperScreen.service present"
+    fi
+
+    if [ "${TS_SERVICE_PRESENT}" = "1" ] && systemctl is-active --quiet "${TS_UNIT}"; then
+      failf "treed-shell.service inactive when TREED_UI_MODE=ks"
+    else
+      pass "treed-shell.service inactive when TREED_UI_MODE=ks"
+    fi
+    ;;
+  *)
+    failf "TREED_UI_MODE valid (current=${TREED_UI_MODE:-unknown})"
+    ;;
+esac
 
 # Блок 9: Проверки camera/crowsnest/moonraker-webcam (или skip в auto).
 CAM_BIN_DIR="${PI_HOME}/treed/cam/bin"

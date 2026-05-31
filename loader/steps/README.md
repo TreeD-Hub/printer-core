@@ -30,8 +30,9 @@
 | 22 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
 | 23 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
 | 24 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
-| 25 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
-| 26 | `verify.sh` | required | Финальная валидация V2-контура (boot/service/http/CAN/camera), без проверки runtime-конфигов. |
+| 25 | `treed-shell-install.sh` | required | Деплой TreeD Shell (`on-print`) и команды переключения TS/KS. |
+| 26 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
+| 27 | `verify.sh` | required | Финальная валидация V2-контура (boot/service/http/CAN/camera), без проверки runtime-конфигов. |
 
 `detect-boot-env.sh` оставлен как ручной диагностический step. В основном реестре он не запускается, потому что parent-shell оркестратор уже определяет и экспортирует boot-контекст до выполнения шагов.
 
@@ -151,7 +152,36 @@
 - `TREED_KLIPPERSCREEN_ENV` (default `${PI_HOME}/.KlipperScreen-env`)
 - `TREED_KS_THEME` (`treed-oled|...|keep`, default `treed-oled`)
 - `TREED_KS_LANGUAGE` (`ru|...|keep`, default `ru`)
-- `TREED_KLIPPERSCREEN_REQUIRED` (`0|1`, default `1`; управляет строгостью проверок UI в `verify`)
+- `TREED_KLIPPERSCREEN_REQUIRED` (`0|1`, default `1`; оставлен для совместимости, активный UI проверяется через `TREED_UI_MODE`)
+
+### TreeD Shell / UI switch
+
+- `TREED_UI_MODE` (`ts|ks`, default `ts`; при наличии `/etc/default/treed-ui` bootstrap берет режим оттуда)
+- `TREED_UI_ENV_FILE` (default `/etc/default/treed-ui`)
+- `TREED_SHELL_INSTALL` (`0|1`, default `1`)
+- `TREED_SHELL_REPO` (default `https://github.com/Yawllen/treed-shell.git`)
+- `TREED_SHELL_PRIMARY_BRANCH` (default `on-print`)
+- `TREED_SHELL_REF` (default `on-print`)
+- `TREED_SHELL_HOME` (default `${PI_HOME}/treed/treed-shell`)
+- `TREED_SHELL_RUNTIME_DIR` (default `${PI_HOME}/treed/treed-shell-runtime`)
+- `TREED_SHELL_NODE_VERSION` (default `20.19.0`)
+- `TREED_SHELL_START_TIMEOUT` (default `45`)
+- `TREED_FORCE_SHELL_BUILD` (`1` — принудительная пересборка TreeD Shell)
+
+`treed-shell-install.sh`:
+- держит checkout TreeD Shell на ветке/ref `on-print`;
+- собирает `npm run tauri:build:printer`;
+- публикует runtime binary в `${TREED_SHELL_RUNTIME_DIR}/treed-shell`;
+- создает `treed-shell.service`;
+- ставит команду `/usr/local/sbin/treed-ui` и symlink `/usr/local/bin/treed-ui`.
+
+Команды переключения на Rock Pi:
+
+```bash
+sudo treed-ui ts
+sudo treed-ui ks
+treed-ui status
+```
 
 ### Time / systemd / verify
 
@@ -197,6 +227,12 @@
 - `klipperscreen-theme.sh`
   - `clean`: `KlipperScreen.conf` без `.bak`.
   - `preserve`: `backup_file_once` перед изменением.
+- `treed-shell-install.sh`
+  - managed checkout находится в `${TREED_SHELL_HOME:-${PI_HOME}/treed/treed-shell}`;
+  - runtime binary находится в `${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}/treed-shell`;
+  - выбранный UI хранится в `${TREED_UI_ENV_FILE:-/etc/default/treed-ui}`;
+  - при `TREED_UI_MODE=ts` активируется `treed-shell.service`, а `KlipperScreen.service` отключается;
+  - при `TREED_UI_MODE=ks` активируется `KlipperScreen.service`, а `treed-shell.service` отключается.
 
 ## Практические замечания
 

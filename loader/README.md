@@ -51,8 +51,9 @@
 | 22 | `klipperscreen-install` | required | Managed-установка/проверка KlipperScreen. |
 | 23 | `klipperscreen-theme` | required | Деплой темы/шрифта KlipperScreen. |
 | 24 | `klipperscreen-integr` | required | Systemd override KlipperScreen. |
-| 25 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
-| 26 | `verify` | required | Финальная валидация V2-контура с разделением fatal/diagnostic проверок. |
+| 25 | `treed-shell-install` | required | Деплой TreeD Shell (`on-print`) и команды переключения TS/KS. |
+| 26 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
+| 27 | `verify` | required | Финальная валидация V2-контура с разделением fatal/diagnostic проверок. |
 
 `loader/steps/detect-boot-env.sh` оставлен для ручной диагностики. Основной оркестратор не запускает его повторно, потому что boot-контекст уже определяется в parent-shell до реестра шагов.
 
@@ -106,7 +107,17 @@
 - `TREED_KLIPPERSCREEN_REF` — pin branch/tag/commit для managed checkout KlipperScreen; если установленный checkout той же версии или новее, переустановка пропускается.
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` принудительно пересоздает managed checkout KlipperScreen.
 - `TREED_KLIPPERSCREEN_ENV` — путь venv KlipperScreen, default `${PI_HOME}/.KlipperScreen-env`.
-- `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; управляет строгостью проверок KlipperScreen в `verify`.
+- `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; оставлен для совместимости, активный UI проверяется через `TREED_UI_MODE`.
+- `TREED_UI_MODE` — `ts|ks`, default `ts`; выбранный экранный UI. Если `/etc/default/treed-ui` уже существует, bootstrap берет режим оттуда.
+- `TREED_UI_ENV_FILE` — default `/etc/default/treed-ui`, persisted-состояние выбранного UI.
+- `TREED_SHELL_REPO` — default `https://github.com/Yawllen/treed-shell.git`.
+- `TREED_SHELL_PRIMARY_BRANCH` — default `on-print`, ветка TreeD Shell для managed checkout.
+- `TREED_SHELL_REF` — default `on-print`, branch/tag/commit для checkout TreeD Shell.
+- `TREED_SHELL_HOME` — default `${PI_HOME}/treed/treed-shell`, source checkout.
+- `TREED_SHELL_RUNTIME_DIR` — default `${PI_HOME}/treed/treed-shell-runtime`, опубликованный runtime binary.
+- `TREED_SHELL_NODE_VERSION` — default `20.19.0`, bundled Node.js для сборки, если системный Node.js слишком старый.
+- `TREED_SHELL_START_TIMEOUT` — default `45`, ожидание активного `treed-shell.service`.
+- `TREED_FORCE_SHELL_BUILD` — `1` принудительно пересобирает TreeD Shell.
 - `TREED_KLIPPER_START_REQUIRE_ACTIVE` — `0|1`, default `1`; при `1` `maintenance-start` блокирует loader, если `klipper.service` не стал active в таймаут.
 - `TREED_REQUIRE_KLIPPER_READY` — `0|1`, default `0`; управляет тем, будет ли `Klippy state!=ready` блокировать `verify`.
 

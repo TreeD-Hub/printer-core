@@ -33,6 +33,7 @@ REQUIRED_SERVICES=(
 # Опциональные сервисы останавливаем в best-effort режиме.
 BEST_EFFORT_SERVICES=(
   "KlipperScreen.service"
+  "treed-shell.service"
   "crowsnest.service"
 )
 

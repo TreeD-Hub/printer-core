@@ -1,0 +1,154 @@
+#!/bin/bash
+set -euo pipefail
+
+# ==========================================
+# ОПЕРАТОРСКАЯ УТИЛИТА: TREED UI SWITCH
+# ==========================================
+# Назначение:
+# - Переключает активный экранный UI между KlipperScreen и TreeD Shell.
+# - Сохраняет выбранный режим для loader/verify и следующих запусков.
+# Контур:
+# - required command для ручного переключения UI на Rock Pi.
+
+# Блок 1: Базовые параметры и справка.
+UI_ENV_FILE="/etc/default/treed-ui"
+KS_UNIT="KlipperScreen.service"
+TS_UNIT="treed-shell.service"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  treed-ui status
+  treed-ui ts
+  treed-ui ks
+
+Aliases:
+  ts, treed-shell
+  ks, klipperscreen
+EOF
+}
+
+log_info() {
+  echo "[treed-ui] $*"
+}
+
+log_error() {
+  echo "[treed-ui] ERROR: $*" >&2
+}
+
+normalize_mode() {
+  local raw="${1:-}"
+
+  case "${raw}" in
+    ts|TS|treed-shell|treed_shell|shell)
+      printf '%s\n' "ts"
+      ;;
+    ks|KS|klipperscreen|KlipperScreen)
+      printf '%s\n' "ks"
+      ;;
+    status|"")
+      printf '%s\n' "status"
+      ;;
+    *)
+      log_error "unknown mode '${raw}'"
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Блок 2: Root-контракт и чтение текущего состояния.
+ensure_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    exec sudo "$0" "$@"
+  fi
+
+  log_error "run as root: sudo treed-ui ${*:-status}"
+  exit 1
+}
+
+persist_mode() {
+  local mode="$1"
+
+  install -d -m 0755 "$(dirname "${UI_ENV_FILE}")"
+  cat > "${UI_ENV_FILE}" <<EOF
+TREED_UI_MODE=${mode}
+EOF
+  chmod 0644 "${UI_ENV_FILE}"
+}
+
+unit_state() {
+  local unit="$1"
+
+  if ! systemctl cat "${unit}" >/dev/null 2>&1; then
+    printf '%s\n' "missing"
+    return 0
+  fi
+
+  systemctl is-active "${unit}" 2>/dev/null || true
+}
+
+print_status() {
+  local selected="unknown"
+
+  if [ -f "${UI_ENV_FILE}" ]; then
+    selected="$(sed -nE 's|^[[:space:]]*TREED_UI_MODE=([A-Za-z0-9_-]+)[[:space:]]*$|\1|p' "${UI_ENV_FILE}" | tail -n1)"
+    selected="${selected:-unknown}"
+  fi
+
+  printf 'selected=%s\n' "${selected}"
+  printf 'KlipperScreen=%s\n' "$(unit_state "${KS_UNIT}")"
+  printf 'treed-shell=%s\n' "$(unit_state "${TS_UNIT}")"
+}
+
+# Блок 3: Переключение UI-сервисов.
+switch_to_treed_shell() {
+  if ! systemctl cat treed-shell.service >/dev/null 2>&1; then
+    log_error "treed-shell.service is not installed"
+    exit 1
+  fi
+
+  systemctl daemon-reload
+  if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+    systemctl disable --now KlipperScreen.service >/dev/null 2>&1 || true
+  fi
+  systemctl enable --now treed-shell.service
+  persist_mode "ts"
+  log_info "active UI: treed-shell"
+}
+
+switch_to_klipperscreen() {
+  if ! systemctl cat KlipperScreen.service >/dev/null 2>&1; then
+    log_error "KlipperScreen.service is not installed"
+    exit 1
+  fi
+
+  systemctl daemon-reload
+  if systemctl cat treed-shell.service >/dev/null 2>&1; then
+    systemctl disable --now treed-shell.service >/dev/null 2>&1 || true
+  fi
+  systemctl enable --now KlipperScreen.service
+  persist_mode "ks"
+  log_info "active UI: KlipperScreen"
+}
+
+# Блок 4: Entry-point команды.
+mode="$(normalize_mode "${1:-status}")"
+
+case "${mode}" in
+  status)
+    print_status
+    ;;
+  ts)
+    ensure_root "$@"
+    switch_to_treed_shell
+    ;;
+  ks)
+    ensure_root "$@"
+    switch_to_klipperscreen
+    ;;
+esac
