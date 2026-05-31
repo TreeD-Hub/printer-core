@@ -11,7 +11,7 @@
 
 - источник в репозитории: `runtime-scripts/treed-cam/*`
 - шаг деплоя: `loader/steps/treed-cam.sh`
-- путь на устройстве: `${PI_HOME}/treed/cam/bin` (обычно `/home/pi/treed/cam/bin`)
+- путь на устройстве: `${PI_HOME}/treed/cam/bin`
 - каталог данных снимков: `${PI_HOME}/treed/cam/prints`
 
 Для UI:

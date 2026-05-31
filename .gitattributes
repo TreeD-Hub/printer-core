@@ -14,6 +14,7 @@
 *.yaml    text eol=lf
 *.yml     text eol=lf
 *.json    text eol=lf
+*.ps1     text eol=lf
 
 # Treat common binaries as binary (no EOL conversions)
 *.png     binary

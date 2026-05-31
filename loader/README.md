@@ -134,7 +134,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v
 Локальный запуск уже клонированного репозитория:
 
 ```bash
-cd /home/pi/treed/treed-mainshellOS
+cd ~/treed/treed-mainshellOS
 sudo bash loader/loader.sh
 ```
 

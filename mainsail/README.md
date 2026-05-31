@@ -9,7 +9,7 @@
 Деплой:
 - шаг: `loader/steps/klipper-mainsail-theme.sh`
 - источник: `mainsail/.theme`
-- runtime-путь: `/home/pi/printer_data/config/.theme`
+- runtime-путь: `${PI_HOME}/printer_data/config/.theme`
 - web-слой устанавливается шагом `loader/steps/mainsail-web.sh` из `mainsail/web/mainsail.zip` по умолчанию.
 
 Важно:

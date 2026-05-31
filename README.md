@@ -172,11 +172,11 @@ TREED_MOTION_LIMITS_DEFAULT
 - шаги: `loader/steps/*.sh`
 
 3. Staging на устройстве
-- `/home/pi/treed/klipper`
+- `${PI_HOME}/treed/klipper`
 
 4. Runtime на устройстве
-- `/home/pi/printer_data/config`
-- `/home/pi/treed/cam/bin`
+- `${PI_HOME}/printer_data/config`
+- `${PI_HOME}/treed/cam/bin`
 
 5. Сервисы и UI
 - `klipper`, `moonraker`, `crowsnest`, `treed-shell`, `KlipperScreen`, `mainsail`

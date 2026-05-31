@@ -12,14 +12,21 @@ set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/TreeD-Hub/treed-mainshellOS.git}"
 INSTALL_REF="${INSTALL_REF:-treed-v2}"
-BASE="${BASE:-/home/pi/treed}"
-REPO_DIR="${REPO_DIR:-${BASE}/treed-mainshellOS}"
 STATE_FILE="${TREED_STATE_FILE:-/run/treed-loader/state.env}"
 TREED_REBOOT_AFTER_FRESH="${TREED_REBOOT_AFTER_FRESH:-1}"
 
 RUN_USER="${SUDO_USER:-$(id -un)}"
+RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6 || true)"
 RUN_UID="$(id -u "${RUN_USER}")"
 RUN_GID="$(id -g "${RUN_USER}")"
+
+if [ -z "${RUN_HOME}" ] || [ ! -d "${RUN_HOME}" ]; then
+  echo "[bootstrap-pi] ERROR: cannot determine home for user ${RUN_USER}" >&2
+  exit 1
+fi
+
+BASE="${BASE:-${RUN_HOME}/treed}"
+REPO_DIR="${REPO_DIR:-${BASE}/treed-mainshellOS}"
 
 if ! command -v git >/dev/null 2>&1; then
   sudo apt-get update

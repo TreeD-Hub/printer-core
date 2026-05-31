@@ -11,7 +11,7 @@
 Деплой:
 - шаг: `loader/steps/klipper-mainsail-theme.sh`
 - источник: `mainsail/.theme`
-- runtime-путь: `/home/pi/printer_data/config/.theme`
+- runtime-путь: `${PI_HOME}/printer_data/config/.theme`
 
 Важно:
 - не копировать сюда инструкции внешней ручной установки;

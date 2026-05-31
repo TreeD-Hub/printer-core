@@ -5,7 +5,7 @@
 ## 1. Базовая ОС
 
 - Рекомендуемая база: **Armbian Debian 12**.
-- Пользователь для runtime-путей проекта: `pi`.
+- Пользователь для runtime-путей проекта: текущий SSH/deploy-пользователь (`radxa`, `pi` или другой sudo-пользователь).
 - SSH должен быть включен.
 
 ## 2. Запуск installer
@@ -14,7 +14,7 @@
 curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
 ```
 
-`bootstrap-pi.sh` клонирует свежий installer checkout в `/home/pi/treed/treed-mainshellOS`, запускает loader в `TREED_DEPLOY_MODE=auto` и перезагружает систему только при состоянии `fresh`.
+`bootstrap-pi.sh` клонирует свежий installer checkout в `${HOME}/treed/treed-mainshellOS` пользователя запуска, запускает loader в `TREED_DEPLOY_MODE=auto` и перезагружает систему только при состоянии `fresh`.
 
 ## 3. V2 UUID
 

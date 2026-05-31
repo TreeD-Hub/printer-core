@@ -9,8 +9,8 @@
 - `local_overrides.example.cfg` — шаблон локальных runtime-оверрайдов.
 
 Деплой:
-- staging: `/home/pi/treed/klipper` (шаг `loader/steps/klipper-sync.sh`)
-- runtime: `/home/pi/printer_data/config` (шаг `loader/steps/klipper-core.sh`)
+- staging: `${PI_HOME}/treed/klipper` (шаг `loader/steps/klipper-sync.sh`)
+- runtime: `${PI_HOME}/printer_data/config` (шаг `loader/steps/klipper-core.sh`)
 - `canbus_uuid` и `canbus_interface` для MCU берутся напрямую из репозиторных файлов профиля (loader их не переписывает).
 
 Важно:

@@ -47,28 +47,28 @@ Repo (источник правды):
 - `klipperscreen/themes/*`
 
 Staging:
-- `/home/pi/treed/klipper` (результат `klipper-sync`)
+- `${PI_HOME}/treed/klipper` (результат `klipper-sync`)
 
 Runtime:
-- `/home/pi/printer_data/config` (раскладка `klipper-core`)
-- `/home/pi/treed/cam/bin` (раскладка `treed-cam`)
+- `${PI_HOME}/printer_data/config` (раскладка `klipper-core`)
+- `${PI_HOME}/treed/cam/bin` (раскладка `treed-cam`)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
 
 ## 3. Ownership map (runtime)
 
 Управляется репозиторием и шагами loader:
-- `/home/pi/printer_data/config/printer.cfg`
-- `/home/pi/printer_data/config/profiles/treed_v2_corexy_v1/*`
-- `/home/pi/printer_data/config/moonraker.conf`
-- `/home/pi/printer_data/config/moonraker/base/*.conf`
-- `/home/pi/printer_data/config/.theme/*`
+- `${PI_HOME}/printer_data/config/printer.cfg`
+- `${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1/*`
+- `${PI_HOME}/printer_data/config/moonraker.conf`
+- `${PI_HOME}/printer_data/config/moonraker/base/*.conf`
+- `${PI_HOME}/printer_data/config/.theme/*`
 
 Генерируется loader-шагами:
-- `/home/pi/printer_data/config/moonraker/generated/50-webcam-treed.conf`
+- `${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf`
   владелец: `loader/steps/crowsnest-webcam.sh`
 
 Локальные runtime-overrides:
-- `/home/pi/printer_data/config/local_overrides.cfg`
+- `${PI_HOME}/printer_data/config/local_overrides.cfg`
 
 CAN-host слой:
 - `/etc/default/treed-can-setup`

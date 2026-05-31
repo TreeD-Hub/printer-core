@@ -272,6 +272,7 @@ checkout_treed_shell_ref() {
   fi
 
   sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" checkout -B "${SHELL_PRIMARY_BRANCH}" "${target_commit}"
+  sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" reset --hard "${target_commit}" >/dev/null
   if sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" rev-parse --verify "origin/${SHELL_PRIMARY_BRANCH}^{commit}" >/dev/null 2>&1; then
     sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" branch --set-upstream-to="origin/${SHELL_PRIMARY_BRANCH}" "${SHELL_PRIMARY_BRANCH}" >/dev/null 2>&1 || true
   fi
