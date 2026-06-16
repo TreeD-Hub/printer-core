@@ -23,7 +23,11 @@
 14. `profiles/treed_v2_corexy_v1/ui.cfg`
 15. `local_overrides.cfg`
 
-`macros.cfg` дополнительно подключает `macros_input_shaper.cfg` перед `macros_print_flow.cfg`, чтобы `START_PRINT` мог вызвать TreeD-калибровку input shaper.
+`macros.cfg` дополнительно подключает:
+- `macros_input_shaper.cfg` перед `macros_print_flow.cfg`, чтобы `START_PRINT` мог вызвать TreeD-калибровку input shaper;
+- `macros_ui_tune.cfg` как публичный runtime tune контракт для TreeD Shell.
+
+Контракт UI live-тюнинга описан в `ui-runtime-tune-contract.md`: публичные `TREED_UI_*` команды, диапазоны, ошибки и Moonraker state surface.
 
 ## Контракт loader
 
