@@ -14,7 +14,8 @@
   - секции `[update_manager klipper]` и `[update_manager moonraker]` задают явный `dev`-канал для auto-detected core-updater'ов;
   - секция `[update_manager mainsail]` пост-обрабатывается loader-ом: включается только при валидном локальном пути клиента Mainsail (с `index.html` и `release_info.json`), типовой путь `/var/www/mainsail`;
   - секция `[update_manager crowsnest]` пост-обрабатывается loader-ом: включается только при валидном git checkout Crowsnest с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`);
-  - подключение компонента `[treed_shell_command]`;
+  - подключение компонентов `[treed_shell_command]` и `[treed_host_network]`;
+  - endpoints host network runtime для TreeD Shell через `nmcli`;
   - runtime shell_command-команды камеры:
     - `treed_cam_session_start`
     - `treed_cam_snapshot`

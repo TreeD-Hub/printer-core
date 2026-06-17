@@ -21,7 +21,7 @@
 
 - `moonraker/moonraker.conf` -> `${PI_HOME}/printer_data/config/moonraker.conf`
 - `moonraker/base/*.conf` -> `${PI_HOME}/printer_data/config/moonraker/base/*.conf`
-- `moonraker/components/treed_shell_command.py` -> каталог `moonraker/components` установленного Moonraker
+- `moonraker/components/*.py` -> каталог `moonraker/components` установленного Moonraker
 
 `generated` слой:
 

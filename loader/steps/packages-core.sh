@@ -18,7 +18,7 @@ log_info "Step packages-core: installing core packages"
 
 CORE_PACKAGES=(
   plymouth plymouth-themes plymouth-label \
-  rsync curl v4l-utils git acl \
+  rsync curl v4l-utils git acl network-manager \
   python3 python3-pip python3-venv python3-dev \
   python3-numpy python3-matplotlib libatlas-base-dev libopenblas-dev \
   build-essential libffi-dev libssl-dev \

@@ -5,7 +5,7 @@ set -euo pipefail
 # ШАГ LOADER: MOONRAKER CONFIG
 # ==========================================
 # Назначение:
-# - Синхронизирует moonraker.conf, base-фрагменты и компонент shell_command.
+# - Синхронизирует moonraker.conf, base-фрагменты и компоненты TreeD.
 # - Учитывает deploy mode и режим backup/preserve.
 # Контур:
 # - required (база API/интеграций TreeD и generated-фрагментов).
@@ -22,8 +22,7 @@ DST_CONF="${PI_HOME}/printer_data/config/moonraker.conf"
 SRC_BASE_DIR="${REPO_DIR}/moonraker/base"
 DST_BASE_DIR="${PI_HOME}/printer_data/config/moonraker/base"
 DST_GENERATED_DIR="${PI_HOME}/printer_data/config/moonraker/generated"
-SRC_COMPONENT="${REPO_DIR}/moonraker/components/treed_shell_command.py"
-COMPONENT_NAME="treed_shell_command.py"
+SRC_COMPONENT_DIR="${REPO_DIR}/moonraker/components"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
 TREED_CROWSNEST_SRC_DIR="${TREED_CROWSNEST_SRC_DIR:-${PI_HOME}/crowsnest}"
@@ -60,6 +59,16 @@ validate_repo_moonraker_layout() {
 
   if [ -z "$(find "${SRC_BASE_DIR}" -maxdepth 1 -type f -name '*.conf' -print -quit 2>/dev/null)" ]; then
     log_error "Moonraker base fragments directory is empty: ${SRC_BASE_DIR}"
+    exit 1
+  fi
+
+  if [ ! -d "${SRC_COMPONENT_DIR}" ]; then
+    log_error "Moonraker components directory not found in repo: ${SRC_COMPONENT_DIR}"
+    exit 1
+  fi
+
+  if [ -z "$(find "${SRC_COMPONENT_DIR}" -maxdepth 1 -type f -name '*.py' -print -quit 2>/dev/null)" ]; then
+    log_error "Moonraker components directory has no Python components: ${SRC_COMPONENT_DIR}"
     exit 1
   fi
 
@@ -136,27 +145,35 @@ find_moonraker_components_dir() {
   return 1
 }
 
-deploy_treed_shell_component() {
+deploy_treed_moonraker_components() {
   local components_dir=""
+  local component_name=""
+  local deployed_count=0
+  local src=""
   local dst=""
 
-  if [ ! -f "${SRC_COMPONENT}" ]; then
-    log_error "TreeD Moonraker component not found in repo: ${SRC_COMPONENT}"
-    exit 1
-  fi
-
   if ! components_dir="$(find_moonraker_components_dir)"; then
-    log_error "Moonraker components directory not found; cannot deploy ${COMPONENT_NAME}"
+    log_error "Moonraker components directory not found; cannot deploy TreeD components"
     exit 1
   fi
 
-  dst="${components_dir}/${COMPONENT_NAME}"
-  cp -f "${SRC_COMPONENT}" "${dst}"
-  if [[ "${components_dir}" == "/home/${PI_USER}/"* ]]; then
-    chown "${PI_USER}:${grp}" "${dst}" || true
+  while IFS= read -r -d '' src; do
+    component_name="$(basename "${src}")"
+    dst="${components_dir}/${component_name}"
+    cp -f "${src}" "${dst}"
+    if [[ "${components_dir}" == "/home/${PI_USER}/"* ]]; then
+      chown "${PI_USER}:${grp}" "${dst}" || true
+    fi
+    deployed_count=$((deployed_count+1))
+    log_info "Deployed Moonraker component to ${dst}"
+  done < <(find "${SRC_COMPONENT_DIR}" -maxdepth 1 -type f -name '*.py' -print0 2>/dev/null)
+
+  if [ "${deployed_count}" -eq 0 ]; then
+    log_error "No TreeD Moonraker components found in ${SRC_COMPONENT_DIR}"
+    exit 1
   fi
+
   COMPONENT_DEPLOYED=1
-  log_info "Deployed Moonraker component to ${dst}"
 }
 
 is_valid_mainsail_web_path() {
@@ -421,7 +438,7 @@ log_info "Deployed Moonraker config to ${DST_CONF}"
 
 deploy_base_fragments
 ensure_generated_fragments_dir
-deploy_treed_shell_component
+deploy_treed_moonraker_components
 
 if [ "${CONFIG_DEPLOYED}" -eq 1 ] || [ "${BASE_DEPLOYED}" -eq 1 ] || [ "${COMPONENT_DEPLOYED}" -eq 1 ]; then
   log_info "Moonraker restart is deferred to step crowsnest-webcam"
