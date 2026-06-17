@@ -27,6 +27,12 @@
 - `macros_input_shaper.cfg` перед `macros_print_flow.cfg`, чтобы `START_PRINT` мог вызвать TreeD-калибровку input shaper;
 - `macros_ui_tune.cfg` как публичный runtime tune контракт для TreeD Shell.
 
+`macros_core.cfg` также объявляет capability state macro для системных действий UI:
+- `_TREED_SYSTEM_POWER.enabled = 1` — runtime разрешает UI показывать reboot/shutdown host;
+- `_TREED_SERVICE_COMMANDS.enabled = 1` — runtime разрешает UI показывать restart Klipper/Firmware/Moonraker.
+
+Эти macro не выполняют действие сами. Они только публикуют state surface для Moonraker object query; destructive команды остаются штатными Moonraker endpoints и должны вызываться только после ручного подтверждения в UI.
+
 Контракт UI live-тюнинга описан в `ui-runtime-tune-contract.md`: публичные `TREED_UI_*` команды, диапазоны, ошибки и Moonraker state surface.
 
 ## Контракт loader

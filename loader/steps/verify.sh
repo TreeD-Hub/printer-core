@@ -467,6 +467,36 @@ host_network_status_check() {
   rm -f "${tmp}"
 }
 
+ui_system_capabilities_check() {
+  local check_name="$1"
+  local url="$2"
+  local tmp code retries attempt
+
+  if ! command -v curl >/dev/null 2>&1; then
+    failf "${check_name} (curl missing)"
+    return 0
+  fi
+
+  tmp="$(mktemp "/tmp/treed_verify_ui_system_capabilities_XXXXXX.json")"
+  retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
+  code=""
+
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(curl -m "${TREED_CAM_HTTP_TIMEOUT:-8}" -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
+    if [ "${code}" = "200" ] \
+      && grep -qE '"gcode_macro _TREED_SYSTEM_POWER"[[:space:]]*:[[:space:]]*\{[^}]*"enabled"[[:space:]]*:[[:space:]]*1(\.0+)?' "${tmp}" \
+      && grep -qE '"gcode_macro _TREED_SERVICE_COMMANDS"[[:space:]]*:[[:space:]]*\{[^}]*"enabled"[[:space:]]*:[[:space:]]*1(\.0+)?' "${tmp}"; then
+      pass "${check_name}"
+      rm -f "${tmp}"
+      return 0
+    fi
+    sleep 1
+  done
+
+  failf "${check_name} (http=${code:-n/a}, retries=${retries})"
+  rm -f "${tmp}"
+}
+
 http_snapshot_check() {
   local check_name="$1"
   local url="$2"
@@ -700,6 +730,7 @@ esac
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 MOONRAKER_PRINTER_INFO_URL="http://127.0.0.1:7125/printer/info"
 MOONRAKER_HOST_NETWORK_STATUS_URL="http://127.0.0.1:7125/server/treed/network/status"
+MOONRAKER_UI_SYSTEM_CAPABILITIES_URL="http://127.0.0.1:7125/printer/objects/query?gcode_macro%20_TREED_SYSTEM_POWER&gcode_macro%20_TREED_SERVICE_COMMANDS"
 WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
 CAN_UNIT="treed-can-setup.service"
 TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
@@ -1013,6 +1044,7 @@ http_status_ok_check "nginx HTTP root responds 200" "${MAINSAIL_HTTP_ROOT_URL}" 
 moonraker_server_info_check "Moonraker HTTP 127.0.0.1:7125 /server/info" "${MOONRAKER_SERVER_INFO_URL}" "direct"
 moonraker_server_info_check "nginx proxy /server/info" "${MAINSAIL_MOONRAKER_PROXY_INFO_URL}" "proxy"
 printer_info_check "Klipper /printer/info" "${MOONRAKER_PRINTER_INFO_URL}"
+ui_system_capabilities_check "TreeD UI system capability macros enabled" "${MOONRAKER_UI_SYSTEM_CAPABILITIES_URL}"
 host_network_status_check "TreeD host network /server/treed/network/status" "${MOONRAKER_HOST_NETWORK_STATUS_URL}"
 klipper_mcu_journal_clean_check "klipper journal has no fresh MCU errors"
 klipper_can_mcus_connected_check "klipper CAN MCU connectivity"
