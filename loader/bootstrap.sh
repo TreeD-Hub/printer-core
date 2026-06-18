@@ -93,12 +93,14 @@ case "${TREED_UI_MODE}" in
     ;;
 esac
 : "${TREED_SHELL_INSTALL:=1}"
-: "${TREED_SHELL_REPO:=https://github.com/Yawllen/treed-shell.git}"
-: "${TREED_SHELL_PRIMARY_BRANCH:=on-print}"
-: "${TREED_SHELL_REF:=on-print}"
-: "${TREED_SHELL_HOME:=${DEPLOY_HOME}/treed/treed-shell}"
+: "${TREED_SHELL_RELEASE_API_URL:=https://api.github.com/repos/TreeD-Hub/treed-shell/releases}"
+: "${TREED_SHELL_RELEASE_TAG_PREFIX:=ui-main-}"
+: "${TREED_SHELL_UI_ASSET_NAME:=treed-shell-ui.zip}"
+: "${TREED_SHELL_UI_ARCHIVE_URL:=}"
 : "${TREED_SHELL_RUNTIME_DIR:=${DEPLOY_HOME}/treed/treed-shell-runtime}"
-: "${TREED_SHELL_NODE_VERSION:=20.19.0}"
+: "${TREED_SHELL_WEB_DIR:=${TREED_SHELL_RUNTIME_DIR}/ui}"
+: "${TREED_SHELL_HTTP_PORT:=8787}"
+: "${TREED_SHELL_BROWSER_BIN:=}"
 : "${TREED_SHELL_START_TIMEOUT:=45}"
 
 : "${TREED_FIRMWARE_BUILD_ENABLED:=1}"
@@ -151,12 +153,14 @@ export TREED_KLIPPERSCREEN_PRIMARY_BRANCH
 export TREED_UI_ENV_FILE
 export TREED_UI_MODE
 export TREED_SHELL_INSTALL
-export TREED_SHELL_REPO
-export TREED_SHELL_PRIMARY_BRANCH
-export TREED_SHELL_REF
-export TREED_SHELL_HOME
+export TREED_SHELL_RELEASE_API_URL
+export TREED_SHELL_RELEASE_TAG_PREFIX
+export TREED_SHELL_UI_ASSET_NAME
+export TREED_SHELL_UI_ARCHIVE_URL
 export TREED_SHELL_RUNTIME_DIR
-export TREED_SHELL_NODE_VERSION
+export TREED_SHELL_WEB_DIR
+export TREED_SHELL_HTTP_PORT
+export TREED_SHELL_BROWSER_BIN
 export TREED_SHELL_START_TIMEOUT
 
 export TREED_FIRMWARE_BUILD_ENABLED
@@ -194,7 +198,7 @@ echo "[bootstrap] TREED_EDDY_ENABLED=${TREED_EDDY_ENABLED}"
 echo "[bootstrap] TREED_FIRMWARE_BUILD_ENABLED=${TREED_FIRMWARE_BUILD_ENABLED}"
 echo "[bootstrap] TREED_CROWSNEST_INSTALL=${TREED_CROWSNEST_INSTALL}"
 echo "[bootstrap] TREED_UI_MODE=${TREED_UI_MODE}"
-echo "[bootstrap] TREED_SHELL_REF=${TREED_SHELL_REF}"
+echo "[bootstrap] TREED_SHELL_UI_ASSET_NAME=${TREED_SHELL_UI_ASSET_NAME}"
 
 # Блок 7: Нормализация shell-файлов loader после Windows checkout.
 if [ "${TREED_LOADER_MODE}" != "check" ] && [ -d "${REPO_DIR}/loader" ]; then

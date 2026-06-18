@@ -5,8 +5,8 @@ set -euo pipefail
 # ШАГ LOADER: TREED SHELL INSTALL
 # ==========================================
 # Назначение:
-# - Устанавливает TreeD Shell как альтернативный экранный UI.
-# - Фиксирует checkout на ветке on-print и собирает printer-профиль Tauri.
+# - Устанавливает TreeD Shell как экранный UI из готового release artifact.
+# - Не клонирует и не собирает `treed-shell` на устройстве.
 # - Ставит systemd unit и команду переключения `treed-ui`.
 # Контур:
 # - required для штатного TS/KS-переключателя;
@@ -18,7 +18,7 @@ ensure_root
 
 log_info "Step treed-shell-install: installing TreeD Shell UI"
 
-# Блок 2: Параметры source/runtime и выбранного UI.
+# Блок 2: Параметры release artifact, runtime и выбранного UI.
 PI_USER="${PI_USER:-${SUDO_USER:-pi}}"
 PI_HOME="${PI_HOME:-$(getent passwd "${PI_USER}" | cut -d: -f6 || true)}"
 
@@ -38,21 +38,22 @@ case "${TREED_SHELL_INSTALL}" in
     ;;
 esac
 
-SHELL_REPO_URL="${TREED_SHELL_REPO:-https://github.com/Yawllen/treed-shell.git}"
-SHELL_PRIMARY_BRANCH="${TREED_SHELL_PRIMARY_BRANCH:-on-print}"
-SHELL_REPO_REF="${TREED_SHELL_REF:-on-print}"
-SHELL_HOME="${TREED_SHELL_HOME:-${PI_HOME}/treed/treed-shell}"
+SHELL_RELEASE_API_URL="${TREED_SHELL_RELEASE_API_URL:-https://api.github.com/repos/TreeD-Hub/treed-shell/releases}"
+SHELL_RELEASE_TAG_PREFIX="${TREED_SHELL_RELEASE_TAG_PREFIX:-ui-main-}"
+SHELL_UI_ASSET_NAME="${TREED_SHELL_UI_ASSET_NAME:-treed-shell-ui.zip}"
+SHELL_UI_ARCHIVE_URL="${TREED_SHELL_UI_ARCHIVE_URL:-}"
 SHELL_RUNTIME_DIR="${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}"
-SHELL_RUNTIME_BIN="${SHELL_RUNTIME_DIR}/treed-shell"
-SHELL_BUILD_MARKER="${SHELL_RUNTIME_DIR}/build.env"
+SHELL_WEB_DIR="${TREED_SHELL_WEB_DIR:-${SHELL_RUNTIME_DIR}/ui}"
+SHELL_ARCHIVE_PATH="${SHELL_RUNTIME_DIR}/${SHELL_UI_ASSET_NAME}"
+SHELL_RUNTIME_SCRIPT="${SHELL_RUNTIME_DIR}/start-treed-shell-kiosk.sh"
+SHELL_HTTP_PORT="${TREED_SHELL_HTTP_PORT:-8787}"
+SHELL_BROWSER_BIN="${TREED_SHELL_BROWSER_BIN:-}"
 TREED_UI_ENV_FILE="${TREED_UI_ENV_FILE:-/etc/default/treed-ui}"
-TREED_NODE_VERSION="${TREED_SHELL_NODE_VERSION:-20.19.0}"
 TREED_SHELL_START_TIMEOUT="${TREED_SHELL_START_TIMEOUT:-45}"
 UI_MODE="$(resolve_treed_ui_mode ts)"
-BUILD_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-SHELL_TARGET_COMMIT=""
+BROWSER_BIN=""
 
-# Блок 3: Helper-функции system package/toolchain.
+# Блок 3: Helper-функции system package/runtime.
 package_installed() {
   local package="$1"
 
@@ -78,287 +79,161 @@ install_missing_packages() {
   apt_get_noninteractive install "${missing[@]}"
 }
 
-node_version_ok() {
-  local node_bin="$1"
-
-  [ -x "${node_bin}" ] || return 1
-  "${node_bin}" -e '
-const [major, minor] = process.versions.node.split(".").map(Number);
-process.exit(((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22) ? 0 : 1);
-' >/dev/null 2>&1
-}
-
-detect_node_arch() {
-  case "$(uname -m)" in
-    aarch64|arm64) printf '%s\n' "arm64" ;;
-    armv7l|armv7*) printf '%s\n' "armv7l" ;;
-    x86_64|amd64) printf '%s\n' "x64" ;;
-    *)
-      log_error "treed-shell-install: unsupported Node.js architecture $(uname -m)"
-      exit 1
-      ;;
-  esac
-}
-
-ensure_node_runtime() {
-  local system_node=""
-  local node_arch=""
-  local node_name=""
-  local node_prefix=""
-  local node_tar=""
-  local node_url=""
-
-  system_node="$(command -v node || true)"
-  if [ -n "${system_node}" ] && node_version_ok "${system_node}"; then
-    BUILD_PATH="$(dirname "${system_node}"):${BUILD_PATH}"
-    log_info "treed-shell-install: using system Node.js $(${system_node} -p 'process.version')"
-    return 0
-  fi
-
-  node_arch="$(detect_node_arch)"
-  node_name="node-v${TREED_NODE_VERSION}-linux-${node_arch}"
-  node_prefix="/opt/${node_name}"
-  node_url="https://nodejs.org/dist/v${TREED_NODE_VERSION}/${node_name}.tar.xz"
-
-  if [ ! -x "${node_prefix}/bin/node" ]; then
-    node_tar="$(mktemp "/tmp/treed_node_${TREED_NODE_VERSION}_XXXXXX.tar.xz")"
-    log_info "treed-shell-install: downloading Node.js ${TREED_NODE_VERSION} (${node_arch})"
-    curl -fL --connect-timeout 20 --retry 3 --retry-delay 2 -o "${node_tar}" "${node_url}"
-    tar -xJf "${node_tar}" -C /opt
-    rm -f "${node_tar}"
-  fi
-
-  if ! node_version_ok "${node_prefix}/bin/node"; then
-    log_error "treed-shell-install: installed Node.js is not compatible (${node_prefix})"
-    exit 1
-  fi
-
-  ln -sfn "${node_prefix}" /opt/treed-node
-  BUILD_PATH="/opt/treed-node/bin:${BUILD_PATH}"
-  log_info "treed-shell-install: using bundled Node.js $(/opt/treed-node/bin/node -p 'process.version')"
-}
-
-rust_version_ok() {
-  local rustc_bin="$1"
-
-  [ -x "${rustc_bin}" ] || return 1
-  "${rustc_bin}" --version 2>/dev/null | awk '
-    {
-      split($2, parts, ".")
-      major = parts[1] + 0
-      minor = parts[2] + 0
-      if (major > 1 || (major == 1 && minor >= 77)) {
-        exit 0
-      }
-      exit 1
-    }
-  '
-}
-
-user_rust_version_ok() {
-  sudo -u "${PI_USER}" -H env \
-    HOME="${PI_HOME}" \
-    CARGO_HOME="${PI_HOME}/.cargo" \
-    RUSTUP_HOME="${PI_HOME}/.rustup" \
-    PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}" \
-    sh -c '
-      . "$HOME/.cargo/env" 2>/dev/null || true
-      command -v rustc >/dev/null 2>&1 || exit 1
-      rustc --version | awk "
-        {
-          split(\$2, parts, \".\")
-          major = parts[1] + 0
-          minor = parts[2] + 0
-          if (major > 1 || (major == 1 && minor >= 77)) {
-            exit 0
-          }
-          exit 1
-        }
-      "
-    '
-}
-
-ensure_rust_runtime() {
-  local cargo_bin="${PI_HOME}/.cargo/bin/cargo"
-  local rustc_bin="${PI_HOME}/.cargo/bin/rustc"
-  local system_rustc=""
-  local rust_version=""
-
-  system_rustc="$(command -v rustc || true)"
-  if [ -n "${system_rustc}" ] && rust_version_ok "${system_rustc}"; then
-    BUILD_PATH="$(dirname "${system_rustc}"):${BUILD_PATH}"
-    log_info "treed-shell-install: using system rustc $(${system_rustc} --version)"
-    return 0
-  fi
-
-  if ! user_rust_version_ok; then
-    log_info "treed-shell-install: installing Rust toolchain via rustup for ${PI_USER}"
-    sudo -u "${PI_USER}" -H env \
-      HOME="${PI_HOME}" \
-      CARGO_HOME="${PI_HOME}/.cargo" \
-      RUSTUP_HOME="${PI_HOME}/.rustup" \
-      PATH="${BUILD_PATH}" \
-      sh -c \
-      'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable'
-  fi
-
-  if ! user_rust_version_ok; then
-    log_error "treed-shell-install: Rust toolchain is missing or too old after install"
-    ls -la "${PI_HOME}/.cargo/bin" 2>/dev/null || true
-    exit 1
-  fi
-
-  BUILD_PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}"
-  rust_version="$(
-    sudo -u "${PI_USER}" -H env \
-      HOME="${PI_HOME}" \
-      CARGO_HOME="${PI_HOME}/.cargo" \
-      RUSTUP_HOME="${PI_HOME}/.rustup" \
-      PATH="${PI_HOME}/.cargo/bin:${BUILD_PATH}" \
-      sh -c '. "$HOME/.cargo/env" 2>/dev/null || true; rustc --version'
-  )"
-  log_info "treed-shell-install: using ${rust_version}"
-}
-
-ensure_build_dependencies() {
-  install_missing_packages \
-    git curl ca-certificates xz-utils xinit dbus-x11 build-essential wget file \
-    libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libssl-dev \
-    libayatana-appindicator3-dev librsvg2-dev patchelf
-
-  ensure_node_runtime
-  ensure_rust_runtime
-}
-
-# Блок 4: Checkout ветки on-print в управляемый каталог.
-assert_managed_home_path() {
-  case "${SHELL_HOME}" in
-    "${PI_HOME}/treed/"*)
-      ;;
-    *)
-      log_error "treed-shell-install: TREED_SHELL_HOME must be inside ${PI_HOME}/treed, got ${SHELL_HOME}"
-      exit 1
-      ;;
-  esac
-}
-
-checkout_treed_shell_ref() {
-  local target_commit=""
-
-  assert_managed_home_path
-  ensure_dir "$(dirname "${SHELL_HOME}")"
-  chown "${PI_USER}:${PI_GROUP}" "$(dirname "${SHELL_HOME}")"
-
-  if [ -e "${SHELL_HOME}" ] && [ ! -d "${SHELL_HOME}/.git" ]; then
-    log_warn "treed-shell-install: removing non-git managed path ${SHELL_HOME}"
-    rm -rf "${SHELL_HOME}"
-  fi
-
-  if [ ! -d "${SHELL_HOME}/.git" ]; then
-    sudo -u "${PI_USER}" -H git clone "${SHELL_REPO_URL}" "${SHELL_HOME}"
-  else
-    sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" remote set-url origin "${SHELL_REPO_URL}" >/dev/null
-  fi
-
-  sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" fetch --tags --prune origin
-
-  target_commit="$(sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" rev-parse --verify "origin/${SHELL_REPO_REF}^{commit}" 2>/dev/null || true)"
-  if [ -z "${target_commit}" ]; then
-    target_commit="$(sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" rev-parse --verify "${SHELL_REPO_REF}^{commit}" 2>/dev/null || true)"
-  fi
-  if [ -z "${target_commit}" ]; then
-    log_error "treed-shell-install: failed to resolve TreeD Shell ref ${SHELL_REPO_REF}"
-    exit 1
-  fi
-
-  sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" checkout -B "${SHELL_PRIMARY_BRANCH}" "${target_commit}"
-  sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" reset --hard "${target_commit}" >/dev/null
-  if sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" rev-parse --verify "origin/${SHELL_PRIMARY_BRANCH}^{commit}" >/dev/null 2>&1; then
-    sudo -u "${PI_USER}" -H git -C "${SHELL_HOME}" branch --set-upstream-to="origin/${SHELL_PRIMARY_BRANCH}" "${SHELL_PRIMARY_BRANCH}" >/dev/null 2>&1 || true
-  fi
-
-  SHELL_TARGET_COMMIT="${target_commit}"
-  chown -R "${PI_USER}:${PI_GROUP}" "${SHELL_HOME}"
-  log_info "treed-shell-install: checkout ${SHELL_REPO_REF} (${SHELL_TARGET_COMMIT})"
-}
-
-# Блок 5: Сборка printer-профиля Tauri и публикация runtime binary.
-treed_shell_needs_build() {
-  if [ "${TREED_FORCE_SHELL_BUILD:-0}" = "1" ]; then
-    return 0
-  fi
-  if [ ! -x "${SHELL_RUNTIME_BIN}" ]; then
-    return 0
-  fi
-  if [ ! -f "${SHELL_BUILD_MARKER}" ]; then
-    return 0
-  fi
-  if grep -q "^commit=${SHELL_TARGET_COMMIT}$" "${SHELL_BUILD_MARKER}"; then
-    return 1
-  fi
-  return 0
-}
-
-find_treed_shell_release_binary() {
-  local release_dir="${SHELL_HOME}/src-tauri/target/release"
+resolve_browser_bin() {
   local candidate=""
 
-  for candidate in \
-    "${release_dir}/app" \
-    "${release_dir}/treed-shell"
-  do
-    if [ -f "${candidate}" ] && [ -x "${candidate}" ]; then
-      printf '%s\n' "${candidate}"
+  if [ -n "${SHELL_BROWSER_BIN}" ] && [ -x "${SHELL_BROWSER_BIN}" ]; then
+    printf '%s\n' "${SHELL_BROWSER_BIN}"
+    return 0
+  fi
+
+  for candidate in chromium chromium-browser; do
+    if command -v "${candidate}" >/dev/null 2>&1; then
+      command -v "${candidate}"
       return 0
     fi
   done
 
-  find "${release_dir}" \
-    -maxdepth 1 \
-    -type f \
-    -perm -111 \
-    ! -name "*.so" \
-    ! -name "*.d" \
-    -print \
-    2>/dev/null | head -n 1
+  return 1
 }
 
-build_treed_shell() {
-  local release_bin=""
-
-  if ! treed_shell_needs_build; then
-    log_info "treed-shell-install: runtime binary already matches checkout"
+ensure_browser_runtime() {
+  if BROWSER_BIN="$(resolve_browser_bin)"; then
+    log_info "treed-shell-install: using browser ${BROWSER_BIN}"
     return 0
   fi
 
-  ensure_build_dependencies
+  apt_update_noninteractive
+  if apt_get_noninteractive install chromium; then
+    BROWSER_BIN="$(resolve_browser_bin)"
+    log_info "treed-shell-install: installed browser ${BROWSER_BIN}"
+    return 0
+  fi
 
-  log_info "treed-shell-install: installing npm dependencies"
-  sudo -u "${PI_USER}" -H env PATH="${BUILD_PATH}" npm ci --no-audit --no-fund --prefix "${SHELL_HOME}"
+  log_warn "treed-shell-install: package chromium unavailable, trying chromium-browser"
+  apt_get_noninteractive install chromium-browser
+  BROWSER_BIN="$(resolve_browser_bin)"
+  log_info "treed-shell-install: installed browser ${BROWSER_BIN}"
+}
 
-  log_info "treed-shell-install: building printer Tauri profile"
-  sudo -u "${PI_USER}" -H env PATH="${BUILD_PATH}" sh -c \
-    "cd '${SHELL_HOME}' && npm run tauri:build:printer"
+# Блок 4: Release artifact download/extract.
+assert_runtime_path() {
+  case "${SHELL_RUNTIME_DIR}" in
+    "${PI_HOME}/treed/"*)
+      ;;
+    *)
+      log_error "treed-shell-install: TREED_SHELL_RUNTIME_DIR must be inside ${PI_HOME}/treed, got ${SHELL_RUNTIME_DIR}"
+      exit 1
+      ;;
+  esac
 
-  release_bin="$(find_treed_shell_release_binary | tr -d '\r\n')"
-  if [ -z "${release_bin}" ] || [ ! -x "${release_bin}" ]; then
-    log_error "treed-shell-install: release binary not found after build"
+  case "${SHELL_WEB_DIR}" in
+    "${SHELL_RUNTIME_DIR}/"*)
+      ;;
+    *)
+      log_error "treed-shell-install: TREED_SHELL_WEB_DIR must be inside ${SHELL_RUNTIME_DIR}, got ${SHELL_WEB_DIR}"
+      exit 1
+      ;;
+  esac
+}
+
+resolve_ui_archive_url() {
+  if [ -n "${SHELL_UI_ARCHIVE_URL}" ]; then
+    printf '%s\n' "${SHELL_UI_ARCHIVE_URL}"
+    return 0
+  fi
+
+  python3 - "${SHELL_RELEASE_API_URL}" "${SHELL_RELEASE_TAG_PREFIX}" "${SHELL_UI_ASSET_NAME}" <<'PY'
+import json
+import sys
+import urllib.request
+
+api_url, tag_prefix, asset_name = sys.argv[1:4]
+request = urllib.request.Request(
+    api_url,
+    headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "treed-mainshellOS-loader",
+    },
+)
+
+with urllib.request.urlopen(request, timeout=30) as response:
+    releases = json.load(response)
+
+for release in releases:
+    if release.get("draft") or release.get("prerelease"):
+        continue
+
+    tag_name = str(release.get("tag_name") or "")
+    if tag_prefix and not tag_name.startswith(tag_prefix):
+        continue
+
+    for asset in release.get("assets") or []:
+        if asset.get("name") == asset_name and asset.get("browser_download_url"):
+            print(asset["browser_download_url"])
+            raise SystemExit(0)
+
+raise SystemExit(f"no release asset {asset_name!r} found for tag prefix {tag_prefix!r}")
+PY
+}
+
+download_ui_archive() {
+  local archive_url=""
+  local tmp_archive=""
+
+  assert_runtime_path
+  ensure_dir "${SHELL_RUNTIME_DIR}"
+  chown "${PI_USER}:${PI_GROUP}" "${SHELL_RUNTIME_DIR}"
+
+  archive_url="$(resolve_ui_archive_url)"
+  tmp_archive="$(mktemp "${SHELL_RUNTIME_DIR}/treed-shell-ui.XXXXXX.zip")"
+
+  log_info "treed-shell-install: downloading ${SHELL_UI_ASSET_NAME}"
+  curl -fL --connect-timeout 20 --retry 3 --retry-delay 2 -o "${tmp_archive}" "${archive_url}"
+
+  if [ ! -s "${tmp_archive}" ]; then
+    rm -f "${tmp_archive}"
+    log_error "treed-shell-install: downloaded archive is empty"
     exit 1
   fi
 
-  ensure_dir "${SHELL_RUNTIME_DIR}"
-  install -m 0755 "${release_bin}" "${SHELL_RUNTIME_BIN}"
-  cat > "${SHELL_BUILD_MARKER}" <<EOF
-commit=${SHELL_TARGET_COMMIT}
-ref=${SHELL_REPO_REF}
-branch=${SHELL_PRIMARY_BRANCH}
-repo=${SHELL_REPO_URL}
-EOF
-  chown -R "${PI_USER}:${PI_GROUP}" "${SHELL_RUNTIME_DIR}"
-  log_info "treed-shell-install: published runtime binary ${SHELL_RUNTIME_BIN}"
+  mv "${tmp_archive}" "${SHELL_ARCHIVE_PATH}"
+  chown "${PI_USER}:${PI_GROUP}" "${SHELL_ARCHIVE_PATH}"
 }
 
-# Блок 6: Systemd unit и операторская команда переключения.
+install_ui_archive() {
+  local staged_dir="${SHELL_WEB_DIR}.new"
+
+  rm -rf "${staged_dir}"
+  mkdir -p "${staged_dir}"
+
+  if ! python3 -m zipfile -t "${SHELL_ARCHIVE_PATH}" >/dev/null; then
+    rm -rf "${staged_dir}"
+    log_error "treed-shell-install: invalid UI archive ${SHELL_ARCHIVE_PATH}"
+    exit 1
+  fi
+
+  python3 -m zipfile -e "${SHELL_ARCHIVE_PATH}" "${staged_dir}"
+
+  if [ ! -f "${staged_dir}/index.html" ]; then
+    rm -rf "${staged_dir}"
+    log_error "treed-shell-install: index.html missing in UI archive"
+    exit 1
+  fi
+
+  if [ ! -f "${staged_dir}/treed-shell-ui-manifest.json" ]; then
+    rm -rf "${staged_dir}"
+    log_error "treed-shell-install: treed-shell-ui-manifest.json missing in UI archive"
+    exit 1
+  fi
+
+  rm -rf "${SHELL_WEB_DIR}"
+  mv "${staged_dir}" "${SHELL_WEB_DIR}"
+  chown -R "${PI_USER}:${PI_GROUP}" "${SHELL_WEB_DIR}"
+  log_info "treed-shell-install: published UI bundle ${SHELL_WEB_DIR}"
+}
+
+# Блок 5: Kiosk launcher, systemd unit и операторская команда переключения.
 deploy_treed_ui_command() {
   local src="${REPO_DIR}/runtime-scripts/treed-ui/treed-ui"
 
@@ -372,6 +247,59 @@ deploy_treed_ui_command() {
   log_info "treed-shell-install: deployed /usr/local/sbin/treed-ui"
 }
 
+write_kiosk_launcher() {
+  local url="http://127.0.0.1:${SHELL_HTTP_PORT}/"
+
+  cat > "${SHELL_RUNTIME_SCRIPT}" <<EOF
+#!/bin/sh
+set -eu
+
+UI_DIR="${SHELL_WEB_DIR}"
+PORT="${SHELL_HTTP_PORT}"
+BROWSER="${BROWSER_BIN}"
+PROFILE_DIR="${SHELL_RUNTIME_DIR}/chromium-profile"
+URL="${url}"
+
+mkdir -p "\${PROFILE_DIR}"
+cd "\${UI_DIR}"
+
+python3 -m http.server "\${PORT}" --bind 127.0.0.1 >/tmp/treed-shell-http.log 2>&1 &
+server_pid=\$!
+
+cleanup() {
+  kill "\${server_pid}" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+i=0
+while [ "\${i}" -lt 30 ]; do
+  if curl -fsS "\${URL}index.html" >/dev/null 2>&1; then
+    break
+  fi
+  i=\$((i + 1))
+  sleep 1
+done
+
+if [ "\${i}" -ge 30 ]; then
+  echo "treed-shell kiosk: local UI server did not become ready" >&2
+  exit 1
+fi
+
+"\${BROWSER}" \\
+  --kiosk \\
+  --no-first-run \\
+  --disable-infobars \\
+  --disable-session-crashed-bubble \\
+  --disable-dev-shm-usage \\
+  --user-data-dir="\${PROFILE_DIR}" \\
+  "\${URL}"
+EOF
+
+  chmod 0755 "${SHELL_RUNTIME_SCRIPT}"
+  chown "${PI_USER}:${PI_GROUP}" "${SHELL_RUNTIME_SCRIPT}"
+  log_info "treed-shell-install: wrote ${SHELL_RUNTIME_SCRIPT}"
+}
+
 write_treed_shell_unit() {
   cat > /etc/systemd/system/treed-shell.service <<EOF
 [Unit]
@@ -383,11 +311,12 @@ Conflicts=KlipperScreen.service
 [Service]
 Type=simple
 User=${PI_USER}
-WorkingDirectory=${SHELL_HOME}
+WorkingDirectory=${SHELL_WEB_DIR}
 Environment=HOME=${PI_HOME}
-Environment=WEBKIT_DISABLE_COMPOSITING_MODE=1
+Environment=TREED_SHELL_WEB_DIR=${SHELL_WEB_DIR}
+Environment=TREED_SHELL_HTTP_PORT=${SHELL_HTTP_PORT}
 ExecStartPre=/bin/sh -lc 'plymouth quit --retain-splash || true'
-ExecStart=/usr/bin/dbus-run-session -- /usr/bin/xinit ${SHELL_RUNTIME_BIN} -- :0 -nolisten tcp
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/xinit ${SHELL_RUNTIME_SCRIPT} -- :0 -nolisten tcp
 Restart=always
 RestartSec=2
 
@@ -451,12 +380,14 @@ apply_selected_ui_mode() {
   esac
 }
 
-# Блок 7: Основной сценарий установки.
-install_missing_packages git curl ca-certificates xinit dbus-x11
+# Блок 6: Основной сценарий установки.
+install_missing_packages curl ca-certificates python3 xinit dbus-x11
+ensure_browser_runtime
 deploy_treed_ui_command
-checkout_treed_shell_ref
-build_treed_shell
+download_ui_archive
+install_ui_archive
+write_kiosk_launcher
 write_treed_shell_unit
 apply_selected_ui_mode
 
-log_info "treed-shell-install: OK (ui=${UI_MODE}, ref=${SHELL_REPO_REF})"
+log_info "treed-shell-install: OK (ui=${UI_MODE}, asset=${SHELL_UI_ASSET_NAME}, port=${SHELL_HTTP_PORT})"

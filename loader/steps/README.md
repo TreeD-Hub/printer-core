@@ -30,7 +30,7 @@
 | 22 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
 | 23 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
 | 24 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
-| 25 | `treed-shell-install.sh` | required | Деплой TreeD Shell (`on-print`) и команды переключения TS/KS. |
+| 25 | `treed-shell-install.sh` | required | Деплой TreeD Shell из `treed-shell-ui.zip` и команды переключения TS/KS. |
 | 26 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
 | 27 | `verify.sh` | required | Финальная валидация V2-контура (boot/service/http/CAN/camera), без проверки runtime-конфигов. |
 
@@ -159,19 +159,20 @@
 - `TREED_UI_MODE` (`ts|ks`, default `ts`; при наличии `/etc/default/treed-ui` bootstrap берет режим оттуда)
 - `TREED_UI_ENV_FILE` (default `/etc/default/treed-ui`)
 - `TREED_SHELL_INSTALL` (`0|1`, default `1`)
-- `TREED_SHELL_REPO` (default `https://github.com/Yawllen/treed-shell.git`)
-- `TREED_SHELL_PRIMARY_BRANCH` (default `on-print`)
-- `TREED_SHELL_REF` (default `on-print`)
-- `TREED_SHELL_HOME` (default `${PI_HOME}/treed/treed-shell`)
+- `TREED_SHELL_RELEASE_API_URL` (default `https://api.github.com/repos/TreeD-Hub/treed-shell/releases`)
+- `TREED_SHELL_RELEASE_TAG_PREFIX` (default `ui-main-`)
+- `TREED_SHELL_UI_ASSET_NAME` (default `treed-shell-ui.zip`)
+- `TREED_SHELL_UI_ARCHIVE_URL` (optional direct archive URL)
 - `TREED_SHELL_RUNTIME_DIR` (default `${PI_HOME}/treed/treed-shell-runtime`)
-- `TREED_SHELL_NODE_VERSION` (default `20.19.0`)
+- `TREED_SHELL_WEB_DIR` (default `${TREED_SHELL_RUNTIME_DIR}/ui`)
+- `TREED_SHELL_HTTP_PORT` (default `8787`)
+- `TREED_SHELL_BROWSER_BIN` (optional browser binary override)
 - `TREED_SHELL_START_TIMEOUT` (default `45`)
-- `TREED_FORCE_SHELL_BUILD` (`1` — принудительная пересборка TreeD Shell)
 
 `treed-shell-install.sh`:
-- держит checkout TreeD Shell на ветке/ref `on-print`;
-- собирает `npm run tauri:build:printer`;
-- публикует runtime binary в `${TREED_SHELL_RUNTIME_DIR}/treed-shell`;
+- скачивает release asset `treed-shell-ui.zip`;
+- проверяет и распаковывает UI bundle в `${TREED_SHELL_WEB_DIR}`;
+- пишет kiosk launcher в `${TREED_SHELL_RUNTIME_DIR}/start-treed-shell-kiosk.sh`;
 - создает `treed-shell.service`;
 - ставит команду `/usr/local/sbin/treed-ui` и symlink `/usr/local/bin/treed-ui`.
 
@@ -228,8 +229,9 @@ treed-ui status
   - `clean`: `KlipperScreen.conf` без `.bak`.
   - `preserve`: `backup_file_once` перед изменением.
 - `treed-shell-install.sh`
-  - managed checkout находится в `${TREED_SHELL_HOME:-${PI_HOME}/treed/treed-shell}`;
-  - runtime binary находится в `${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}/treed-shell`;
+  - release asset берется из `${TREED_SHELL_UI_ARCHIVE_URL}` или из GitHub Releases API `${TREED_SHELL_RELEASE_API_URL}`;
+  - распакованный UI находится в `${TREED_SHELL_WEB_DIR:-${TREED_SHELL_RUNTIME_DIR}/ui}`;
+  - kiosk launcher находится в `${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}/start-treed-shell-kiosk.sh`;
   - выбранный UI хранится в `${TREED_UI_ENV_FILE:-/etc/default/treed-ui}`;
   - при `TREED_UI_MODE=ts` активируется `treed-shell.service`, а `KlipperScreen.service` отключается;
   - при `TREED_UI_MODE=ks` активируется `KlipperScreen.service`, а `treed-shell.service` отключается.
