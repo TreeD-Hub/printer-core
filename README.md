@@ -22,6 +22,11 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v
 
 Loader сам определяет `fresh|update|recover`, выбирает `clean|preserve` и ребутает только после `fresh`.
 
+## Вариации UI
+
+sudo treed-ui ks
+sudo treed-ui status
+
 ## Вариации работы перед печатью
 
 Стартовый G-code слайсера должен вызывать `START_PRINT` и передавать температуры первого слоя:
