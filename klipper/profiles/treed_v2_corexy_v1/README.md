@@ -24,8 +24,10 @@
 15. `local_overrides.cfg`
 
 `macros.cfg` дополнительно подключает:
+- `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
 - `macros_input_shaper.cfg` перед `macros_print_flow.cfg`, чтобы `START_PRINT` мог вызвать TreeD-калибровку input shaper;
-- `macros_ui_tune.cfg` как публичный runtime tune контракт для TreeD Shell.
+- `macros_ui_tune.cfg` как публичный runtime tune контракт для TreeD Shell;
+- `macros_ui_motion.cfg` как safety-boundary для относительного перемещения осей из TreeD Shell.
 
 `macros_core.cfg` также объявляет capability state macro для системных действий UI:
 - `_TREED_SYSTEM_POWER.enabled = 1` — runtime разрешает UI показывать reboot/shutdown host;
