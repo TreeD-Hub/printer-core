@@ -79,6 +79,23 @@ install_missing_packages() {
   apt_get_noninteractive install "${missing[@]}"
 }
 
+install_optional_unclutter() {
+  if package_installed unclutter; then
+    return 0
+  fi
+
+  if ! apt_update_noninteractive; then
+    log_warn "treed-shell-install: optional package update failed, continuing"
+    return 0
+  fi
+
+  if apt_get_noninteractive install unclutter; then
+    log_info "treed-shell-install: installed optional package unclutter"
+  else
+    log_warn "treed-shell-install: optional package unclutter unavailable, continuing"
+  fi
+}
+
 resolve_browser_bin() {
   local candidate=""
 
@@ -259,6 +276,19 @@ PORT="${SHELL_HTTP_PORT}"
 BROWSER="${BROWSER_BIN}"
 PROFILE_DIR="${SHELL_RUNTIME_DIR}/chromium-profile"
 URL="${url}"
+CHROMIUM_RENDERING="\${TREED_SHELL_CHROMIUM_RENDERING:-hardware}"
+CHROMIUM_FLAGS="--kiosk"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --no-first-run"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-background-networking"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-component-update"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-default-apps"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-features=Translate,MediaRouter"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-infobars"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-session-crashed-bubble"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-dev-shm-usage"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-sync"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --noerrdialogs"
+unclutter_pid=""
 
 mkdir -p "\${PROFILE_DIR}"
 cd "\${UI_DIR}"
@@ -268,8 +298,16 @@ server_pid=\$!
 
 cleanup() {
   kill "\${server_pid}" 2>/dev/null || true
+  if [ -n "\${unclutter_pid}" ]; then
+    kill "\${unclutter_pid}" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT INT TERM
+
+if command -v unclutter >/dev/null 2>&1; then
+  unclutter -idle 0.1 -root >/tmp/treed-shell-unclutter.log 2>&1 &
+  unclutter_pid=\$!
+fi
 
 i=0
 while [ "\${i}" -lt 30 ]; do
@@ -285,12 +323,18 @@ if [ "\${i}" -ge 30 ]; then
   exit 1
 fi
 
-"\${BROWSER}" \\
-  --kiosk \\
-  --no-first-run \\
-  --disable-infobars \\
-  --disable-session-crashed-bubble \\
-  --disable-dev-shm-usage \\
+case "\${CHROMIUM_RENDERING}" in
+  software)
+    CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-gpu --disable-gpu-compositing --enable-unsafe-swiftshader"
+    ;;
+  hardware|"")
+    ;;
+  *)
+    echo "treed-shell kiosk: unsupported TREED_SHELL_CHROMIUM_RENDERING=\${CHROMIUM_RENDERING}, using hardware" >&2
+    ;;
+esac
+
+"\${BROWSER}" \${CHROMIUM_FLAGS} \\
   --user-data-dir="\${PROFILE_DIR}" \\
   "\${URL}"
 EOF
@@ -315,6 +359,8 @@ WorkingDirectory=${SHELL_WEB_DIR}
 Environment=HOME=${PI_HOME}
 Environment=TREED_SHELL_WEB_DIR=${SHELL_WEB_DIR}
 Environment=TREED_SHELL_HTTP_PORT=${SHELL_HTTP_PORT}
+Environment=TREED_SHELL_CHROMIUM_RENDERING=hardware
+EnvironmentFile=-/etc/default/treed-shell
 ExecStartPre=/bin/sh -lc 'plymouth quit --retain-splash || true'
 ExecStart=/usr/bin/dbus-run-session -- /usr/bin/xinit ${SHELL_RUNTIME_SCRIPT} -- :0 -nolisten tcp
 Restart=always
@@ -382,6 +428,7 @@ apply_selected_ui_mode() {
 
 # Блок 6: Основной сценарий установки.
 install_missing_packages curl ca-certificates python3 xinit dbus-x11
+install_optional_unclutter
 ensure_browser_runtime
 deploy_treed_ui_command
 download_ui_archive

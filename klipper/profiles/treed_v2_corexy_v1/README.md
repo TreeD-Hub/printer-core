@@ -35,6 +35,8 @@
 
 Контракт UI live-тюнинга описан в `ui-runtime-tune-contract.md`: публичные `TREED_UI_*` команды, диапазоны, ошибки и Moonraker state surface.
 
+Методичка по ручному и UI-использованию макросов профиля: `macros-usage.md`.
+
 ## Контракт loader
 
 Текущий install pipeline:

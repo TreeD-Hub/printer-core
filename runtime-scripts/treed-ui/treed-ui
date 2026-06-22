@@ -116,6 +116,7 @@ switch_to_treed_shell() {
   if systemctl cat KlipperScreen.service >/dev/null 2>&1; then
     systemctl disable --now KlipperScreen.service >/dev/null 2>&1 || true
   fi
+  systemctl reset-failed KlipperScreen.service >/dev/null 2>&1 || true
   systemctl enable --now treed-shell.service
   persist_mode "ts"
   log_info "active UI: treed-shell"
