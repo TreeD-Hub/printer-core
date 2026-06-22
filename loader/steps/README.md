@@ -168,6 +168,9 @@
 - `TREED_SHELL_HTTP_PORT` (default `8787`)
 - `TREED_SHELL_BROWSER_BIN` (optional browser binary override)
 - `TREED_SHELL_CHROMIUM_RENDERING` (`hardware|software`, default `hardware`; `software` добавляет Chromium flags `--disable-gpu`, `--disable-gpu-compositing`, `--enable-unsafe-swiftshader`)
+- `TREED_SHELL_WINDOW_SIZE` (default `960,544`)
+- `TREED_SHELL_WINDOW_POSITION` (default `0,0`)
+- `TREED_SHELL_DEVICE_SCALE_FACTOR` (default `1`)
 - `TREED_SHELL_START_TIMEOUT` (default `45`)
 
 `treed-shell-install.sh`:
@@ -233,7 +236,7 @@ treed-ui status
   - release asset берется из `${TREED_SHELL_UI_ARCHIVE_URL}` или из GitHub Releases API `${TREED_SHELL_RELEASE_API_URL}`;
   - распакованный UI находится в `${TREED_SHELL_WEB_DIR:-${TREED_SHELL_RUNTIME_DIR}/ui}`;
   - kiosk launcher находится в `${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}/start-treed-shell-kiosk.sh`;
-  - kiosk launcher best-effort запускает `unclutter`, если пакет доступен, и читает runtime override из `/etc/default/treed-shell`;
+  - kiosk launcher best-effort задает blank cursor через `xsetroot`, запускает `unclutter`, если пакет доступен, и читает runtime override из `/etc/default/treed-shell`;
   - выбранный UI хранится в `${TREED_UI_ENV_FILE:-/etc/default/treed-ui}`;
   - при `TREED_UI_MODE=ts` активируется `treed-shell.service`, а `KlipperScreen.service` отключается;
   - при `TREED_UI_MODE=ks` активируется `KlipperScreen.service`, а `treed-shell.service` отключается.

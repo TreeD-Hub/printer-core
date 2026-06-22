@@ -119,6 +119,9 @@
 - `TREED_SHELL_HTTP_PORT` — default `8787`, порт локального static server.
 - `TREED_SHELL_BROWSER_BIN` — optional browser binary override.
 - `TREED_SHELL_CHROMIUM_RENDERING` — `hardware|software`, default `hardware`; `software` добавляет Chromium flags `--disable-gpu`, `--disable-gpu-compositing`, `--enable-unsafe-swiftshader`. Runtime override можно положить в `/etc/default/treed-shell`.
+- `TREED_SHELL_WINDOW_SIZE` — default `960,544`, Chromium kiosk window size для 5-дюймового экрана.
+- `TREED_SHELL_WINDOW_POSITION` — default `0,0`, Chromium kiosk window position.
+- `TREED_SHELL_DEVICE_SCALE_FACTOR` — default `1`, Chromium device scale factor для 1:1 CSS/device pixels.
 - `TREED_SHELL_START_TIMEOUT` — default `45`, ожидание активного `treed-shell.service`.
 - `TREED_KLIPPER_START_REQUIRE_ACTIVE` — `0|1`, default `1`; при `1` `maintenance-start` блокирует loader, если `klipper.service` не стал active в таймаут.
 - `TREED_REQUIRE_KLIPPER_READY` — `0|1`, default `0`; управляет тем, будет ли `Klippy state!=ready` блокировать `verify`.

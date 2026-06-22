@@ -277,12 +277,21 @@ BROWSER="${BROWSER_BIN}"
 PROFILE_DIR="${SHELL_RUNTIME_DIR}/chromium-profile"
 URL="${url}"
 CHROMIUM_RENDERING="\${TREED_SHELL_CHROMIUM_RENDERING:-hardware}"
+WINDOW_SIZE="\${TREED_SHELL_WINDOW_SIZE:-960,544}"
+WINDOW_POSITION="\${TREED_SHELL_WINDOW_POSITION:-0,0}"
+DEVICE_SCALE_FACTOR="\${TREED_SHELL_DEVICE_SCALE_FACTOR:-1}"
+EMPTY_CURSOR="\${PROFILE_DIR}/empty-cursor.xbm"
+BROWSER_DIR="\$(dirname "\${BROWSER}")"
 CHROMIUM_FLAGS="--kiosk"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --no-first-run"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-background-networking"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-component-update"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-default-apps"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-features=Translate,MediaRouter"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --touch-events=enabled"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-pinch"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --overscroll-history-navigation=0"
+CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --hide-scrollbars"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-infobars"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-session-crashed-bubble"
 CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --disable-dev-shm-usage"
@@ -291,6 +300,16 @@ CHROMIUM_FLAGS="\${CHROMIUM_FLAGS} --noerrdialogs"
 unclutter_pid=""
 
 mkdir -p "\${PROFILE_DIR}"
+
+if [ -f "\${BROWSER_DIR}/libFLAC.so.8" ] || [ -d "\${BROWSER_DIR}/lib" ]; then
+  if [ -n "\${LD_LIBRARY_PATH:-}" ]; then
+    LD_LIBRARY_PATH="\${BROWSER_DIR}:\${BROWSER_DIR}/lib:\${LD_LIBRARY_PATH}"
+  else
+    LD_LIBRARY_PATH="\${BROWSER_DIR}:\${BROWSER_DIR}/lib"
+  fi
+  export LD_LIBRARY_PATH
+fi
+
 cd "\${UI_DIR}"
 
 python3 -m http.server "\${PORT}" --bind 127.0.0.1 >/tmp/treed-shell-http.log 2>&1 &
@@ -303,6 +322,25 @@ cleanup() {
   fi
 }
 trap cleanup EXIT INT TERM
+
+cat > "\${EMPTY_CURSOR}" <<'CURSOR_EOF'
+#define empty_cursor_width 16
+#define empty_cursor_height 16
+static unsigned char empty_cursor_bits[] = {
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00
+};
+CURSOR_EOF
+
+if command -v xsetroot >/dev/null 2>&1; then
+  xsetroot -cursor "\${EMPTY_CURSOR}" "\${EMPTY_CURSOR}" >/tmp/treed-shell-xsetroot.log 2>&1 || true
+fi
 
 if command -v unclutter >/dev/null 2>&1; then
   unclutter -idle 0.1 -root >/tmp/treed-shell-unclutter.log 2>&1 &
@@ -335,6 +373,9 @@ case "\${CHROMIUM_RENDERING}" in
 esac
 
 "\${BROWSER}" \${CHROMIUM_FLAGS} \\
+  --window-size="\${WINDOW_SIZE}" \\
+  --window-position="\${WINDOW_POSITION}" \\
+  --force-device-scale-factor="\${DEVICE_SCALE_FACTOR}" \\
   --user-data-dir="\${PROFILE_DIR}" \\
   "\${URL}"
 EOF
