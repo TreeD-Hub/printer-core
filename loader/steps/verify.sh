@@ -361,10 +361,7 @@ klipper_can_mcus_connected_check() {
     return 0
   fi
 
-  expected_mcus=("mcu" "mcu EBBCan")
-  if [ "${TREED_EDDY_ENABLED:-1}" = "1" ]; then
-    expected_mcus+=("mcu eddy")
-  fi
+  expected_mcus=("mcu" "mcu EBBCan" "mcu eddy")
 
   list_tmp="$(mktemp "/tmp/treed_verify_mcu_objects_XXXXXX.json")"
   code=""
@@ -717,6 +714,17 @@ TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-${CAN_ENV_BITRATE:-1000000}}"
 TREED_CAN_TXQUEUE="${TREED_CAN_TXQUEUE:-${CAN_ENV_TXQUEUE:-1024}}"
 TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-${CAN_ENV_RESTART_MS:-100}}"
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
+case "${TREED_EDDY_ENABLED}" in
+  1) ;;
+  0)
+    failf "TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1"
+    TREED_EDDY_ENABLED="1"
+    ;;
+  *)
+    failf "TREED_EDDY_ENABLED is valid (0|1, current=${TREED_EDDY_ENABLED})"
+    TREED_EDDY_ENABLED="1"
+    ;;
+esac
 
 TREED_REQUIRE_KLIPPER_READY="${TREED_REQUIRE_KLIPPER_READY:-0}"
 case "${TREED_REQUIRE_KLIPPER_READY}" in

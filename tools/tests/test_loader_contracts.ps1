@@ -32,6 +32,35 @@ function Assert-NotContains {
   }
 }
 
+function Read-RepoFile {
+  param([string]$Path)
+
+  Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot $Path) -Raw
+}
+
+function Get-CfgValue {
+  param(
+    [string]$Path,
+    [string]$Key
+  )
+
+  $content = Read-RepoFile $Path
+  $match = [regex]::Match($content, "(?m)^\s*$([regex]::Escape($Key)):\s*([A-Za-z0-9_.:-]+)\s*$")
+  if (-not $match.Success) {
+    throw "FAIL: cannot read $Key from $Path"
+  }
+  $match.Groups[1].Value
+}
+
+$MainMcuProfileUuid = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg" "canbus_uuid"
+$MainMcuProfileIface = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg" "canbus_interface"
+$EbbProfileUuid = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/ebb42_can.cfg" "canbus_uuid"
+$EddyProfileUuid = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg" "canbus_uuid"
+$EddyProfileIface = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg" "canbus_interface"
+
+Assert-Contains ".github/workflows/contracts.yml" "tools/tests/\*\*" "GitHub Actions watches contract tests"
+Assert-Contains ".github/workflows/contracts.yml" "PowerShell contract tests" "GitHub Actions runs PowerShell contract tests"
+
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'TREED_CROWSNEST_REPO' "runtime-bootstrap exposes Crowsnest repo configuration"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'ensure_crowsnest_runtime' "runtime-bootstrap installs or updates Crowsnest runtime"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CROWSNEST_UNATTENDED=1' "Crowsnest install runs unattended"
@@ -95,11 +124,19 @@ Assert-Contains "loader/steps/check-env.sh" 'TREED_EDDY_ENABLED:-1' "check-env t
 Assert-Contains "loader/steps/check-env.sh" 'TREED_EDDY_CANBUS_UUID:-95485b93332a' "check-env defaults to the detected Eddy UUID"
 Assert-Contains "loader/steps/check-env.sh" 'TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965' "check-env defaults to the detected Octopus CAN UUID"
 Assert-Contains "loader/steps/check-env.sh" 'TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED:-0' "check-env defaults CAN UUID preflight to non-blocking"
+Assert-Contains "loader/steps/check-env.sh" "TREED_MAIN_MCU_PROFILE_UUID=`"${MainMcuProfileUuid}`"" "check-env locks main MCU UUID to active Klipper profile"
+Assert-Contains "loader/steps/check-env.sh" "TREED_EBB_PROFILE_UUID=`"${EbbProfileUuid}`"" "check-env locks EBB UUID to active Klipper profile"
+Assert-Contains "loader/steps/check-env.sh" "TREED_EDDY_PROFILE_UUID=`"${EddyProfileUuid}`"" "check-env locks Eddy UUID to active Klipper profile"
+Assert-Contains "loader/steps/check-env.sh" "TREED_CAN_PROFILE_IFACE=`"${MainMcuProfileIface}`"" "check-env locks CAN interface to active Klipper profile"
+Assert-Contains "loader/steps/check-env.sh" "TREED_EDDY_PROFILE_IFACE=`"${EddyProfileIface}`"" "check-env checks Eddy profile CAN interface"
+Assert-Contains "loader/steps/check-env.sh" 'profile_locked_value_check\(\)' "check-env rejects hardware env values that do not match static profile cfg"
+Assert-Contains "loader/steps/check-env.sh" 'TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1' "check-env rejects false Eddy optionality"
 Assert-NotContains "loader/loader.sh" "`"$RemovedProfileStep`"" "profile-mutating step removed from install pipeline"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CAN UUID readiness is diagnostic' "runtime preflight documents non-blocking CAN UUID readiness"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED' "runtime preflight exposes strict CAN UUID gate"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CAN UUID readiness check unavailable' "runtime preflight does not block when diagnostic query tooling is unavailable"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'CAN interface is missing .*non-blocking' "runtime preflight does not block on CAN interface in diagnostic mode"
+Assert-Contains "loader/steps/runtime-bootstrap.sh" 'TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1' "runtime preflight rejects false Eddy optionality"
 Assert-Contains "loader/steps/maintenance-start.sh" 'journalctl -u "\$\{unit\}" -n 120' "maintenance-start prints recent journal on required service start failure"
 Assert-Contains "loader/loader.sh" 'TREED_STATE_FILE="/run/treed-loader/state\.env"' "loader writes state snapshot to /run/treed-loader/state.env"
 Assert-Contains "loader/loader.sh" 'detect_device_state\(\)' "loader has device state detector"
@@ -162,6 +199,8 @@ Assert-Contains "loader/README.md" 'TREED_SHELL_DEVICE_SCALE_FACTOR' "loader doc
 Assert-NotContains "loader/steps/treed-shell-install.sh" 'npm ci' "TreeD Shell install does not install npm dependencies on the printer"
 Assert-NotContains "loader/steps/treed-shell-install.sh" 'tauri:build:printer' "TreeD Shell install does not build Tauri on the printer"
 Assert-Contains "loader/steps/firmware-build.sh" 'TREED_EDDY_ENABLED="\$\{TREED_EDDY_ENABLED:-1\}"' "firmware-build includes Eddy by default"
+Assert-Contains "loader/steps/firmware-build.sh" 'TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1' "firmware-build rejects false Eddy optionality"
+Assert-NotContains "loader/steps/firmware-build.sh" 'target=eddy_can status=skipped' "firmware-build never skips Eddy for the active Klipper profile"
 Assert-Contains "loader/steps/firmware-build.sh" 'firmware_inputs_current\(\)' "firmware-build checks input signature before rebuilding"
 Assert-Contains "loader/steps/firmware-build.sh" 'inputs.env' "firmware-build records input signature"
 Assert-Contains "loader/steps/firmware-build.sh" 'firmware-build: existing artifacts match current inputs, skipping rebuild' "firmware-build skips rebuild when artifacts are current"

@@ -59,6 +59,18 @@ CROWSNEST_RECREATE="${TREED_CROWSNEST_RECREATE:-0}"
 CROWSNEST_UPDATE="${TREED_CROWSNEST_UPDATE:-1}"
 TREED_CAMERA_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
 
+case "${TREED_EDDY_ENABLED}" in
+  1) ;;
+  0)
+    log_error "runtime-bootstrap: TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use a separate Klipper profile before disabling Eddy"
+    exit 1
+    ;;
+  *)
+    log_error "runtime-bootstrap: TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
+    exit 1
+    ;;
+esac
+
 case "${TREED_CAMERA_REQUIRED}" in
   0|1) ;;
   *)
@@ -297,6 +309,17 @@ case "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" in
     exit 1
     ;;
 esac
+case "${TREED_EDDY_ENABLED}" in
+  1) ;;
+  0)
+    log_error "TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use a separate Klipper profile before disabling Eddy"
+    exit 1
+    ;;
+  *)
+    log_error "TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
+    exit 1
+    ;;
+esac
 
 deadline=$((SECONDS + TREED_KLIPPER_PREFLIGHT_WAIT_SEC))
 
@@ -351,14 +374,11 @@ if [ -z "${TREED_EBB_CANBUS_UUID}" ]; then
   exit 1
 fi
 
-required_uuids=("${TREED_MAIN_MCU_CANBUS_UUID}" "${TREED_EBB_CANBUS_UUID}")
-if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
-  if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
-    log_error "TREED_EDDY_CANBUS_UUID is empty while TREED_EDDY_ENABLED=1"
-    exit 1
-  fi
-  required_uuids+=("${TREED_EDDY_CANBUS_UUID}")
+if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
+  log_error "TREED_EDDY_CANBUS_UUID is empty"
+  exit 1
 fi
+required_uuids=("${TREED_MAIN_MCU_CANBUS_UUID}" "${TREED_EBB_CANBUS_UUID}" "${TREED_EDDY_CANBUS_UUID}")
 
 PY_BIN="${KLIPPY_ENV_DIR}/bin/python"
 QUERY_SCRIPT="${KLIPPER_DIR}/scripts/canbus_query.py"

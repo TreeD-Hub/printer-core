@@ -37,7 +37,8 @@ if [ -z "${DEPLOY_HOME}" ] || [ ! -d "${DEPLOY_HOME}" ]; then
 fi
 
 # Блок 4: V2 defaults с сохранением внешних env override.
-# Все значения можно переопределить снаружи:
+# Hardware identity для активного профиля дальше сверяется с profile cfg в check-env.
+# Runtime-параметры можно переопределить снаружи:
 # sudo TREED_CAN_BITRATE=500000 bash install.sh
 
 : "${TREED_MAIN_MCU_CANBUS_UUID:=d372e54bf965}"

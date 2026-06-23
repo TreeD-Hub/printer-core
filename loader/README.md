@@ -59,12 +59,12 @@
 
 ## Ключевые переменные
 
-- `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, default `d372e54bf965`.
+- `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, должен совпадать с активным profile cfg `d372e54bf965`.
 - `TREED_LOADER_MODE` — `apply|check`, default `apply`; `check` только сверяет текущее runtime-состояние и не запускает step-скрипты.
 - `TREED_DEPLOY_MODE` — `auto|clean|preserve`, default `auto`; `auto` использует state snapshot, а не имя ветки.
 - `TREED_DEVICE_STATE` — `fresh|update|recover`; пишется loader в `/run/treed-loader/state.env`.
 - `TREED_STATE_FILE` — default `/run/treed-loader/state.env`.
-- `TREED_CAN_IFACE` — default `can0`.
+- `TREED_CAN_IFACE` — должен совпадать с активным profile cfg `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
 - `TREED_CAN_TXQUEUE` — default `1024`.
 - `TREED_CAN_RESTART_MS` — default `100` (применяется в `ip link ... restart-ms` при каждом старте `treed-can-setup.service`).
@@ -75,9 +75,9 @@
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания CAN-интерфейса перед стартом Klipper.
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` — default `1`; интервал повторной проверки preflight.
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` — `0|1`, default `0`; при `1` strict UUID-gate через `canbus_query.py`, при `0` query не запускается.
-- `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
-- `TREED_EDDY_ENABLED` — legacy `0|1`, default `1`; для активного Klipper-профиля должно оставаться `1`.
-- `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
+- `TREED_EBB_CANBUS_UUID` — EBB42 UUID, должен совпадать с активным profile cfg `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
+- `TREED_EDDY_ENABLED` — legacy-переменная; для активного Klipper-профиля поддерживается только `1`.
+- `TREED_EDDY_CANBUS_UUID` — Eddy UUID, должен совпадать с активным profile cfg `95485b93332a`.
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.
 - `TREED_FIRMWARE_BUILD_ENABLED` — `0|1`, default `1`.
 - `TREED_KLIPPER_SRC_DIR` — default `${PI_HOME}/klipper`.

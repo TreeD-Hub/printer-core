@@ -45,7 +45,11 @@ TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed
 TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
 
 case "${TREED_EDDY_ENABLED}" in
-  0|1) ;;
+  1) ;;
+  0)
+    log_error "firmware-build: TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use TREED_FIRMWARE_BUILD_ENABLED=0 to skip all firmware builds"
+    exit 1
+    ;;
   *)
     log_error "firmware-build: TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
     exit 1
@@ -72,16 +76,12 @@ if [ ! -f "${TREED_KLIPPER_SRC_DIR}/Makefile" ]; then
   exit 1
 fi
 
-for required_cfg in "${TREED_FW_MAIN_CONFIG}" "${TREED_FW_EBB_CONFIG}"; do
+for required_cfg in "${TREED_FW_MAIN_CONFIG}" "${TREED_FW_EBB_CONFIG}" "${TREED_FW_EDDY_CONFIG}"; do
   if [ ! -f "${required_cfg}" ]; then
     log_error "firmware-build: required target config not found: ${required_cfg}"
     exit 1
   fi
 done
-if [ "${TREED_EDDY_ENABLED}" = "1" ] && [ ! -f "${TREED_FW_EDDY_CONFIG}" ]; then
-  log_error "firmware-build: TREED_EDDY_ENABLED=1 but config is missing: ${TREED_FW_EDDY_CONFIG}"
-  exit 1
-fi
 
 for cmd in make sha256sum; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -112,10 +112,7 @@ fi
 
 FW_MAIN_SHA="$(firmware_config_sha "${TREED_FW_MAIN_CONFIG}")"
 FW_EBB_SHA="$(firmware_config_sha "${TREED_FW_EBB_CONFIG}")"
-FW_EDDY_SHA="disabled"
-if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
-  FW_EDDY_SHA="$(firmware_config_sha "${TREED_FW_EDDY_CONFIG}")"
-fi
+FW_EDDY_SHA="$(firmware_config_sha "${TREED_FW_EDDY_CONFIG}")"
 
 LATEST_LINK="${TREED_FIRMWARE_ARTIFACTS_DIR}/latest"
 
@@ -257,13 +254,8 @@ build_target() {
 build_target "main_octopus" "${TREED_FW_MAIN_CONFIG}" '^CONFIG_MACH_STM32F446=y$' "firmware-main-octopus.bin"
 build_target "ebb42_can" "${TREED_FW_EBB_CONFIG}" '^CONFIG_MACH_STM32G0B1=y$' "firmware-ebb42-can.bin"
 
-# Блок 6: Optional target Eddy.
-if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
-  build_target "eddy_can" "${TREED_FW_EDDY_CONFIG}" '^CONFIG_MACH_RP2040=y$' "firmware-eddy-can.uf2" "out/klipper.uf2"
-else
-  printf 'target=eddy_can status=skipped reason=TREED_EDDY_ENABLED=0\n' >> "${REPORT_FILE}"
-  log_info "firmware-build: target eddy_can skipped (TREED_EDDY_ENABLED=0)"
-fi
+# Блок 6: Сборка обязательного Eddy target.
+build_target "eddy_can" "${TREED_FW_EDDY_CONFIG}" '^CONFIG_MACH_RP2040=y$' "firmware-eddy-can.uf2" "out/klipper.uf2"
 
 # Блок 7: Финализация "latest" ссылки и прав.
 ln -sfn "${RUN_DIR}" "${LATEST_LINK}"

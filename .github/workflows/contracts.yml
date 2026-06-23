@@ -1,0 +1,56 @@
+name: contracts
+
+on:
+  push:
+    paths:
+      - ".github/workflows/**"
+      - "bootstrap-pi.sh"
+      - "install.sh"
+      - "loader/**"
+      - "klipper/**"
+      - "moonraker/**"
+      - "runtime-scripts/**"
+      - "tools/tests/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "bootstrap-pi.sh"
+      - "install.sh"
+      - "loader/**"
+      - "klipper/**"
+      - "moonraker/**"
+      - "runtime-scripts/**"
+      - "tools/tests/**"
+
+jobs:
+  static-contracts:
+    name: Static contracts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(find . -path './.git' -prune -o -type f -name '*.sh' -print0)
+
+      - name: Python syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile moonraker/components/*.py
+
+      - name: PowerShell contract tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-ChildItem -LiteralPath "tools/tests" -Filter "test_*.ps1" |
+            Sort-Object Name |
+            ForEach-Object {
+              & $_.FullName
+            }

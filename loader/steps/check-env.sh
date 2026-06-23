@@ -73,6 +73,24 @@ TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed
 TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
 TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_rp2040.config}"
 
+TREED_MAIN_MCU_PROFILE_UUID="d372e54bf965"
+TREED_EBB_PROFILE_UUID="efaf957ab20f"
+TREED_EDDY_PROFILE_UUID="95485b93332a"
+TREED_CAN_PROFILE_IFACE="can0"
+TREED_EDDY_PROFILE_IFACE="can0"
+
+profile_locked_value_check() {
+  local name="$1"
+  local current="$2"
+  local expected="$3"
+  local source="$4"
+
+  if [ "${current}" != "${expected}" ]; then
+    log_error "check-env: ${name} must match active profile cfg ${source}; got '${current}', expected '${expected}'"
+    exit 1
+  fi
+}
+
 if [ -z "${TREED_MAIN_MCU_CANBUS_UUID}" ]; then
   log_error "check-env: TREED_MAIN_MCU_CANBUS_UUID is required; set explicit Octopus Pro CAN UUID"
   exit 1
@@ -83,6 +101,7 @@ case "${TREED_MAIN_MCU_CANBUS_UUID}" in
     exit 1
     ;;
 esac
+profile_locked_value_check "TREED_MAIN_MCU_CANBUS_UUID" "${TREED_MAIN_MCU_CANBUS_UUID}" "${TREED_MAIN_MCU_PROFILE_UUID}" "klipper/profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg"
 
 case "${TREED_NONINTERACTIVE}" in
   0|1) ;;
@@ -142,32 +161,38 @@ case "${TREED_EBB_CANBUS_UUID}" in
     exit 1
     ;;
 esac
+profile_locked_value_check "TREED_EBB_CANBUS_UUID" "${TREED_EBB_CANBUS_UUID}" "${TREED_EBB_PROFILE_UUID}" "klipper/profiles/treed_v2_corexy_v1/ebb42_can.cfg"
 
 case "${TREED_EDDY_ENABLED}" in
-  0|1) ;;
+  1) ;;
+  0)
+    log_error "check-env: TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use a separate Klipper profile before disabling Eddy"
+    exit 1
+    ;;
   *)
     log_error "check-env: TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
     exit 1
     ;;
 esac
 
-if [ "${TREED_EDDY_ENABLED}" = "1" ]; then
-  if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
-    log_error "check-env: TREED_EDDY_CANBUS_UUID is required when TREED_EDDY_ENABLED=1"
-    exit 1
-  fi
-  case "${TREED_EDDY_CANBUS_UUID}" in
-    *[!0-9A-Fa-f]*)
-      log_error "check-env: TREED_EDDY_CANBUS_UUID must be hex, got: ${TREED_EDDY_CANBUS_UUID}"
-      exit 1
-      ;;
-  esac
+if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
+  log_error "check-env: TREED_EDDY_CANBUS_UUID is required for treed_v2_corexy_v1"
+  exit 1
 fi
+case "${TREED_EDDY_CANBUS_UUID}" in
+  *[!0-9A-Fa-f]*)
+    log_error "check-env: TREED_EDDY_CANBUS_UUID must be hex, got: ${TREED_EDDY_CANBUS_UUID}"
+    exit 1
+    ;;
+esac
+profile_locked_value_check "TREED_EDDY_CANBUS_UUID" "${TREED_EDDY_CANBUS_UUID}" "${TREED_EDDY_PROFILE_UUID}" "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
 
 if ! printf '%s' "${TREED_CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then
   log_error "check-env: TREED_CAN_IFACE has invalid format: ${TREED_CAN_IFACE}"
   exit 1
 fi
+profile_locked_value_check "TREED_CAN_IFACE" "${TREED_CAN_IFACE}" "${TREED_CAN_PROFILE_IFACE}" "klipper/profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg"
+profile_locked_value_check "TREED_CAN_IFACE" "${TREED_CAN_IFACE}" "${TREED_EDDY_PROFILE_IFACE}" "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
 
 if [ -n "${TREED_BOOT_BACKEND}" ]; then
   case "${TREED_BOOT_BACKEND}" in

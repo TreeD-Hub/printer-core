@@ -66,8 +66,8 @@
 
 ### Main MCU / CAN / Eddy
 
-- `TREED_MAIN_MCU_CANBUS_UUID` (default `d372e54bf965`)
-- `TREED_CAN_IFACE` (default `can0`)
+- `TREED_MAIN_MCU_CANBUS_UUID` (должен совпадать с активным profile cfg `d372e54bf965`)
+- `TREED_CAN_IFACE` (должен совпадать с активным profile cfg `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
 - `TREED_CAN_TXQUEUE` (default `1024`)
 - `TREED_CAN_RESTART_MS` (default `100`; значение `restart-ms` для auto-recovery CAN controller)
@@ -80,9 +80,9 @@
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`; общий таймаут ожидания CAN-интерфейса)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`; интервал повторной проверки)
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`; при `1` strict UUID-gate через `canbus_query.py`, при `0` query не запускается)
-- `TREED_EBB_CANBUS_UUID` (default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
-- `TREED_EDDY_ENABLED` (legacy `0|1`, default `1`; для активного Klipper-профиля должно оставаться `1`)
-- `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
+- `TREED_EBB_CANBUS_UUID` (должен совпадать с активным profile cfg `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
+- `TREED_EDDY_ENABLED` (legacy-переменная; для активного Klipper-профиля поддерживается только `1`)
+- `TREED_EDDY_CANBUS_UUID` (должен совпадать с активным profile cfg `95485b93332a`)
 
 ### Firmware build
 
