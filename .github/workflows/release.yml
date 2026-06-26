@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release treed-mainshellOS
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate version
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAIN_SHELL_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "${MAIN_SHELL_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "VERSION must be semver x.y.z, got '${MAIN_SHELL_VERSION}'" >&2
+            exit 1
+          fi
+          EXPECTED_TAG="v${MAIN_SHELL_VERSION}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${EXPECTED_TAG}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${EXPECTED_TAG}" >&2
+            exit 1
+          fi
+          echo "MAIN_SHELL_VERSION=${MAIN_SHELL_VERSION}" >> "${GITHUB_ENV}"
+          echo "EXPECTED_TAG=${EXPECTED_TAG}" >> "${GITHUB_ENV}"
+
+      - name: Run contract checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Get-ChildItem -LiteralPath "tools/tests" -Filter "test_*.ps1" |
+            Sort-Object Name |
+            ForEach-Object {
+              & $_.FullName
+            }
+
+      - name: Pack release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          git archive --format=zip --output="dist/treed-mainshellos-source.zip" HEAD
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          manifest = {
+              "name": "treed-mainshellOS",
+              "version": os.environ["MAIN_SHELL_VERSION"],
+              "tag": os.environ["EXPECTED_TAG"],
+              "ref": os.environ["GITHUB_REF_NAME"],
+              "sha": os.environ["GITHUB_SHA"],
+              "runNumber": os.environ["GITHUB_RUN_NUMBER"],
+              "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "builtAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+          }
+          with open("dist/treed-mainshellos-release.json", "w", encoding="utf-8") as handle:
+              json.dump(manifest, handle, ensure_ascii=False, indent=2)
+              handle.write("\n")
+          PY
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "treed-mainshellOS ${MAIN_SHELL_VERSION}."
+            echo ""
+            echo "Tag: ${EXPECTED_TAG}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Assets:"
+            echo "- treed-mainshellos-source.zip"
+            echo "- treed-mainshellos-release.json"
+          } > release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${EXPECTED_TAG}" \
+            dist/treed-mainshellos-source.zip \
+            dist/treed-mainshellos-release.json \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "treed-mainshellOS ${MAIN_SHELL_VERSION}" \
+            --notes-file release-notes.md

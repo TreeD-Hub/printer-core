@@ -14,6 +14,13 @@ Rock Pi (Armbian Debian 12)
 
 Ветка `treed-v2` не поддерживает RN12/RPi/UART legacy-контур.
 
+
+## Версионирование и релизы
+
+Версия `treed-mainshellOS` хранится в `VERSION` в формате `x.y.z`.
+
+Релиз создается workflow `.github/workflows/release.yml` по тегу `vX.Y.Z`. Тег должен совпадать с содержимым `VERSION`; workflow публикует `treed-mainshellos-source.zip` и `treed-mainshellos-release.json`.
+
 ## Быстрый запуск (копируй в SSH)
 
 ```bash

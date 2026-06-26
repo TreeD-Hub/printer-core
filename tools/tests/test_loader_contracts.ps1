@@ -60,6 +60,12 @@ $EddyProfileIface = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/probe_eddy
 
 Assert-Contains ".github/workflows/contracts.yml" "tools/tests/\*\*" "GitHub Actions watches contract tests"
 Assert-Contains ".github/workflows/contracts.yml" "PowerShell contract tests" "GitHub Actions runs PowerShell contract tests"
+Assert-Contains "VERSION" '^\d+\.\d+\.\d+\s*$' "treed-mainshellOS has a semver VERSION file"
+Assert-Contains ".github/workflows/release.yml" 'tags:\s*\r?\n\s+- "v\*\.\*\.\*"' "release workflow runs from semver tags"
+Assert-Contains ".github/workflows/release.yml" 'MAIN_SHELL_VERSION="\$\(tr -d' "release workflow reads VERSION as the release source"
+Assert-Contains ".github/workflows/release.yml" 'EXPECTED_TAG="v\$\{MAIN_SHELL_VERSION\}"' "release workflow maps VERSION to v-prefixed release tag"
+Assert-Contains ".github/workflows/release.yml" 'treed-mainshellos-release\.json' "release workflow publishes a machine-readable release manifest"
+Assert-Contains ".github/workflows/README.md" 'release.yml' "workflow docs include the mainshellOS release workflow"
 
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'TREED_CROWSNEST_REPO' "runtime-bootstrap exposes Crowsnest repo configuration"
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'ensure_crowsnest_runtime' "runtime-bootstrap installs or updates Crowsnest runtime"
