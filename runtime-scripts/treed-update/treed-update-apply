@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ==========================================
+# RUNTIME SCRIPT: TREED UPDATE APPLY
+# ==========================================
+# Назначение:
+# - Обновляет локальный checkout `treed-mainshellOS` на release tag.
+# - Запускает штатный loader в auto/preserve-контуре через `install.sh`.
+# Контур:
+# - root-only, вызывается Moonraker-компонентом через ограниченный sudoers.
+
+# Блок 1: Параметры и state/log файлы.
+TARGET_TAG="${1:-}"
+ENV_FILE="${TREED_UPDATE_ENV_FILE:-/etc/default/treed-update}"
+STATE_FILE="${TREED_UPDATE_STATE_FILE:-/tmp/treed-update-state.json}"
+LOG_FILE="${TREED_UPDATE_LOG_FILE:-/tmp/treed-update-apply.log}"
+LOCK_FILE="${TREED_UPDATE_LOCK_FILE:-/run/lock/treed-update.lock}"
+
+if [[ ! "${TARGET_TAG}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+  echo "treed-update: invalid target tag: ${TARGET_TAG}" >&2
+  exit 2
+fi
+
+if [ -f "${ENV_FILE}" ]; then
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+fi
+
+REPO_DIR="${TREED_UPDATE_REPO_DIR:-/home/pi/treed/treed-mainshellOS}"
+mkdir -p "$(dirname "${STATE_FILE}")" "$(dirname "${LOG_FILE}")" "$(dirname "${LOCK_FILE}")"
+exec >>"${LOG_FILE}" 2>&1
+
+write_state() {
+  local status="$1"
+  local busy="$2"
+  local message="$3"
+  local exit_code="${4:-0}"
+
+  python3 - "${STATE_FILE}" "${status}" "${busy}" "${message}" "${TARGET_TAG}" "${exit_code}" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+path, status, busy, message, target_tag, exit_code = sys.argv[1:7]
+payload = {
+    "status": status,
+    "busy": busy == "1",
+    "message": message,
+    "targetTag": target_tag,
+    "exitCode": int(exit_code),
+    "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+}
+
+finish() {
+  local exit_code="$?"
+  if [ "${exit_code}" -eq 0 ]; then
+    write_state "applied" "0" "Update applied." "0"
+  else
+    write_state "error" "0" "Update failed. See ${LOG_FILE}." "${exit_code}"
+  fi
+  exit "${exit_code}"
+}
+trap finish EXIT
+
+# Блок 2: Root/lock/repo guards.
+if [ "${EUID}" -ne 0 ]; then
+  echo "treed-update: run as root" >&2
+  exit 1
+fi
+
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  echo "treed-update: another update is already running" >&2
+  exit 3
+fi
+
+if [ ! -d "${REPO_DIR}/.git" ]; then
+  echo "treed-update: repo checkout not found: ${REPO_DIR}" >&2
+  exit 1
+fi
+
+if [ ! -f "${REPO_DIR}/install.sh" ]; then
+  echo "treed-update: install.sh not found in ${REPO_DIR}" >&2
+  exit 1
+fi
+
+# Блок 3: Обновление checkout и запуск штатного loader.
+write_state "applying" "1" "Applying ${TARGET_TAG}." "0"
+cd "${REPO_DIR}"
+
+git fetch --tags --force origin "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}"
+git checkout --force "${TARGET_TAG}"
+
+TREED_DEPLOY_MODE=auto TREED_NONINTERACTIVE=1 bash install.sh

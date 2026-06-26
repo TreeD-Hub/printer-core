@@ -41,6 +41,7 @@ esac
 CONFIG_DEPLOYED=0
 BASE_DEPLOYED=0
 COMPONENT_DEPLOYED=0
+UPDATE_COMMAND_DEPLOYED=0
 if ! grp="$(pi_primary_group "${PI_USER}")"; then
   exit 1
 fi
@@ -174,6 +175,37 @@ deploy_treed_moonraker_components() {
   fi
 
   COMPONENT_DEPLOYED=1
+}
+
+deploy_treed_update_command() {
+  local src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
+  local env_file="/etc/default/treed-update"
+  local sudoers_file="/etc/sudoers.d/treed-update"
+
+  if [ ! -f "${src}" ]; then
+    log_error "treed update command not found in repo: ${src}"
+    exit 1
+  fi
+
+  install -m 0755 "${src}" /usr/local/sbin/treed-update-apply
+
+  cat > "${env_file}" <<EOF
+TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/treed-mainshellOS"
+TREED_UPDATE_STATE_FILE="/tmp/treed-update-state.json"
+TREED_UPDATE_LOG_FILE="/tmp/treed-update-apply.log"
+EOF
+  chmod 0644 "${env_file}"
+
+  cat > "${sudoers_file}" <<EOF
+${PI_USER} ALL=(root) NOPASSWD: /usr/local/sbin/treed-update-apply *
+EOF
+  chmod 0440 "${sudoers_file}"
+  if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "${sudoers_file}" >/dev/null
+  fi
+
+  UPDATE_COMMAND_DEPLOYED=1
+  log_info "moonraker-config: deployed /usr/local/sbin/treed-update-apply"
 }
 
 is_valid_mainsail_web_path() {
@@ -439,8 +471,9 @@ log_info "Deployed Moonraker config to ${DST_CONF}"
 deploy_base_fragments
 ensure_generated_fragments_dir
 deploy_treed_moonraker_components
+deploy_treed_update_command
 
-if [ "${CONFIG_DEPLOYED}" -eq 1 ] || [ "${BASE_DEPLOYED}" -eq 1 ] || [ "${COMPONENT_DEPLOYED}" -eq 1 ]; then
+if [ "${CONFIG_DEPLOYED}" -eq 1 ] || [ "${BASE_DEPLOYED}" -eq 1 ] || [ "${COMPONENT_DEPLOYED}" -eq 1 ] || [ "${UPDATE_COMMAND_DEPLOYED}" -eq 1 ]; then
   log_info "Moonraker restart is deferred to step crowsnest-webcam"
 fi
 

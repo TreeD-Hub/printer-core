@@ -6,6 +6,7 @@
 
 - `treed_shell_command.py`
 - `treed_host_network.py`
+- `treed_update.py`
 
 ## Назначение `treed_shell_command.py`
 
@@ -25,10 +26,20 @@
 - возвращает raw `HostNetworkStatus` без Moonraker `result` wrapper;
 - не содержит UI-правила фильтрации, сортировки или выбора сети.
 
+## Назначение `treed_update.py`
+
+- регистрирует endpoints обновлений для TreeD Shell:
+  - `GET /server/treed/update/status`
+  - `POST /server/treed/update/check`
+  - `POST /server/treed/update/apply`
+- проверяет release data отдельно для `treed-shell` и `treed-mainshellOS`;
+- применяет только semver tag `vX.Y.Z` через root-side `/usr/local/sbin/treed-update-apply`.
+
 ## Интеграция
 
 - конфиг-секции объявляются в `moonraker/base/00-core.conf`;
 - `[treed_host_network]` требует `network-manager`/`nmcli` на host;
+- `[treed_update]` требует deployed `/usr/local/sbin/treed-update-apply` и sudoers-файл из `moonraker-config.sh`;
 - текущие команды используются для camera runtime:
   - `treed_cam_session_start`
   - `treed_cam_snapshot`
