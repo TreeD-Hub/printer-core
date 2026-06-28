@@ -73,6 +73,13 @@ Assert-Contains "moonraker/components/treed_update.py" '/server/treed/update/app
 Assert-Contains "loader/steps/moonraker-config.sh" 'treed-update-apply' "Moonraker config deploys the root-side TreeD updater command"
 Assert-Contains "loader/steps/moonraker-config.sh" '/etc/sudoers\.d/treed-update' "Moonraker config installs restricted sudoers rule for TreeD updater"
 Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'TREED_DEPLOY_MODE=auto TREED_NONINTERACTIVE=1 bash install\.sh' "TreeD updater reuses the штатный loader install flow"
+Assert-Contains "moonraker/components/treed_update.py" 'targetId' "TreeD update API selects an explicit release target"
+Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'TARGET_ID="\$\{1:-\}"' "TreeD updater accepts target id as its first argument"
+Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'TARGET_TAG="\$\{2:-\}"' "TreeD updater accepts target tag as its second argument"
+Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'treed-shell-ui\.zip' "TreeD updater can install the released UI archive"
+Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'python3 -m zipfile -t' "TreeD updater validates the UI archive"
+Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'ui\.previous' "TreeD updater retains a rollback UI directory"
+Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'systemctl restart "\$\{SHELL_SERVICE\}"' "TreeD updater restarts the UI after an atomic publish"
 Assert-Contains "runtime-scripts/README.md" 'treed-update' "runtime scripts docs include TreeD update command"
 
 Assert-Contains "loader/steps/runtime-bootstrap.sh" 'TREED_CROWSNEST_REPO' "runtime-bootstrap exposes Crowsnest repo configuration"

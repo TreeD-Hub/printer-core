@@ -41,6 +41,7 @@ class ReleaseTarget:
 
 SEMVER_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
 TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+UI_TAG_RE = re.compile(r"^ui-main-\d+-\d+$")
 
 
 class TreeDUpdate:
@@ -64,6 +65,7 @@ class TreeDUpdate:
             "mainshell_release_api_url",
             "https://api.github.com/repos/TreeD-Hub/treed-mainshellOS/releases",
         )
+        self.last_release_results: Optional[List[Dict[str, Any]]] = None
 
         self.server.register_endpoint(
             "/server/treed/update/status",
@@ -93,19 +95,21 @@ class TreeDUpdate:
         return await self._check_releases()
 
     async def _handle_apply(self, web_request: object) -> Dict[str, Any]:
-        # Блок 6: Запуск системного update только для semver release tag.
+        # Блок 6: Запуск update для явно выбранного release target.
         current_status = await self._check_releases()
-        main_shell = _find_release(current_status["releaseResults"], "treed-mainshellos")
-        if main_shell is None:
-            raise self.server.error("treed-mainshellOS release status is missing")
+        target_id = _request_optional_string(web_request, "targetId") or "treed-mainshellos"
+        target = _find_release(current_status["releaseResults"], target_id)
+        if target is None:
+            raise self.server.error(f"unknown update target: {target_id}")
 
         requested_tag = _request_optional_string(web_request, "targetTag")
-        target_tag = requested_tag or main_shell.get("latestTag")
-        if not isinstance(target_tag, str) or TAG_RE.match(target_tag) is None:
-            raise self.server.error("targetTag must be vX.Y.Z")
+        target_tag = requested_tag or target.get("latestTag")
+        target_pattern = UI_TAG_RE if target_id == "treed-shell" else TAG_RE
+        if not isinstance(target_tag, str) or target_pattern.match(target_tag) is None:
+            raise self.server.error("targetTag does not match the selected update target")
 
-        if main_shell.get("status") != "available":
-            return self._build_status("Обновление treed-mainshellOS не требуется.")
+        if target.get("status") != "available":
+            return self._build_status(f"Обновление {target_id} не требуется.")
 
         state = self._read_state()
         if state.get("busy") is True:
@@ -115,10 +119,11 @@ class TreeDUpdate:
             "status": "queued",
             "busy": True,
             "message": f"Queued update {target_tag}.",
+            "targetId": target_id,
             "targetTag": target_tag,
             "exitCode": 0,
         })
-        await self._start_apply(target_tag)
+        await self._start_apply(target_id, target_tag)
         return self._build_status(f"Запущено обновление {target_tag}.")
 
     async def _check_releases(self) -> Dict[str, Any]:
@@ -127,13 +132,28 @@ class TreeDUpdate:
         release_results: List[Dict[str, Any]] = []
         for target in targets:
             release_results.append(await self._check_target(target))
-        return self._status_payload(release_results, None)
+        self.last_release_results = release_results
+        available_count = sum(result.get("status") == "available" for result in release_results)
+        error_count = sum(result.get("status") == "error" for result in release_results)
+        missing_labels = [
+            str(result.get("label"))
+            for result in release_results
+            if result.get("status") == "unknown"
+        ]
+        if error_count:
+            message = f"Проверка завершена с ошибками: {error_count}."
+        elif available_count:
+            message = f"Доступно обновлений: {available_count}."
+        elif missing_labels:
+            message = f"Release не найден: {', '.join(missing_labels)}."
+        else:
+            message = "Установлены актуальные версии."
+        return self._status_payload(release_results, message)
 
     def _build_status(self, message: Optional[str]) -> Dict[str, Any]:
         # Блок 8: Status payload из локальных данных и последнего apply state.
-        results = [
-            _unknown_result(target)
-            for target in self._build_targets()
+        results = self.last_release_results or [
+            _unknown_result(target) for target in self._build_targets()
         ]
         return self._status_payload(results, message)
 
@@ -143,21 +163,17 @@ class TreeDUpdate:
         message: Optional[str],
     ) -> Dict[str, Any]:
         state = self._read_state()
-        main_shell = _find_release(release_results, "treed-mainshellos")
-        can_apply = (
-            main_shell is not None
-            and main_shell.get("status") == "available"
-            and state.get("busy") is not True
-        )
-
-        if main_shell is not None:
-            main_shell["canApply"] = can_apply
+        is_busy = state.get("busy") is True
+        for release in release_results:
+            release["canApply"] = release.get("status") == "available" and not is_busy
+        can_apply = any(release.get("canApply") is True for release in release_results)
 
         return {
             "available": True,
-            "busy": state.get("busy") is True,
+            "busy": is_busy,
             "canApply": can_apply,
             "message": message or str(state.get("message") or "Update status ready."),
+            "targetId": state.get("targetId"),
             "targetTag": state.get("targetTag"),
             "logPath": str(self.log_file),
             "releaseResults": release_results,
@@ -236,8 +252,8 @@ class TreeDUpdate:
             LOGGER.exception("treed_update: release check failed for %s", target.id)
             return _result(target, None, None, "error", str(err))
 
-    async def _start_apply(self, target_tag: str) -> None:
-        command = [*self.apply_command.split(), target_tag]
+    async def _start_apply(self, target_id: str, target_tag: str) -> None:
+        command = [*self.apply_command.split(), target_id, target_tag]
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.DEVNULL,
@@ -250,6 +266,7 @@ class TreeDUpdate:
                 "status": "error",
                 "busy": False,
                 "message": "Failed to start updater command.",
+                "targetId": target_id,
                 "targetTag": target_tag,
                 "exitCode": process.returncode,
             })

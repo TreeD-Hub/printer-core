@@ -68,11 +68,8 @@ class TreeDHostNetwork:
         return await self._read_status()
 
     async def _handle_scan(self, _web_request: object) -> Dict[str, Any]:
-        # Блок 5: Запрос scan, затем возврат единого status payload.
-        result = await self._run_nmcli("device", "wifi", "rescan")
-        if result.returncode != 0:
-            return await self._read_status(_nmcli_message("scan failed", result))
-        return await self._read_status("scan complete")
+        # Блок 5: nmcli ждет завершения scan и возвращает его фактический список.
+        return await self._read_status("scan complete", rescan=True)
 
     async def _handle_connect(self, web_request: object) -> Dict[str, Any]:
         # Блок 6: Подключение к сети по ssid/password из WebRequest.
@@ -101,7 +98,11 @@ class TreeDHostNetwork:
             return await self._read_status(_nmcli_message("forget failed", result))
         return await self._read_status("forgotten")
 
-    async def _read_status(self, message: Optional[str] = None) -> Dict[str, Any]:
+    async def _read_status(
+        self,
+        message: Optional[str] = None,
+        rescan: bool = False,
+    ) -> Dict[str, Any]:
         # Блок 8: Сбор HostNetworkStatus из NetworkManager.
         if shutil.which("nmcli") is None:
             return _unavailable_status("nmcli unavailable")
@@ -122,7 +123,7 @@ class TreeDHostNetwork:
         saved_networks = await self._read_saved_networks()
         networks_result = await self._run_nmcli(
             "-t", "--escape", "yes", "-f", "ACTIVE,SSID,SIGNAL,SECURITY",
-            "device", "wifi", "list", "--rescan", "no",
+            "device", "wifi", "list", "--rescan", "yes" if rescan else "no",
         )
 
         networks: List[Dict[str, Any]] = []
@@ -185,7 +186,7 @@ class TreeDHostNetwork:
             return NmcliResult(127, "", "nmcli unavailable")
 
         env = os.environ.copy()
-        env["LC_ALL"] = "C"
+        env["LC_ALL"] = "C.UTF-8"
         try:
             process = await asyncio.create_subprocess_exec(
                 "nmcli",
@@ -267,6 +268,8 @@ def _parse_wifi_networks(output: str, saved_networks: Set[str]) -> List[Dict[str
             continue
 
         active, ssid, signal, security = [field.strip() for field in fields[:4]]
+        if not ssid:
+            continue
         network_id = _network_id(ssid, index, used_ids)
         networks.append({
             "id": network_id,

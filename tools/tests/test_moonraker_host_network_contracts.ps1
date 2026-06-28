@@ -82,6 +82,7 @@ foreach ($endpoint in @(
 Assert-Contains $component 'wrap_result=False' "TreeD Shell expects raw HostNetworkStatus, not Moonraker result wrapper"
 Assert-Contains $component 'create_subprocess_exec' "component must run nmcli asynchronously"
 Assert-Contains $component 'nmcli' "component must call nmcli"
+Assert-Contains $component 'env\["LC_ALL"\] = "C\.UTF-8"' "component must preserve UTF-8 SSIDs"
 Assert-Contains $component 'def load_component\(config' "component must expose Moonraker load_component entrypoint"
 
 foreach ($field in @(
@@ -178,8 +179,6 @@ async def run_component_smoke():
 
     async def fake_run(*args):
         calls.append(args)
-        if args == ("device", "wifi", "rescan"):
-            return module.NmcliResult(0, "", "")
         if args[:5] == ("-t", "--escape", "yes", "-f", "DEVICE,TYPE,STATE,CONNECTION"):
             return module.NmcliResult(0, "wlan0:wifi:connected:TreeD Lab\n", "")
         if args[:3] == ("-g", "IP4.ADDRESS", "device"):
@@ -187,7 +186,7 @@ async def run_component_smoke():
         if args[:5] == ("-t", "--escape", "yes", "-f", "NAME,TYPE"):
             return module.NmcliResult(0, "TreeD Lab:802-11-wireless\n", "")
         if args[:5] == ("-t", "--escape", "yes", "-f", "ACTIVE,SSID,SIGNAL,SECURITY"):
-            return module.NmcliResult(0, "yes:TreeD Lab:87:WPA2\nno:Guest:44:\n", "")
+            return module.NmcliResult(0, "yes:TreeD Lab:87:WPA2\nno:Люкс:64:WPA2\nno::44:WPA2\n", "")
         if args[:4] == ("device", "wifi", "connect", "TreeD Lab"):
             return module.NmcliResult(0, "", "")
         if args == ("connection", "delete", "TreeD Lab"):
@@ -203,12 +202,14 @@ async def run_component_smoke():
     assert status["ipAddress"] == "192.168.0.42"
     assert status["networks"][0]["signalPercent"] == 87
     assert status["networks"][0]["security"] == "wpa2"
-    assert status["networks"][1]["security"] == "open"
+    assert status["networks"][1]["ssid"] == "Люкс"
+    assert all(network["ssid"] for network in status["networks"])
 
-    await component._handle_scan(object())
+    scan_status = await component._handle_scan(object())
+    assert scan_status["message"] == "scan complete"
     await component._handle_connect(FakeRequest("TreeD Lab", "secret"))
     await component._handle_forget(FakeRequest("TreeD Lab"))
-    assert ("device", "wifi", "rescan") in calls
+    assert ("-t", "--escape", "yes", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes") in calls
     assert ("device", "wifi", "connect", "TreeD Lab", "password", "secret") in calls
     assert ("connection", "delete", "TreeD Lab") in calls
 

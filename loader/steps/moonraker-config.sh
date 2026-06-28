@@ -191,8 +191,12 @@ deploy_treed_update_command() {
 
   cat > "${env_file}" <<EOF
 TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/treed-mainshellOS"
+TREED_UPDATE_PI_USER="${PI_USER}"
+TREED_UPDATE_PI_GROUP="${PI_GROUP}"
 TREED_UPDATE_STATE_FILE="/tmp/treed-update-state.json"
 TREED_UPDATE_LOG_FILE="/tmp/treed-update-apply.log"
+TREED_SHELL_RUNTIME_DIR="${PI_HOME}/treed/treed-shell-runtime"
+TREED_SHELL_SERVICE="treed-shell.service"
 EOF
   chmod 0644 "${env_file}"
 

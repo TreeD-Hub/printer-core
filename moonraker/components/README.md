@@ -23,6 +23,7 @@
   - `POST /server/treed/network/connect`
   - `POST /server/treed/network/forget`
 - вызывает `nmcli` асинхронно через `asyncio.create_subprocess_exec`;
+- `scan` ожидает завершения `nmcli --rescan yes`, сохраняет UTF-8 SSID и исключает скрытые сети без имени;
 - возвращает raw `HostNetworkStatus` без Moonraker `result` wrapper;
 - не содержит UI-правила фильтрации, сортировки или выбора сети.
 
@@ -33,7 +34,7 @@
   - `POST /server/treed/update/check`
   - `POST /server/treed/update/apply`
 - проверяет release data отдельно для `treed-shell` и `treed-mainshellOS`;
-- применяет только semver tag `vX.Y.Z` через root-side `/usr/local/sbin/treed-update-apply`.
+- применяет выбранный `targetId`: UI tag `ui-main-<run>-<attempt>` или системный semver tag `vX.Y.Z` через root-side `/usr/local/sbin/treed-update-apply`.
 
 ## Интеграция
 

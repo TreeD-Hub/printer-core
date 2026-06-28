@@ -5,22 +5,37 @@ set -euo pipefail
 # RUNTIME SCRIPT: TREED UPDATE APPLY
 # ==========================================
 # Назначение:
-# - Обновляет локальный checkout `treed-mainshellOS` на release tag.
-# - Запускает штатный loader в auto/preserve-контуре через `install.sh`.
+# - Атомарно обновляет release bundle `treed-shell` с rollback-копией.
+# - Обновляет checkout `treed-mainshellOS` и запускает штатный loader.
 # Контур:
 # - root-only, вызывается Moonraker-компонентом через ограниченный sudoers.
 
 # Блок 1: Параметры и state/log файлы.
-TARGET_TAG="${1:-}"
+TARGET_ID="${1:-}"
+TARGET_TAG="${2:-}"
 ENV_FILE="${TREED_UPDATE_ENV_FILE:-/etc/default/treed-update}"
 STATE_FILE="${TREED_UPDATE_STATE_FILE:-/tmp/treed-update-state.json}"
 LOG_FILE="${TREED_UPDATE_LOG_FILE:-/tmp/treed-update-apply.log}"
 LOCK_FILE="${TREED_UPDATE_LOCK_FILE:-/run/lock/treed-update.lock}"
 
-if [[ ! "${TARGET_TAG}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
-  echo "treed-update: invalid target tag: ${TARGET_TAG}" >&2
-  exit 2
-fi
+case "${TARGET_ID}" in
+  treed-shell)
+    [[ "${TARGET_TAG}" =~ ^ui-main-[0-9]+-[0-9]+$ ]] || {
+      echo "treed-update: invalid UI target tag: ${TARGET_TAG}" >&2
+      exit 2
+    }
+    ;;
+  treed-mainshellos)
+    [[ "${TARGET_TAG}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || {
+      echo "treed-update: invalid system target tag: ${TARGET_TAG}" >&2
+      exit 2
+    }
+    ;;
+  *)
+    echo "treed-update: unsupported target: ${TARGET_ID}" >&2
+    exit 2
+    ;;
+esac
 
 if [ -f "${ENV_FILE}" ]; then
   # shellcheck disable=SC1090
@@ -28,6 +43,14 @@ if [ -f "${ENV_FILE}" ]; then
 fi
 
 REPO_DIR="${TREED_UPDATE_REPO_DIR:-/home/pi/treed/treed-mainshellOS}"
+PI_USER="${TREED_UPDATE_PI_USER:-pi}"
+PI_GROUP="${TREED_UPDATE_PI_GROUP:-${PI_USER}}"
+SHELL_RUNTIME_DIR="${TREED_SHELL_RUNTIME_DIR:-$(dirname "${REPO_DIR}")/treed-shell-runtime}"
+SHELL_WEB_DIR="${SHELL_RUNTIME_DIR}/ui"
+SHELL_ARCHIVE_PATH="${SHELL_RUNTIME_DIR}/treed-shell-ui.zip"
+SHELL_RELEASE_API_URL="${TREED_SHELL_RELEASE_API_URL:-https://api.github.com/repos/TreeD-Hub/treed-shell/releases}"
+SHELL_ASSET_NAME="treed-shell-ui.zip"
+SHELL_SERVICE="${TREED_SHELL_SERVICE:-treed-shell.service}"
 mkdir -p "$(dirname "${STATE_FILE}")" "$(dirname "${LOG_FILE}")" "$(dirname "${LOCK_FILE}")"
 exec >>"${LOG_FILE}" 2>&1
 
@@ -37,16 +60,17 @@ write_state() {
   local message="$3"
   local exit_code="${4:-0}"
 
-  python3 - "${STATE_FILE}" "${status}" "${busy}" "${message}" "${TARGET_TAG}" "${exit_code}" <<'PY'
+  python3 - "${STATE_FILE}" "${status}" "${busy}" "${message}" "${TARGET_ID}" "${TARGET_TAG}" "${exit_code}" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 
-path, status, busy, message, target_tag, exit_code = sys.argv[1:7]
+path, status, busy, message, target_id, target_tag, exit_code = sys.argv[1:8]
 payload = {
     "status": status,
     "busy": busy == "1",
     "message": message,
+    "targetId": target_id,
     "targetTag": target_tag,
     "exitCode": int(exit_code),
     "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -80,21 +104,109 @@ if ! flock -n 9; then
   exit 3
 fi
 
-if [ ! -d "${REPO_DIR}/.git" ]; then
-  echo "treed-update: repo checkout not found: ${REPO_DIR}" >&2
-  exit 1
-fi
+apply_mainshell_update() {
+  if [ ! -d "${REPO_DIR}/.git" ]; then
+    echo "treed-update: repo checkout not found: ${REPO_DIR}" >&2
+    return 1
+  fi
+  if [ ! -f "${REPO_DIR}/install.sh" ]; then
+    echo "treed-update: install.sh not found in ${REPO_DIR}" >&2
+    return 1
+  fi
 
-if [ ! -f "${REPO_DIR}/install.sh" ]; then
-  echo "treed-update: install.sh not found in ${REPO_DIR}" >&2
-  exit 1
-fi
+  cd "${REPO_DIR}"
+  git fetch --tags --force origin "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}"
+  git checkout --force "${TARGET_TAG}"
+  TREED_DEPLOY_MODE=auto TREED_NONINTERACTIVE=1 bash install.sh
+}
 
-# Блок 3: Обновление checkout и запуск штатного loader.
-write_state "applying" "1" "Applying ${TARGET_TAG}." "0"
-cd "${REPO_DIR}"
+resolve_shell_asset_url() {
+  python3 - "${SHELL_RELEASE_API_URL}" "${TARGET_TAG}" "${SHELL_ASSET_NAME}" <<'PY'
+import json
+import sys
+import urllib.request
 
-git fetch --tags --force origin "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}"
-git checkout --force "${TARGET_TAG}"
+api_url, target_tag, asset_name = sys.argv[1:4]
+request = urllib.request.Request(
+    api_url,
+    headers={"Accept": "application/vnd.github+json", "User-Agent": "treed-update"},
+)
+with urllib.request.urlopen(request, timeout=30) as response:
+    releases = json.load(response)
+for release in releases:
+    if release.get("draft") or release.get("prerelease") or release.get("tag_name") != target_tag:
+        continue
+    for asset in release.get("assets") or []:
+        if asset.get("name") == asset_name and asset.get("browser_download_url"):
+            print(asset["browser_download_url"])
+            raise SystemExit(0)
+raise SystemExit(f"release asset {asset_name!r} not found for {target_tag!r}")
+PY
+}
 
-TREED_DEPLOY_MODE=auto TREED_NONINTERACTIVE=1 bash install.sh
+apply_shell_update() {
+  local archive_url=""
+  local tmp_archive=""
+  local staged_dir="${SHELL_WEB_DIR}.new"
+  local previous_dir="${SHELL_RUNTIME_DIR}/ui.previous"
+
+  if [ "${SHELL_WEB_DIR}" != "${SHELL_RUNTIME_DIR}/ui" ]; then
+    echo "treed-update: invalid shell web directory: ${SHELL_WEB_DIR}" >&2
+    return 1
+  fi
+
+  mkdir -p "${SHELL_RUNTIME_DIR}"
+  archive_url="$(resolve_shell_asset_url)"
+  tmp_archive="$(mktemp "${SHELL_RUNTIME_DIR}/treed-shell-ui.XXXXXX.zip")"
+  curl -fL --connect-timeout 20 --retry 3 --retry-delay 2 -o "${tmp_archive}" "${archive_url}"
+  python3 -m zipfile -t "${tmp_archive}" >/dev/null
+
+  rm -rf "${staged_dir}"
+  mkdir -p "${staged_dir}"
+  python3 -m zipfile -e "${tmp_archive}" "${staged_dir}"
+  test -f "${staged_dir}/index.html"
+  test -f "${staged_dir}/treed-shell-ui-manifest.json"
+  python3 - "${staged_dir}/treed-shell-ui-manifest.json" "${TARGET_TAG}" <<'PY'
+import json
+import sys
+
+manifest_path, target_tag = sys.argv[1:3]
+with open(manifest_path, encoding="utf-8") as handle:
+    manifest = json.load(handle)
+manifest_tag = f"ui-main-{manifest.get('runNumber')}-{manifest.get('runAttempt')}"
+if manifest_tag != target_tag:
+    raise SystemExit(f"manifest tag {manifest_tag!r} does not match {target_tag!r}")
+if manifest.get("mode") != "live":
+    raise SystemExit("UI release manifest mode must be live")
+PY
+
+  chown -R "${PI_USER}:${PI_GROUP}" "${staged_dir}"
+  rm -rf "${previous_dir}"
+  if [ -d "${SHELL_WEB_DIR}" ]; then
+    mv "${SHELL_WEB_DIR}" "${previous_dir}"
+  fi
+  mv "${tmp_archive}" "${SHELL_ARCHIVE_PATH}"
+  chown "${PI_USER}:${PI_GROUP}" "${SHELL_ARCHIVE_PATH}"
+  if ! mv "${staged_dir}" "${SHELL_WEB_DIR}"; then
+    if [ -d "${previous_dir}" ]; then
+      mv "${previous_dir}" "${SHELL_WEB_DIR}"
+    fi
+    return 1
+  fi
+
+  if ! systemctl restart "${SHELL_SERVICE}" || ! systemctl is-active --quiet "${SHELL_SERVICE}"; then
+    rm -rf "${SHELL_WEB_DIR}"
+    if [ -d "${previous_dir}" ]; then
+      mv "${previous_dir}" "${SHELL_WEB_DIR}"
+      systemctl restart "${SHELL_SERVICE}" || true
+    fi
+    return 1
+  fi
+}
+
+# Блок 3: Применение выбранного release target.
+write_state "applying" "1" "Applying ${TARGET_ID} ${TARGET_TAG}." "0"
+case "${TARGET_ID}" in
+  treed-shell) apply_shell_update ;;
+  treed-mainshellos) apply_mainshell_update ;;
+esac
