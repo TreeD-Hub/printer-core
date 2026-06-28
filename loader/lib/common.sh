@@ -179,3 +179,12 @@ pi_primary_group() {
 
   printf '%s\n' "${grp}"
 }
+
+# Блок 7: Нормализация primary group runtime-пользователя.
+# PI_GROUP остается переопределяемой, но по умолчанию определяется из PI_USER.
+if [ -n "${PI_USER:-}" ] && [ -z "${PI_GROUP:-}" ]; then
+  if ! PI_GROUP="$(pi_primary_group "${PI_USER}")"; then
+    exit 1
+  fi
+  export PI_GROUP
+fi
