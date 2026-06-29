@@ -29,6 +29,7 @@ function Assert-Contains {
 # Блок 2: Загрузка device contract и include-агрегатора.
 $macros = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros.cfg") -Raw
 $contract = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_ui_contract.cfg") -Raw
+$probeEddy = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg") -Raw
 
 Assert-Contains $macros '(?m)^\[include macros_ui_contract\.cfg\]\s*$' "macros.cfg must include UI device contract"
 Assert-Contains $contract '(?m)^\[gcode_macro _TREED_UI_CONTRACT\]\s*$' "UI device contract macro must exist"
@@ -63,6 +64,24 @@ foreach ($macro in @(
   "TREED_SHAPER_CALIBRATE_FULL",
   "TREED_XY_MOTION_TEST"
 )) {
+  Assert-Contains $contract ([regex]::Escape($macro)) "required macro list must include $macro"
+}
+
+# Блок 5: Workflow-контракт калибровки Eddy для TreeD Shell.
+Assert-Contains $probeEddy '(?m)^\[save_variables\]\s*$' "Eddy workflow progress must use save_variables"
+foreach ($macro in @(
+  "_TREED_EDDY_CALIBRATION_STATE",
+  "TREED_EDDY_CALIBRATE_DRIVE_CURRENT",
+  "TREED_EDDY_PRIMARY_HEIGHT_START",
+  "TREED_EDDY_PRIMARY_ACCEPT_SAVE",
+  "TREED_EDDY_TEMPERATURE_START",
+  "TREED_EDDY_TEMPERATURE_ACCEPT_SAVE",
+  "TREED_EDDY_CHECK_Z0",
+  "TREED_EDDY_SCREWS_TILT_START",
+  "TREED_EDDY_SCREWS_TILT_DONE",
+  "TREED_EDDY_BED_MESH_CALIBRATE"
+)) {
+  Assert-Contains $probeEddy "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "Eddy workflow macro must exist: $macro"
   Assert-Contains $contract ([regex]::Escape($macro)) "required macro list must include $macro"
 }
 
