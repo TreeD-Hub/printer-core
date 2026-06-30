@@ -39,6 +39,20 @@ jobs:
           echo "MAIN_SHELL_VERSION=${MAIN_SHELL_VERSION}" >> "${GITHUB_ENV}"
           echo "EXPECTED_TAG=${EXPECTED_TAG}" >> "${GITHUB_ENV}"
 
+      - name: Shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            bash -n "$file"
+          done < <(find . -path './.git' -prune -o -type f -name '*.sh' -print0)
+
+      - name: Python syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile moonraker/components/*.py
+
       - name: Run contract checks
         shell: pwsh
         run: |

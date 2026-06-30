@@ -22,6 +22,12 @@ from typing import Any, Dict, List, Optional, Sequence, Set, TYPE_CHECKING
 
 LOGGER = logging.getLogger(__name__)
 
+STATUS_TIMEOUT_SECONDS = 8.0
+SCAN_TIMEOUT_SECONDS = 30.0
+CONNECT_TIMEOUT_SECONDS = 60.0
+FORGET_TIMEOUT_SECONDS = 30.0
+NMCLI_TERMINATE_TIMEOUT_SECONDS = 3.0
+
 if TYPE_CHECKING:
     from ..confighelper import ConfigHelper
 
@@ -65,11 +71,11 @@ class TreeDHostNetwork:
 
     async def _handle_status(self, _web_request: object) -> Dict[str, Any]:
         # Блок 4: Read-only статус без принудительного rescan.
-        return await self._read_status()
+        return await self._read_status(timeout_seconds=STATUS_TIMEOUT_SECONDS)
 
     async def _handle_scan(self, _web_request: object) -> Dict[str, Any]:
         # Блок 5: nmcli ждет завершения scan и возвращает его фактический список.
-        return await self._read_status("scan complete", rescan=True)
+        return await self._read_status("scan complete", rescan=True, timeout_seconds=SCAN_TIMEOUT_SECONDS)
 
     async def _handle_connect(self, web_request: object) -> Dict[str, Any]:
         # Блок 6: Подключение к сети по ssid/password из WebRequest.
@@ -82,10 +88,13 @@ class TreeDHostNetwork:
         if password is not None and str(password):
             args.extend(["password", str(password)])
 
-        result = await self._run_nmcli(*args)
+        result = await self._run_nmcli(*args, timeout_seconds=CONNECT_TIMEOUT_SECONDS)
         if result.returncode != 0:
-            return await self._read_status(_nmcli_message("connect failed", result))
-        return await self._read_status("connected")
+            return await self._read_status(
+                _nmcli_message("connect failed", result),
+                timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+            )
+        return await self._read_status("connected", timeout_seconds=CONNECT_TIMEOUT_SECONDS)
 
     async def _handle_forget(self, web_request: object) -> Dict[str, Any]:
         # Блок 7: Удаление saved connection по ssid/connection name.
@@ -93,15 +102,19 @@ class TreeDHostNetwork:
         if not ssid:
             raise self.server.error("ssid is required")
 
-        result = await self._run_nmcli("connection", "delete", ssid)
+        result = await self._run_nmcli("connection", "delete", ssid, timeout_seconds=FORGET_TIMEOUT_SECONDS)
         if result.returncode != 0:
-            return await self._read_status(_nmcli_message("forget failed", result))
-        return await self._read_status("forgotten")
+            return await self._read_status(
+                _nmcli_message("forget failed", result),
+                timeout_seconds=FORGET_TIMEOUT_SECONDS,
+            )
+        return await self._read_status("forgotten", timeout_seconds=FORGET_TIMEOUT_SECONDS)
 
     async def _read_status(
         self,
         message: Optional[str] = None,
         rescan: bool = False,
+        timeout_seconds: float = STATUS_TIMEOUT_SECONDS,
     ) -> Dict[str, Any]:
         # Блок 8: Сбор HostNetworkStatus из NetworkManager.
         if shutil.which("nmcli") is None:
@@ -110,6 +123,7 @@ class TreeDHostNetwork:
         device_result = await self._run_nmcli(
             "-t", "--escape", "yes", "-f", "DEVICE,TYPE,STATE,CONNECTION",
             "device", "status",
+            timeout_seconds=timeout_seconds,
         )
         if device_result.returncode != 0:
             return _unavailable_status(_nmcli_message("nmcli device status failed", device_result))
@@ -119,11 +133,12 @@ class TreeDHostNetwork:
             return _unavailable_status(message or "wifi device unavailable")
 
         active_device = _select_wifi_device(wifi_devices)
-        ip_address = await self._read_ip_address(active_device.get("device"))
-        saved_networks = await self._read_saved_networks()
+        ip_address = await self._read_ip_address(active_device.get("device"), timeout_seconds=timeout_seconds)
+        saved_networks = await self._read_saved_networks(timeout_seconds=timeout_seconds)
         networks_result = await self._run_nmcli(
             "-t", "--escape", "yes", "-f", "ACTIVE,SSID,SIGNAL,SECURITY",
             "device", "wifi", "list", "--rescan", "yes" if rescan else "no",
+            timeout_seconds=timeout_seconds,
         )
 
         networks: List[Dict[str, Any]] = []
@@ -148,11 +163,11 @@ class TreeDHostNetwork:
             "networks": networks,
         }
 
-    async def _read_ip_address(self, device: Optional[str]) -> Optional[str]:
+    async def _read_ip_address(self, device: Optional[str], timeout_seconds: float = STATUS_TIMEOUT_SECONDS) -> Optional[str]:
         # Блок 9: IP берется только для выбранного Wi-Fi device.
         if not device:
             return None
-        result = await self._run_nmcli("-g", "IP4.ADDRESS", "device", "show", device)
+        result = await self._run_nmcli("-g", "IP4.ADDRESS", "device", "show", device, timeout_seconds=timeout_seconds)
         if result.returncode != 0:
             return None
         for line in result.stdout.splitlines():
@@ -161,11 +176,12 @@ class TreeDHostNetwork:
                 return value
         return None
 
-    async def _read_saved_networks(self) -> Set[str]:
+    async def _read_saved_networks(self, timeout_seconds: float = STATUS_TIMEOUT_SECONDS) -> Set[str]:
         # Блок 10: Saved-флаг строится из NetworkManager connections.
         result = await self._run_nmcli(
             "-t", "--escape", "yes", "-f", "NAME,TYPE",
             "connection", "show",
+            timeout_seconds=timeout_seconds,
         )
         if result.returncode != 0:
             return set()
@@ -180,7 +196,7 @@ class TreeDHostNetwork:
                 saved.add(name)
         return saved
 
-    async def _run_nmcli(self, *args: str) -> NmcliResult:
+    async def _run_nmcli(self, *args: str, timeout_seconds: float = STATUS_TIMEOUT_SECONDS) -> NmcliResult:
         # Блок 11: nmcli запускается async, чтобы не блокировать event loop Moonraker.
         if shutil.which("nmcli") is None:
             return NmcliResult(127, "", "nmcli unavailable")
@@ -195,7 +211,16 @@ class TreeDHostNetwork:
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            stdout, stderr = await process.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout_seconds)
+            except asyncio.TimeoutError:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), NMCLI_TERMINATE_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+                return NmcliResult(124, "", f"nmcli timed out after {timeout_seconds:.1f}s")
         except FileNotFoundError:
             return NmcliResult(127, "", "nmcli unavailable")
         except Exception as err:

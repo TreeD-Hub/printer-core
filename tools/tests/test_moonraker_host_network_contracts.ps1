@@ -82,6 +82,9 @@ foreach ($endpoint in @(
 Assert-Contains $component 'wrap_result=False' "TreeD Shell expects raw HostNetworkStatus, not Moonraker result wrapper"
 Assert-Contains $component 'create_subprocess_exec' "component must run nmcli asynchronously"
 Assert-Contains $component 'nmcli' "component must call nmcli"
+Assert-Contains $component 'asyncio\.wait_for' "component must bound nmcli communicate with wait_for"
+Assert-Contains $component 'process\.terminate\(\)' "component must terminate timed-out nmcli processes"
+Assert-Contains $component 'process\.kill\(\)' "component must kill unresponsive nmcli processes"
 Assert-Contains $component 'env\["LC_ALL"\] = "C\.UTF-8"' "component must preserve UTF-8 SSIDs"
 Assert-Contains $component 'def load_component\(config' "component must expose Moonraker load_component entrypoint"
 
@@ -177,8 +180,8 @@ async def run_component_smoke():
 
     calls = []
 
-    async def fake_run(*args):
-        calls.append(args)
+    async def fake_run(*args, timeout_seconds=module.STATUS_TIMEOUT_SECONDS):
+        calls.append((args, timeout_seconds))
         if args[:5] == ("-t", "--escape", "yes", "-f", "DEVICE,TYPE,STATE,CONNECTION"):
             return module.NmcliResult(0, "wlan0:wifi:connected:TreeD Lab\n", "")
         if args[:3] == ("-g", "IP4.ADDRESS", "device"):
@@ -209,12 +212,64 @@ async def run_component_smoke():
     assert scan_status["message"] == "scan complete"
     await component._handle_connect(FakeRequest("TreeD Lab", "secret"))
     await component._handle_forget(FakeRequest("TreeD Lab"))
-    assert ("-t", "--escape", "yes", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes") in calls
-    assert ("device", "wifi", "connect", "TreeD Lab", "password", "secret") in calls
-    assert ("connection", "delete", "TreeD Lab") in calls
+    assert (("-t", "--escape", "yes", "-f", "ACTIVE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"), module.SCAN_TIMEOUT_SECONDS) in calls
+    assert (("device", "wifi", "connect", "TreeD Lab", "password", "secret"), module.CONNECT_TIMEOUT_SECONDS) in calls
+    assert (("connection", "delete", "TreeD Lab"), module.FORGET_TIMEOUT_SECONDS) in calls
+
+
+async def run_timeout_smoke():
+    config = FakeConfig()
+    component = module.TreeDHostNetwork(config)
+    real_wait_for = asyncio.wait_for
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+            self.calls = []
+            self.killed = False
+
+        async def communicate(self):
+            self.calls.append("communicate")
+            await asyncio.sleep(10)
+            return b"", b""
+
+        def terminate(self):
+            self.calls.append("terminate")
+
+        async def wait(self):
+            self.calls.append("wait")
+            if self.killed:
+                return 0
+            await asyncio.sleep(10)
+            return 0
+
+        def kill(self):
+            self.calls.append("kill")
+            self.killed = True
+
+    process = FakeProcess()
+    wait_for_calls = []
+
+    async def fake_wait_for(awaitable, timeout):
+        wait_for_calls.append(timeout)
+        return await real_wait_for(awaitable, 0.01)
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return process
+
+    module.asyncio.wait_for = fake_wait_for
+    module.asyncio.create_subprocess_exec = fake_create_subprocess_exec
+    module.shutil.which = lambda name: "nmcli" if name == "nmcli" else None
+
+    result = await component._run_nmcli("device", "wifi", "list", timeout_seconds=30.0)
+    assert result.returncode == 124
+    assert "timed out" in result.stderr
+    assert wait_for_calls == [30.0, 3]
+    assert process.calls == ["communicate", "terminate", "wait", "kill", "wait"]
 
 
 asyncio.run(run_component_smoke())
+asyncio.run(run_timeout_smoke())
 '@.Replace("__REPO_ROOT__", ($RepoRoot -replace "\\", "\\"))
 
 $python | python -
