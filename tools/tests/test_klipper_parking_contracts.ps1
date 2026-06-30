@@ -150,7 +150,10 @@ Assert-NotContains $g28 '(?m)^\s*RESTORE_GCODE_STATE\b' "G28 must not restore st
 Assert-Contains $g28 'printer\.gcode_move\.absolute_coordinates' "G28 must preserve only coordinate mode explicitly"
 
 Assert-Contains $geometry '(?m)^variable_bed_origin_x:\s*0\.0\s*$' "Eddy bed origin X must be the left edge"
-Assert-Contains $geometry '(?m)^variable_bed_origin_y:\s*65\.0\s*$' "Eddy bed origin Y must be the front print edge after service margin"
+Assert-Contains $geometry '(?m)^variable_print_offset_y:\s*0\.0\s*$' "Print Y offset must start at the raw Y0 movement edge"
+Assert-Contains $geometry '(?m)^variable_bed_origin_y:\s*0\.0\s*$' "Eddy bed origin Y must start at the raw Y0 movement edge"
+Assert-Contains $geometry '(?m)^variable_print_size_y:\s*245\.0\s*$' "Print area Y must match the full Y movement area"
+Assert-Contains $geometry '(?m)^variable_bed_size_y:\s*245\.0\s*$' "Eddy bed Y size must match the full Y movement area"
 Assert-Contains $geometry '(?m)^variable_bed_dir_x:\s*1\.0\s*$' "Eddy bed X direction must increase from the left edge"
 Assert-Contains $geometry '(?m)^variable_bed_dir_y:\s*1\.0\s*$' "Eddy bed Y direction must increase from the front print edge"
 
