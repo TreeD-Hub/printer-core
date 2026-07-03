@@ -16,12 +16,13 @@
 7. `profiles/treed_v2_corexy_v1/steppers.cfg`
 8. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
 9. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
-10. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-11. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-12. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-13. `profiles/treed_v2_corexy_v1/macros.cfg`
-14. `profiles/treed_v2_corexy_v1/ui.cfg`
-15. `local_overrides.cfg`
+10. `filament_motion_runtime.cfg`
+11. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+12. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+13. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+14. `profiles/treed_v2_corexy_v1/macros.cfg`
+15. `profiles/treed_v2_corexy_v1/ui.cfg`
+16. `local_overrides.cfg`
 
 `macros.cfg` дополнительно подключает:
 - `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
@@ -82,15 +83,13 @@ Raw-координаты профиля: `X0` — левый край, `Y0` — 
 
 В профиль включен BTT Smart Filament Sensor SFS V2.0:
 - конфиг: `filament_sensor.cfg`;
-- разъем Octopus Pro для switch-канала: `FIL-DET0` / `material_0`;
-- сигнал switch-канала: `PG12`, в Klipper указан как `^PG12`;
-- разъем Octopus Pro для encoder/motion-канала: `FIL-DET1` / `material_1`;
-- сигнал encoder/motion-канала: `PG13`, в Klipper указан как `^PG13`;
+- текущий deployed switch-канал: `PG13`;
+- текущий deployed encoder/motion-канал: `PG12`;
 - питание датчика: `+5V` и `GND` на штатных filament-разъемах.
 
-SFS V2.0 использует разветвитель: 4-pin коннектор подключается к датчику, два 3-pin коннектора подключаются к плате. Коннектор switch-канала подключить в `FIL-DET0`, encoder/motion-канала — в `FIL-DET1`.
+SFS V2.0 использует разветвитель: 4-pin коннектор подключается к датчику, два 3-pin коннектора подключаются к плате. Перед изменением pin mapping нужно сверить маркировку обоих 3-pin коннекторов на конкретном принтере.
 
-Стартовое `detection_length` для encoder/motion-канала — `3.0`. Если будут ложные срабатывания, увеличивать параметр в `filament_sensor.cfg` шагом по 1 мм.
+`filament_motion_runtime.cfg` создаётся со средней чувствительностью (`15.0` мм), меняется только через host API и сохраняется loader-ом в `preserve`-режиме.
 
 ## Сервисные вентиляторы и подсветка
 

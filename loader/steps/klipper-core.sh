@@ -105,6 +105,11 @@ if [ "${DEPLOY_MODE}" = "preserve" ]; then
     log_info "klipper-core: preserve mode, saving local_overrides.cfg"
   fi
 
+  if [ -f "${CONFIG_DIR}/filament_motion_runtime.cfg" ]; then
+    cp -a "${CONFIG_DIR}/filament_motion_runtime.cfg" "${TMP_KEEP}/" || true
+    log_info "klipper-core: preserve mode, saving filament_motion_runtime.cfg"
+  fi
+
   if [ -f "${CONFIG_DIR}/printer.cfg" ] && grep -Fq "${SAVE_CONFIG_MARKER}" "${CONFIG_DIR}/printer.cfg"; then
     awk -v marker="${SAVE_CONFIG_MARKER}" '
       index($0, marker) { keep = 1 }
@@ -125,7 +130,7 @@ if [ "${DEPLOY_MODE}" = "preserve" ]; then
     fi
   fi
 
-  if [ ! -e "${TMP_KEEP}/local_overrides.cfg" ] && [ ! -e "${TMP_KEEP}/printer_save_config.block" ]; then
+  if [ ! -e "${TMP_KEEP}/local_overrides.cfg" ] && [ ! -e "${TMP_KEEP}/filament_motion_runtime.cfg" ] && [ ! -e "${TMP_KEEP}/printer_save_config.block" ]; then
     log_info "klipper-core: preserve mode, no local runtime overrides found"
   fi
 else
@@ -158,6 +163,11 @@ fi
 if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
   if [ -f "${TMP_KEEP}/local_overrides.cfg" ]; then
     cp -a "${TMP_KEEP}/local_overrides.cfg" "${CONFIG_DIR}/" || true
+  fi
+
+  if [ -f "${TMP_KEEP}/filament_motion_runtime.cfg" ]; then
+    cp -a "${TMP_KEEP}/filament_motion_runtime.cfg" "${CONFIG_DIR}/" || true
+    log_info "klipper-core: restored filament_motion_runtime.cfg"
   fi
 
   if [ -f "${TMP_KEEP}/printer_save_config.block" ] && [ -f "${CONFIG_DIR}/printer.cfg" ]; then

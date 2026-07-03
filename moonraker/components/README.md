@@ -6,6 +6,7 @@
 
 - `treed_shell_command.py`
 - `treed_host_network.py`
+- `treed_filament_sensor.py`
 - `treed_update.py`
 
 ## Назначение `treed_shell_command.py`
@@ -27,6 +28,13 @@
 - возвращает raw `HostNetworkStatus` без Moonraker `result` wrapper;
 - не содержит UI-правила фильтрации, сортировки или выбора сети.
 
+## Назначение `treed_filament_sensor.py`
+
+- регистрирует `GET/POST /server/treed/filament-sensor/settings`;
+- принимает только `low | medium | high` и атомарно обновляет runtime config;
+- блокирует изменение чувствительности во время активной печати;
+- после успешной записи отправляет Klipper controlled `RESTART`.
+
 ## Назначение `treed_update.py`
 
 - регистрирует endpoints обновлений для TreeD Shell:
@@ -40,6 +48,7 @@
 
 - конфиг-секции объявляются в `moonraker/base/00-core.conf`;
 - `[treed_host_network]` требует `network-manager`/`nmcli` на host;
+- `[treed_filament_sensor]` пишет только `filament_motion_runtime.cfg`;
 - `[treed_update]` требует deployed `/usr/local/sbin/treed-update-apply` и sudoers-файл из `moonraker-config.sh`;
 - текущие команды используются для camera runtime:
   - `treed_cam_session_start`
