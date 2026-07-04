@@ -16,7 +16,7 @@ LIB_DIR="${REPO_DIR}/loader/lib"
 source "${LIB_DIR}/common.sh"
 
 # Блок 2: Старт шага и расчет пользовательских путей.
-log_info "Step crowsnest-webcam: fixed 1920x1080@10 for single USB cam"
+log_info "Step crowsnest-webcam: fixed 1920x1080@30 for single USB cam"
 
 PI_USER="${PI_USER:-pi}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
@@ -40,7 +40,7 @@ CAM_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
 # - после перевода MCU на UART USB-шина разгружена, можно поднять качество потока.
 # - при признаках нестабильности верните 640x480@10 через env без правки кода.
 CAM_RESOLUTION="${TREED_CAM_RESOLUTION:-1920x1080}"
-CAM_FPS="${TREED_CAM_FPS:-10}"
+CAM_FPS="${TREED_CAM_FPS:-30}"
 CAM_PORT="8080"
 
 # Блок 3: Подготовка каталогов конфигурации.
@@ -157,12 +157,12 @@ ensure_moonraker_generated_include() {
 
 write_moonraker_webcam_fragment() {
   log_info "Writing Moonraker webcam fragment -> ${MOONRAKER_WEBCAM_FRAGMENT}"
-  cat > "${MOONRAKER_WEBCAM_FRAGMENT}" <<'EOF'
+  cat > "${MOONRAKER_WEBCAM_FRAGMENT}" <<EOF
 #### treed-generated: crowsnest-webcam
 [webcam treed]
 location: printer
 service: mjpegstreamer
-target_fps: 15
+target_fps: ${CAM_FPS}
 target_fps_idle: 5
 stream_url: /webcam/?action=stream
 snapshot_url: /webcam/?action=snapshot
@@ -175,7 +175,7 @@ write_crowsnest_conf() {
   log_info "Writing crowsnest.conf -> ${CROWSNEST_CONF}"
   cat > "${CROWSNEST_CONF}" <<EOF
 #### treed-managed: crowsnest-webcam
-#### одиночная USB-камера, 1920x1080@10 (override: TREED_CAM_RESOLUTION/TREED_CAM_FPS)
+#### одиночная USB-камера, 1920x1080@30 (override: TREED_CAM_RESOLUTION/TREED_CAM_FPS)
 
 [crowsnest]
 log_path: ${PI_HOME}/printer_data/logs/crowsnest.log
