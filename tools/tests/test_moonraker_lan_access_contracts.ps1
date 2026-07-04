@@ -21,7 +21,7 @@ if ($coreConfig -match '(?m)^\s*192\.168\.0\.0/16\s*$') {
   throw "FAIL: Moonraker must not trust the wider 192.168.0.0/16 range"
 }
 
-if ($nginxConfig -notmatch 'proxy_set_header X-Real-IP \\$remote_addr;') {
+if (-not $nginxConfig.Contains('proxy_set_header X-Real-IP \$remote_addr;')) {
   throw "FAIL: nginx must forward the real client IP to Moonraker"
 }
 
