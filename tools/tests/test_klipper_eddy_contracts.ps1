@@ -113,9 +113,12 @@ Assert-NotContains $probeEddy 'Eddy Z0 adjust applied' "Eddy profile must not re
 Assert-NotContains $captureLiveZ 'homing_origin\.z\|float\s*-' "autosave capture must not subtract a removed base z0_adjust"
 
 Assert-ContainsBefore $eddyHomeZ '(?m)^\s*G28\.1 Z\s*$' '(?m)^\s*SET_Z_FROM_PROBE\s*$' "Eddy home must run correction immediately after G28.1 Z"
-Assert-Contains $eddyZ0Cfg '(?m)^\s*variable_home_probe_clearance:\s*5\.0\s*$' "Eddy Z-home must define post-home clearance before precise PROBE"
+Assert-Contains $eddyZ0Cfg '(?m)^\s*variable_home_probe_speed:\s*2\.0\s*$' "Eddy Z-home must slow precise PROBE descent"
+Assert-Contains $eddyZ0Cfg '(?m)^\s*variable_home_probe_clearance:\s*2\.0\s*$' "Eddy Z-home must keep post-home clearance inside saved calibration range"
+Assert-Contains $eddyZ0Cfg '(?m)^\s*variable_home_lift_speed:\s*5\.0\s*$' "Eddy Z-home must slow lift between precise PROBE samples"
 Assert-ContainsBefore $setZFromProbe '(?m)^\s*G1 Z\{clearance_z\} F1500\s*$' '(?m)^\s*PROBE\b' "SET_Z_FROM_PROBE must clear triggered Eddy state before precise PROBE"
 Assert-ContainsBefore $setZFromProbe '(?m)^\s*M400\s*$' '(?m)^\s*PROBE\b' "SET_Z_FROM_PROBE must wait for clearance move before precise PROBE"
+Assert-Contains $setZFromProbe '(?m)^\s*PROBE\s+PROBE_SPEED=\{cfg\.home_probe_speed\|float\}\s+SAMPLES=' "SET_Z_FROM_PROBE must pass explicit slow PROBE_SPEED"
 Assert-ContainsBefore $setZFromProbe '(?m)^\s*PROBE\b' '(?m)^\s*_RELOAD_Z_OFFSET_FROM_PROBE\s*$' "SET_Z_FROM_PROBE must probe before reloading Z"
 Assert-Contains $reloadZOffset 'printer\.probe\.last_probe_position\.z' "Z reload must use the last PROBE result"
 Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.probe\.last_probe_position\.z\}\s*$' "Z reload must rewrite kinematic Z from PROBE result"
