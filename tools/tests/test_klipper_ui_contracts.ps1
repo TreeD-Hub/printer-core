@@ -50,6 +50,7 @@ foreach ($capability in @("print", "motion", "thermal", "fan", "filament", "cons
 # Блок 4: Обязательные safety macro для live UI.
 foreach ($macro in @(
   "_TREED_EDDY_HOME_Z",
+  "_TREED_CAMERA",
   "TREED_UI_MOVE_AXIS",
   "TREED_UI_SET_SPEED_FACTOR",
   "TREED_UI_SET_FLOW_FACTOR",
