@@ -97,6 +97,7 @@ $eddyZ0Cfg = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_Z0_CFG"
 $reloadZOffset = Get-GcodeMacroBlock $probeEddy "_RELOAD_Z_OFFSET_FROM_PROBE"
 $setZFromProbe = Get-GcodeMacroBlock $probeEddy "SET_Z_FROM_PROBE"
 $captureLiveZ = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET"
+$eddyMeshCfg = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_MESH_CFG"
 $eddyMesh = Get-GcodeMacroBlock $probeEddy "TREED_BED_MESH_CALIBRATE_EDDY"
 $startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
@@ -122,6 +123,9 @@ Assert-Contains $setZFromProbe '(?m)^\s*PROBE\s+PROBE_SPEED=\{cfg\.home_probe_sp
 Assert-ContainsBefore $setZFromProbe '(?m)^\s*PROBE\b' '(?m)^\s*_RELOAD_Z_OFFSET_FROM_PROBE\s*$' "SET_Z_FROM_PROBE must probe before reloading Z"
 Assert-Contains $reloadZOffset 'printer\.probe\.last_probe_position\.z' "Z reload must use the last PROBE result"
 Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.probe\.last_probe_position\.z\}\s*$' "Z reload must rewrite kinematic Z from PROBE result"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_speed:\s*60\s*$' "Eddy rapid mesh must use a conservative scan speed"
+Assert-Contains $eddyMesh '(?m)^\s*\{% set scan_speed = params\.SCAN_SPEED\|default\(cfg\.scan_speed\|float\) %\}\s*$' "Eddy mesh must allow scan speed override"
+Assert-Contains $eddyMesh '(?m)^\s*BED_MESH_CALIBRATE_BASE\b.*\bSCAN_SPEED=\{scan_speed\}\s+ADAPTIVE=' "Eddy scan mesh must pass explicit SCAN_SPEED"
 
 # Блок 4: START_PRINT должен строить Z0, mesh и park только на прогретом столе.
 Assert-NotContains $startMachinePrep '(?m)^\s*_TREED_HOME_ALL\s*$' "START machine prep must not home before bed preheat"
