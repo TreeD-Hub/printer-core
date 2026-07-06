@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   release:
-    name: Release treed-mainshellOS
+    name: Release printer-core
     runs-on: ubuntu-latest
 
     steps:
@@ -94,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "treed-mainshellOS ${MAIN_SHELL_VERSION}."
+            echo "printer-core ${MAIN_SHELL_VERSION}."
             echo ""
             echo "Tag: ${EXPECTED_TAG}"
             echo "Commit: ${GITHUB_SHA}"
@@ -113,5 +113,5 @@ jobs:
             dist/treed-mainshellos-source.zip \
             dist/treed-mainshellos-release.json \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "treed-mainshellOS ${MAIN_SHELL_VERSION}" \
+            --title "printer-core ${MAIN_SHELL_VERSION}" \
             --notes-file release-notes.md

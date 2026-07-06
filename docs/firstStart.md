@@ -11,10 +11,10 @@
 ## 2. Запуск installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
+curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
 ```
 
-`bootstrap-pi.sh` клонирует свежий installer checkout в `${HOME}/treed/treed-mainshellOS` пользователя запуска, запускает loader в `TREED_DEPLOY_MODE=auto` и перезагружает систему только при состоянии `fresh`.
+`bootstrap-pi.sh` клонирует свежий installer checkout в `${HOME}/treed/printer-core` пользователя запуска, запускает loader в `TREED_DEPLOY_MODE=auto` и перезагружает систему только при состоянии `fresh`.
 
 ## 3. V2 UUID
 

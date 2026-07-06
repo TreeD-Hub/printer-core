@@ -6,7 +6,7 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Атомарно обновляет release bundle `treed-shell` с rollback-копией.
-# - Обновляет checkout `treed-mainshellOS` и запускает штатный loader.
+# - Обновляет checkout `printer-core` и запускает штатный loader.
 # Контур:
 # - root-only, вызывается Moonraker-компонентом через ограниченный sudoers.
 
@@ -25,7 +25,7 @@ case "${TARGET_ID}" in
       exit 2
     }
     ;;
-  treed-mainshellos)
+  treed-mainshellos|printer-core)
     [[ "${TARGET_TAG}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || {
       echo "treed-update: invalid system target tag: ${TARGET_TAG}" >&2
       exit 2
@@ -42,7 +42,7 @@ if [ -f "${ENV_FILE}" ]; then
   . "${ENV_FILE}"
 fi
 
-REPO_DIR="${TREED_UPDATE_REPO_DIR:-/home/pi/treed/treed-mainshellOS}"
+REPO_DIR="${TREED_UPDATE_REPO_DIR:-/home/pi/treed/printer-core}"
 PI_USER="${TREED_UPDATE_PI_USER:-pi}"
 PI_GROUP="${TREED_UPDATE_PI_GROUP:-${PI_USER}}"
 SHELL_RUNTIME_DIR="${TREED_SHELL_RUNTIME_DIR:-$(dirname "${REPO_DIR}")/treed-shell-runtime}"
@@ -208,5 +208,5 @@ PY
 write_state "applying" "1" "Applying ${TARGET_ID} ${TARGET_TAG}." "0"
 case "${TARGET_ID}" in
   treed-shell) apply_shell_update ;;
-  treed-mainshellos) apply_mainshell_update ;;
+  treed-mainshellos|printer-core) apply_mainshell_update ;;
 esac

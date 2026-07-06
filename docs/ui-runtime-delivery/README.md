@@ -11,7 +11,7 @@
 
 - `treed-shell`: React UI, live build, release artifact `treed-shell-ui.zip`.
 - `packages/printer-logic`: shared domain contract, уже включается в UI bundle при сборке.
-- `treed-mainshellOS`: установка artifact, browser/kiosk runtime, systemd, fallback, Moonraker/host-side contracts.
+- `printer-core`: установка artifact, browser/kiosk runtime, systemd, fallback, Moonraker/host-side contracts.
 
 ## Loader variables
 

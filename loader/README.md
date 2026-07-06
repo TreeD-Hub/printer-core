@@ -133,13 +133,13 @@
 `runtime-bootstrap` проверяет `numpy` и `matplotlib` в `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}`: если импорт уже работает, установка пропускается; если пакета нет, ставится текущий стабильный релиз через pip в существующий venv Klipper.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
+curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
 ```
 
 Локальный запуск уже клонированного репозитория:
 
 ```bash
-cd ~/treed/treed-mainshellOS
+cd ~/treed/printer-core
 sudo bash loader/loader.sh
 ```
 

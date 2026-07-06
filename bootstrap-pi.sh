@@ -10,7 +10,7 @@ set -euo pipefail
 # Контур:
 # - required для первичного входа с чистой ОС.
 
-REPO_URL="${REPO_URL:-https://github.com/TreeD-Hub/treed-mainshellOS.git}"
+REPO_URL="${REPO_URL:-https://github.com/TreeD-Hub/printer-core.git}"
 INSTALL_REF="${INSTALL_REF:-treed-v2}"
 STATE_FILE="${TREED_STATE_FILE:-/run/treed-loader/state.env}"
 TREED_REBOOT_AFTER_FRESH="${TREED_REBOOT_AFTER_FRESH:-1}"
@@ -26,7 +26,7 @@ if [ -z "${RUN_HOME}" ] || [ ! -d "${RUN_HOME}" ]; then
 fi
 
 BASE="${BASE:-${RUN_HOME}/treed}"
-REPO_DIR="${REPO_DIR:-${BASE}/treed-mainshellOS}"
+REPO_DIR="${REPO_DIR:-${BASE}/printer-core}"
 
 if ! command -v git >/dev/null 2>&1; then
   sudo apt-get update

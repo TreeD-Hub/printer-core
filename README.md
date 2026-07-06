@@ -1,4 +1,4 @@
-# TreeD MainshellOS
+# TreeD Printer Core
 
 Единая точка входа для ветки `treed-v2`.
 
@@ -17,17 +17,27 @@ Rock Pi (Armbian Debian 12)
 
 ## Версионирование и релизы
 
-Версия `treed-mainshellOS` хранится в `VERSION` в формате `x.y.z`.
+Версия `printer-core` хранится в `VERSION` в формате `x.y.z`.
 
-Релиз создается workflow `.github/workflows/release.yml` по тегу `vX.Y.Z`. Тег должен совпадать с содержимым `VERSION`; workflow публикует `treed-mainshellos-source.zip` и `treed-mainshellos-release.json`.
+Релиз создается workflow `.github/workflows/release.yml` по тегу `vX.Y.Z`. Тег должен совпадать с содержимым `VERSION`; workflow сохраняет совместимые имена assets `treed-mainshellos-source.zip` и `treed-mainshellos-release.json`.
 
 ## Быстрый запуск (копируй в SSH)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
+curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
 ```
 
 Loader сам определяет `fresh|update|recover`, выбирает `clean|preserve` и ребутает только после `fresh`.
+
+## Диагностика камеры
+
+```bash
+grep -R "max_fps\|target_fps\|1920x1080" -n \
+  ~/printer_data/config/crowsnest.conf \
+  ~/printer_data/config/moonraker/generated/50-webcam-treed.conf
+
+journalctl -u crowsnest -b --no-pager | grep -Ei "fps|resolution|ustreamer|format|warning|error"
+```
 
 ## Вариации UI
 

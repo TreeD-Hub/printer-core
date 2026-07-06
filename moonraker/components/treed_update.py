@@ -3,7 +3,7 @@ MOONRAKER COMPONENT: TREED UPDATE
 =================================
 Назначение:
 - Предоставляет TreeD Shell endpoints проверки и применения обновлений.
-- Разделяет UI bundle `treed-shell` и системный runtime `treed-mainshellOS`.
+- Разделяет UI bundle `treed-shell` и системный runtime `printer-core`.
 Контур:
 - check/status безопасны и read-only;
 - apply запускает root-side updater через ограниченную команду.
@@ -48,7 +48,7 @@ class TreeDUpdate:
     def __init__(self, config: ConfigHelper) -> None:
         # Блок 3: Конфиг путей, release API и публичных endpoints.
         self.server = config.get_server()
-        self.repo_path = Path(config.get("repo_path", "/home/pi/treed/treed-mainshellOS"))
+        self.repo_path = Path(config.get("repo_path", "/home/pi/treed/printer-core"))
         self.version_file = Path(config.get("version_file", str(self.repo_path / "VERSION")))
         self.shell_manifest_path = Path(config.get(
             "shell_manifest_path",
@@ -63,7 +63,7 @@ class TreeDUpdate:
         )
         self.mainshell_release_api_url = config.get(
             "mainshell_release_api_url",
-            "https://api.github.com/repos/TreeD-Hub/treed-mainshellOS/releases",
+            "https://api.github.com/repos/TreeD-Hub/printer-core/releases",
         )
         self.last_release_results: Optional[List[Dict[str, Any]]] = None
 
@@ -191,7 +191,7 @@ class TreeDUpdate:
             ),
             ReleaseTarget(
                 id="treed-mainshellos",
-                label="TreeD MainShell OS",
+                label="TreeD Printer Core",
                 current_version=self._read_mainshell_version(),
                 release_api_url=self.mainshell_release_api_url,
                 tag_prefix="v",

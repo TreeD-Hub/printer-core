@@ -120,7 +120,7 @@
 - `CAM_ALLOW_VIDEO0_FALLBACK` (`1` разрешает fallback на `/dev/video0`)
 - `TREED_CAMERA_REQUIRED` (`1` переводит шаг камеры в fail-fast; при `0` отсутствие `crowsnest.service` очищает webcam-fragment и не блокирует loader)
 - `TREED_CAM_RESOLUTION` (default `1920x1080`)
-- `TREED_CAM_FPS` (default `10`)
+- `TREED_CAM_FPS` (default `30`)
 - `MOONRAKER_READY_RETRIES` (default `30`)
 - `TREED_MAINSAIL_WEB_PATH` (default `/var/www/mainsail`; целевой web-root Mainsail и путь для `[update_manager mainsail]`)
 - `TREED_MAINSAIL_ZIP_URL` (default `https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip`)

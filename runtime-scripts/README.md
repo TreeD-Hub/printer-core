@@ -6,7 +6,7 @@
 
 - `runtime-scripts/treed-cam/*` — runtime-команды камеры TreeD.
 - `runtime-scripts/treed-ui/*` — операторские команды переключения экранного UI.
-- `runtime-scripts/treed-update/*` — root-side применение release update для `treed-mainshellOS`.
+- `runtime-scripts/treed-update/*` — root-side применение release update для `printer-core`.
 
 ## Модель деплоя
 

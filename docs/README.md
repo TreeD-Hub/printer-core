@@ -4,7 +4,7 @@
 ## Быстрый install path (V2)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/treed-mainshellOS/treed-v2/bootstrap-pi.sh | bash
+curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
 ```
 
 ## Контракт переменных

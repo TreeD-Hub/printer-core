@@ -190,7 +190,7 @@ deploy_treed_update_command() {
   install -m 0755 "${src}" /usr/local/sbin/treed-update-apply
 
   cat > "${env_file}" <<EOF
-TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/treed-mainshellOS"
+TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/printer-core"
 TREED_UPDATE_PI_USER="${PI_USER}"
 TREED_UPDATE_PI_GROUP="${PI_GROUP}"
 TREED_UPDATE_STATE_FILE="/tmp/treed-update-state.json"

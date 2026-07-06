@@ -352,6 +352,23 @@ check_file_present() {
   fi
 }
 
+check_config_value() {
+  local label="$1"
+  local path="$2"
+  local key="$3"
+  local expected="$4"
+  local actual=""
+
+  actual="$(sed -n "s/^[[:space:]]*${key}:[[:space:]]*//p" "${path}" | tail -n 1)"
+  actual="$(printf '%s' "${actual}" | sed 's/[[:space:]]*$//')"
+
+  if [ "${actual}" = "${expected}" ]; then
+    check_pass "${label} (${key}=${expected})"
+  else
+    check_fail "${label} (${key}, expected=${expected}, current=${actual:-missing})"
+  fi
+}
+
 check_dir_present() {
   local label="$1"
   local path="$2"
@@ -422,6 +439,10 @@ run_check_mode() {
   local mainsail_web_path="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
   local crowsnest_conf="${PI_HOME}/printer_data/config/crowsnest.conf"
   local webcam_fragment="${PI_HOME}/printer_data/config/moonraker/generated/50-webcam-treed.conf"
+  local camera_required="${TREED_CAMERA_REQUIRED:-0}"
+  local camera_resolution="${TREED_CAM_RESOLUTION:-1920x1080}"
+  local camera_fps="${TREED_CAM_FPS:-30}"
+  local camera_config_present=0
 
   log_info "TreeD loader check mode: read-only actuality check"
   log_info "TREED_DEVICE_STATE=${TREED_DEVICE_STATE} (${TREED_DEVICE_STATE_REASON})"
@@ -454,15 +475,28 @@ run_check_mode() {
 
   check_active_ui_mode
 
-  if [ "${TREED_CAMERA_REQUIRED:-0}" = "1" ]; then
+  if [ "${camera_required}" = "1" ]; then
     check_unit_present "crowsnest.service"
     check_unit_active "crowsnest.service"
     check_file_present "crowsnest config" "${crowsnest_conf}"
     check_file_present "Moonraker webcam fragment" "${webcam_fragment}"
   elif unit_exists "crowsnest.service"; then
-    check_warn "camera is optional, crowsnest.service is present"
+    check_unit_active "crowsnest.service"
   else
-    check_warn "camera checks skipped (TREED_CAMERA_REQUIRED=0)"
+    check_warn "camera is optional, crowsnest.service is missing"
+  fi
+
+  if [ -f "${crowsnest_conf}" ]; then
+    camera_config_present=1
+    check_config_value "crowsnest resolution" "${crowsnest_conf}" "resolution" "${camera_resolution}"
+    check_config_value "crowsnest max FPS" "${crowsnest_conf}" "max_fps" "${camera_fps}"
+  fi
+  if [ -f "${webcam_fragment}" ]; then
+    camera_config_present=1
+    check_config_value "Moonraker webcam target FPS" "${webcam_fragment}" "target_fps" "${camera_fps}"
+  fi
+  if [ "${camera_required}" != "1" ] && [ "${camera_config_present}" -eq 0 ]; then
+    check_warn "camera config is optional and absent"
   fi
 
   if [ "${CHECK_FAIL}" -eq 0 ]; then

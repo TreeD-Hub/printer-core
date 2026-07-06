@@ -41,7 +41,7 @@
   - `GET /server/treed/update/status`
   - `POST /server/treed/update/check`
   - `POST /server/treed/update/apply`
-- проверяет release data отдельно для `treed-shell` и `treed-mainshellOS`;
+- проверяет release data отдельно для `treed-shell` и `printer-core`;
 - применяет выбранный `targetId`: UI tag `ui-main-<run>-<attempt>` или системный semver tag `vX.Y.Z` через root-side `/usr/local/sbin/treed-update-apply`.
 
 ## Интеграция
