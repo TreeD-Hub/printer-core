@@ -260,5 +260,6 @@ treed-ui status
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
 - `moonraker-config.sh` деплоит компонент `[treed_update]`, `/usr/local/sbin/treed-update-apply` и sudoers-правило для раздельного UI/system release update из TreeD Shell.
+- `moonraker-config.sh` идемпотентно добавляет `treed-shell` в `moonraker.asvc`, чтобы UI мог перезапустить только `treed-shell.service` через штатный Moonraker service endpoint.
 - `verify.sh` разделяет fatal и diagnostic: сервисы/HTTP/boot-путь, а также доступность MCU-объектов Klipper (`mcu`, `mcu EBBCan`, optional `mcu eddy`) остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-параметры CAN-интерфейса по умолчанию диагностические.
 - `verify.sh` не проверяет runtime-конфиги Klipper (`printer.cfg`, include-цепочку, sensorless-параметры): этап оставлен только для runtime-сервисов и доступности контуров.

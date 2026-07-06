@@ -82,6 +82,7 @@ Assert-Contains "moonraker/components/treed_update.py" '/server/treed/update/che
 Assert-Contains "moonraker/components/treed_update.py" '/server/treed/update/apply' "TreeD update component exposes apply endpoint"
 Assert-Contains "loader/steps/moonraker-config.sh" 'treed-update-apply' "Moonraker config deploys the root-side TreeD updater command"
 Assert-Contains "loader/steps/moonraker-config.sh" '/etc/sudoers\.d/treed-update' "Moonraker config installs restricted sudoers rule for TreeD updater"
+Assert-Contains "loader/steps/moonraker-config.sh" 'ensure_moonraker_allowed_service "treed-shell"' "Moonraker may restart only the local TreeD Shell UI service"
 Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'TREED_DEPLOY_MODE=auto TREED_NONINTERACTIVE=1 bash install\.sh' "TreeD updater reuses the штатный loader install flow"
 Assert-Contains "moonraker/components/treed_update.py" 'targetId' "TreeD update API selects an explicit release target"
 Assert-Contains "runtime-scripts/treed-update/treed-update-apply" 'TARGET_ID="\$\{1:-\}"' "TreeD updater accepts target id as its first argument"

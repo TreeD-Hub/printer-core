@@ -473,6 +473,7 @@ CONFIG_DEPLOYED=1
 log_info "Deployed Moonraker config to ${DST_CONF}"
 
 deploy_base_fragments
+ensure_moonraker_allowed_service "treed-shell"
 ensure_generated_fragments_dir
 deploy_treed_moonraker_components
 deploy_treed_update_command
