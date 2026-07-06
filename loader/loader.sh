@@ -442,6 +442,9 @@ run_check_mode() {
   local camera_required="${TREED_CAMERA_REQUIRED:-0}"
   local camera_resolution="${TREED_CAM_RESOLUTION:-1920x1080}"
   local camera_fps="${TREED_CAM_FPS:-30}"
+  local camera_format="${TREED_CAM_FORMAT:-MJPEG}"
+  local camera_encoder="${TREED_CAM_ENCODER:-HW}"
+  local camera_custom_flags="${TREED_CAM_USTREAMER_CUSTOM_FLAGS:---format=${camera_format} --encoder=${camera_encoder}}"
   local camera_config_present=0
 
   log_info "TreeD loader check mode: read-only actuality check"
@@ -490,6 +493,7 @@ run_check_mode() {
     camera_config_present=1
     check_config_value "crowsnest resolution" "${crowsnest_conf}" "resolution" "${camera_resolution}"
     check_config_value "crowsnest max FPS" "${crowsnest_conf}" "max_fps" "${camera_fps}"
+    check_config_value "crowsnest ustreamer flags" "${crowsnest_conf}" "custom_flags" "${camera_custom_flags}"
   fi
   if [ -f "${webcam_fragment}" ]; then
     camera_config_present=1

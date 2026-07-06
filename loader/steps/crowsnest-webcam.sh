@@ -41,6 +41,9 @@ CAM_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
 # - при признаках нестабильности верните 640x480@10 через env без правки кода.
 CAM_RESOLUTION="${TREED_CAM_RESOLUTION:-1920x1080}"
 CAM_FPS="${TREED_CAM_FPS:-30}"
+CAM_FORMAT="${TREED_CAM_FORMAT:-MJPEG}"
+CAM_ENCODER="${TREED_CAM_ENCODER:-HW}"
+CAM_USTREAMER_CUSTOM_FLAGS="${TREED_CAM_USTREAMER_CUSTOM_FLAGS:---format=${CAM_FORMAT} --encoder=${CAM_ENCODER}}"
 CAM_PORT="8080"
 
 # Блок 3: Подготовка каталогов конфигурации.
@@ -175,7 +178,7 @@ write_crowsnest_conf() {
   log_info "Writing crowsnest.conf -> ${CROWSNEST_CONF}"
   cat > "${CROWSNEST_CONF}" <<EOF
 #### treed-managed: crowsnest-webcam
-#### одиночная USB-камера, 1920x1080@30 (override: TREED_CAM_RESOLUTION/TREED_CAM_FPS)
+#### одиночная USB-камера, 1920x1080@30 MJPEG/HW (override: TREED_CAM_*)
 
 [crowsnest]
 log_path: ${PI_HOME}/printer_data/logs/crowsnest.log
@@ -186,6 +189,7 @@ port: ${CAM_PORT}
 device: ${CAM_DEVICE}
 resolution: ${CAM_RESOLUTION}
 max_fps: ${CAM_FPS}
+custom_flags: ${CAM_USTREAMER_CUSTOM_FLAGS}
 EOF
 }
 
@@ -272,4 +276,4 @@ fi
 
 apply_services
 
-log_info "crowsnest-webcam: DONE (device=${CAM_DEVICE}, res=${CAM_RESOLUTION}, fps=${CAM_FPS})"
+log_info "crowsnest-webcam: DONE (device=${CAM_DEVICE}, res=${CAM_RESOLUTION}, fps=${CAM_FPS}, format=${CAM_FORMAT}, encoder=${CAM_ENCODER})"

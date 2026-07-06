@@ -32,11 +32,20 @@ Loader сам определяет `fresh|update|recover`, выбирает `cle
 ## Диагностика камеры
 
 ```bash
-grep -R "max_fps\|target_fps\|1920x1080" -n \
+grep -R "max_fps\|target_fps\|custom_flags\|1920x1080" -n \
   ~/printer_data/config/crowsnest.conf \
   ~/printer_data/config/moonraker/generated/50-webcam-treed.conf
 
-journalctl -u crowsnest -b --no-pager | grep -Ei "fps|resolution|ustreamer|format|warning|error"
+journalctl -u crowsnest -b --no-pager | grep -Ei "fps|resolution|ustreamer|format|encoder|warning|error"
+v4l2-ctl --list-formats-ext -d "$(sed -n 's/^device:[[:space:]]*//p' ~/printer_data/config/crowsnest.conf | tail -n 1)"
+```
+
+Ожидаемый режим TreeD USB-камеры:
+
+```bash
+resolution: 1920x1080
+max_fps: 30
+custom_flags: --format=MJPEG --encoder=HW
 ```
 
 ## Вариации UI
