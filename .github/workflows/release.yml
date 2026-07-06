@@ -75,7 +75,7 @@ jobs:
           from datetime import datetime, timezone
 
           manifest = {
-              "name": "treed-mainshellOS",
+              "name": "printer-core",
               "version": os.environ["MAIN_SHELL_VERSION"],
               "tag": os.environ["EXPECTED_TAG"],
               "ref": os.environ["GITHUB_REF_NAME"],

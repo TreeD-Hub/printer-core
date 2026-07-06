@@ -15,7 +15,7 @@
 
 ## Loader variables
 
-- `TREED_SHELL_RELEASE_API_URL` — GitHub Releases API URL, default `https://api.github.com/repos/TreeD-Hub/treed-shell/releases`.
+- `TREED_SHELL_RELEASE_API_URL` — GitHub Releases API URL, default `https://api.github.com/repos/TreeD-Hub/printer-ui/releases`.
 - `TREED_SHELL_RELEASE_TAG_PREFIX` — release tag prefix, default `ui-main-`.
 - `TREED_SHELL_UI_ASSET_NAME` — release asset name, default `treed-shell-ui.zip`.
 - `TREED_SHELL_UI_ARCHIVE_URL` — optional direct archive URL; when set, loader skips GitHub API lookup.

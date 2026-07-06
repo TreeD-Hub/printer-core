@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 - `TREED_KLIPPERSCREEN_NETWORK_MANAGER` — answer for NetworkManager install, default `N`.
 - `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` — answer for external installer service start, default `0`.
 - `TREED_UI_MODE` — `ts|ks`, default `ts`; selected screen UI (`ts` = TreeD Shell, `ks` = KlipperScreen).
-- `TREED_SHELL_RELEASE_API_URL` — TreeD Shell releases API, default `https://api.github.com/repos/TreeD-Hub/treed-shell/releases`.
+- `TREED_SHELL_RELEASE_API_URL` — TreeD Printer UI releases API, default `https://api.github.com/repos/TreeD-Hub/printer-ui/releases`.
 - `TREED_SHELL_RELEASE_TAG_PREFIX` — release tag prefix, default `ui-main-`.
 - `TREED_SHELL_UI_ASSET_NAME` — release asset name, default `treed-shell-ui.zip`.
 - `TREED_SHELL_UI_ARCHIVE_URL` — optional direct archive URL; overrides GitHub API lookup.

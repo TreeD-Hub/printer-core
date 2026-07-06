@@ -162,7 +162,7 @@
 - `TREED_UI_MODE` (`ts|ks`, default `ts`; при наличии `/etc/default/treed-ui` bootstrap берет режим оттуда)
 - `TREED_UI_ENV_FILE` (default `/etc/default/treed-ui`)
 - `TREED_SHELL_INSTALL` (`0|1`, default `1`)
-- `TREED_SHELL_RELEASE_API_URL` (default `https://api.github.com/repos/TreeD-Hub/treed-shell/releases`)
+- `TREED_SHELL_RELEASE_API_URL` (default `https://api.github.com/repos/TreeD-Hub/printer-ui/releases`)
 - `TREED_SHELL_RELEASE_TAG_PREFIX` (default `ui-main-`)
 - `TREED_SHELL_UI_ASSET_NAME` (default `treed-shell-ui.zip`)
 - `TREED_SHELL_UI_ARCHIVE_URL` (optional direct archive URL)

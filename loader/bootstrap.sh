@@ -94,7 +94,7 @@ case "${TREED_UI_MODE}" in
     ;;
 esac
 : "${TREED_SHELL_INSTALL:=1}"
-: "${TREED_SHELL_RELEASE_API_URL:=https://api.github.com/repos/TreeD-Hub/treed-shell/releases}"
+: "${TREED_SHELL_RELEASE_API_URL:=https://api.github.com/repos/TreeD-Hub/printer-ui/releases}"
 : "${TREED_SHELL_RELEASE_TAG_PREFIX:=ui-main-}"
 : "${TREED_SHELL_UI_ASSET_NAME:=treed-shell-ui.zip}"
 : "${TREED_SHELL_UI_ARCHIVE_URL:=}"

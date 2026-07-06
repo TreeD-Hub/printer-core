@@ -2,8 +2,8 @@
 MOONRAKER COMPONENT: TREED UPDATE
 =================================
 Назначение:
-- Предоставляет TreeD Shell endpoints проверки и применения обновлений.
-- Разделяет UI bundle `treed-shell` и системный runtime `printer-core`.
+- Предоставляет TreeD Printer UI endpoints проверки и применения обновлений.
+- Разделяет UI bundle `printer-ui` и системный runtime `printer-core`.
 Контур:
 - check/status безопасны и read-only;
 - apply запускает root-side updater через ограниченную команду.
@@ -42,6 +42,12 @@ class ReleaseTarget:
 SEMVER_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
 TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 UI_TAG_RE = re.compile(r"^ui-main-\d+-\d+$")
+TARGET_ALIASES = {
+    "printer-ui": "printer-ui",
+    "treed-shell": "printer-ui",
+    "printer-core": "printer-core",
+    "treed-mainshellos": "printer-core",
+}
 
 
 class TreeDUpdate:
@@ -58,12 +64,18 @@ class TreeDUpdate:
         self.log_file = Path(config.get("log_file", "/tmp/treed-update-apply.log"))
         self.apply_command = config.get("apply_command", "/usr/bin/sudo -n /usr/local/sbin/treed-update-apply")
         self.shell_release_api_url = config.get(
-            "shell_release_api_url",
-            "https://api.github.com/repos/TreeD-Hub/treed-shell/releases",
+            "printer_ui_release_api_url",
+            config.get(
+                "shell_release_api_url",
+                "https://api.github.com/repos/TreeD-Hub/printer-ui/releases",
+            ),
         )
-        self.mainshell_release_api_url = config.get(
-            "mainshell_release_api_url",
-            "https://api.github.com/repos/TreeD-Hub/printer-core/releases",
+        self.core_release_api_url = config.get(
+            "printer_core_release_api_url",
+            config.get(
+                "mainshell_release_api_url",
+                "https://api.github.com/repos/TreeD-Hub/printer-core/releases",
+            ),
         )
         self.last_release_results: Optional[List[Dict[str, Any]]] = None
 
@@ -97,14 +109,18 @@ class TreeDUpdate:
     async def _handle_apply(self, web_request: object) -> Dict[str, Any]:
         # Блок 6: Запуск update для явно выбранного release target.
         current_status = await self._check_releases()
-        target_id = _request_optional_string(web_request, "targetId") or "treed-mainshellos"
+        requested_target_id = _request_optional_string(web_request, "targetId") or "printer-core"
+        target_id = _normalize_target_id(requested_target_id)
+        if target_id is None:
+            raise self.server.error(f"unknown update target: {requested_target_id}")
+
         target = _find_release(current_status["releaseResults"], target_id)
         if target is None:
-            raise self.server.error(f"unknown update target: {target_id}")
+            raise self.server.error(f"unknown update target: {requested_target_id}")
 
         requested_tag = _request_optional_string(web_request, "targetTag")
         target_tag = requested_tag or target.get("latestTag")
-        target_pattern = UI_TAG_RE if target_id == "treed-shell" else TAG_RE
+        target_pattern = UI_TAG_RE if target_id == "printer-ui" else TAG_RE
         if not isinstance(target_tag, str) or target_pattern.match(target_tag) is None:
             raise self.server.error("targetTag does not match the selected update target")
 
@@ -173,7 +189,7 @@ class TreeDUpdate:
             "busy": is_busy,
             "canApply": can_apply,
             "message": message or str(state.get("message") or "Update status ready."),
-            "targetId": state.get("targetId"),
+            "targetId": _normalize_target_id(state.get("targetId")),
             "targetTag": state.get("targetTag"),
             "logPath": str(self.log_file),
             "releaseResults": release_results,
@@ -182,24 +198,24 @@ class TreeDUpdate:
     def _build_targets(self) -> List[ReleaseTarget]:
         return [
             ReleaseTarget(
-                id="treed-shell",
-                label="TreeD Shell UI",
+                id="printer-ui",
+                label="TreeD Printer UI",
                 current_version=self._read_shell_current_version(),
                 release_api_url=self.shell_release_api_url,
                 tag_prefix="ui-main-",
                 version_scheme="tag",
             ),
             ReleaseTarget(
-                id="treed-mainshellos",
+                id="printer-core",
                 label="TreeD Printer Core",
-                current_version=self._read_mainshell_version(),
-                release_api_url=self.mainshell_release_api_url,
+                current_version=self._read_core_version(),
+                release_api_url=self.core_release_api_url,
                 tag_prefix="v",
                 version_scheme="semver",
             ),
         ]
 
-    def _read_mainshell_version(self) -> str:
+    def _read_core_version(self) -> str:
         if not self.version_file.is_file():
             return "unknown"
         version = self.version_file.read_text(encoding="utf-8").strip()
@@ -316,7 +332,7 @@ def _fetch_releases(api_url: str) -> List[Dict[str, Any]]:
         api_url,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": "treed-mainshellOS-update",
+            "User-Agent": "printer-core-update",
         },
     )
     with urllib.request.urlopen(request, timeout=20) as response:
@@ -375,9 +391,13 @@ def _unknown_result(target: ReleaseTarget) -> Dict[str, Any]:
     return _result(target, None, None, "unknown", "Нет данных.")
 
 
+def _normalize_target_id(value: object) -> Optional[str]:
+    return TARGET_ALIASES.get(value) if isinstance(value, str) else None
+
+
 def _find_release(releases: List[Dict[str, Any]], release_id: str) -> Optional[Dict[str, Any]]:
     for release in releases:
-        if release.get("id") == release_id:
+        if _normalize_target_id(release.get("id")) == release_id:
             return release
     return None
 

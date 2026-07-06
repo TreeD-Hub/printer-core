@@ -38,7 +38,7 @@ case "${TREED_SHELL_INSTALL}" in
     ;;
 esac
 
-SHELL_RELEASE_API_URL="${TREED_SHELL_RELEASE_API_URL:-https://api.github.com/repos/TreeD-Hub/treed-shell/releases}"
+SHELL_RELEASE_API_URL="${TREED_SHELL_RELEASE_API_URL:-https://api.github.com/repos/TreeD-Hub/printer-ui/releases}"
 SHELL_RELEASE_TAG_PREFIX="${TREED_SHELL_RELEASE_TAG_PREFIX:-ui-main-}"
 SHELL_UI_ASSET_NAME="${TREED_SHELL_UI_ASSET_NAME:-treed-shell-ui.zip}"
 SHELL_UI_ARCHIVE_URL="${TREED_SHELL_UI_ARCHIVE_URL:-}"
@@ -170,7 +170,7 @@ request = urllib.request.Request(
     api_url,
     headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "treed-mainshellOS-loader",
+        "User-Agent": "printer-core-loader",
     },
 )
 

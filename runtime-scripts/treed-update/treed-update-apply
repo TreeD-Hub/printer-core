@@ -5,7 +5,7 @@ set -euo pipefail
 # RUNTIME SCRIPT: TREED UPDATE APPLY
 # ==========================================
 # Назначение:
-# - Атомарно обновляет release bundle `treed-shell` с rollback-копией.
+# - Атомарно обновляет release bundle `printer-ui` с rollback-копией.
 # - Обновляет checkout `printer-core` и запускает штатный loader.
 # Контур:
 # - root-only, вызывается Moonraker-компонентом через ограниченный sudoers.
@@ -19,13 +19,13 @@ LOG_FILE="${TREED_UPDATE_LOG_FILE:-/tmp/treed-update-apply.log}"
 LOCK_FILE="${TREED_UPDATE_LOCK_FILE:-/run/lock/treed-update.lock}"
 
 case "${TARGET_ID}" in
-  treed-shell)
+  printer-ui|treed-shell)
     [[ "${TARGET_TAG}" =~ ^ui-main-[0-9]+-[0-9]+$ ]] || {
       echo "treed-update: invalid UI target tag: ${TARGET_TAG}" >&2
       exit 2
     }
     ;;
-  treed-mainshellos|printer-core)
+  printer-core|treed-mainshellos)
     [[ "${TARGET_TAG}" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]] || {
       echo "treed-update: invalid system target tag: ${TARGET_TAG}" >&2
       exit 2
@@ -48,7 +48,7 @@ PI_GROUP="${TREED_UPDATE_PI_GROUP:-${PI_USER}}"
 SHELL_RUNTIME_DIR="${TREED_SHELL_RUNTIME_DIR:-$(dirname "${REPO_DIR}")/treed-shell-runtime}"
 SHELL_WEB_DIR="${SHELL_RUNTIME_DIR}/ui"
 SHELL_ARCHIVE_PATH="${SHELL_RUNTIME_DIR}/treed-shell-ui.zip"
-SHELL_RELEASE_API_URL="${TREED_SHELL_RELEASE_API_URL:-https://api.github.com/repos/TreeD-Hub/treed-shell/releases}"
+SHELL_RELEASE_API_URL="${TREED_SHELL_RELEASE_API_URL:-https://api.github.com/repos/TreeD-Hub/printer-ui/releases}"
 SHELL_ASSET_NAME="treed-shell-ui.zip"
 SHELL_SERVICE="${TREED_SHELL_SERVICE:-treed-shell.service}"
 mkdir -p "$(dirname "${STATE_FILE}")" "$(dirname "${LOG_FILE}")" "$(dirname "${LOCK_FILE}")"
@@ -104,7 +104,7 @@ if ! flock -n 9; then
   exit 3
 fi
 
-apply_mainshell_update() {
+apply_core_update() {
   if [ ! -d "${REPO_DIR}/.git" ]; then
     echo "treed-update: repo checkout not found: ${REPO_DIR}" >&2
     return 1
@@ -207,6 +207,6 @@ PY
 # Блок 3: Применение выбранного release target.
 write_state "applying" "1" "Applying ${TARGET_ID} ${TARGET_TAG}." "0"
 case "${TARGET_ID}" in
-  treed-shell) apply_shell_update ;;
-  treed-mainshellos|printer-core) apply_mainshell_update ;;
+  printer-ui|treed-shell) apply_shell_update ;;
+  printer-core|treed-mainshellos) apply_core_update ;;
 esac

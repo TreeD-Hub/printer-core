@@ -110,7 +110,7 @@
 - `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; оставлен для совместимости, активный UI проверяется через `TREED_UI_MODE`.
 - `TREED_UI_MODE` — `ts|ks`, default `ts`; выбранный экранный UI. Если `/etc/default/treed-ui` уже существует, bootstrap берет режим оттуда.
 - `TREED_UI_ENV_FILE` — default `/etc/default/treed-ui`, persisted-состояние выбранного UI.
-- `TREED_SHELL_RELEASE_API_URL` — default `https://api.github.com/repos/TreeD-Hub/treed-shell/releases`, GitHub Releases API.
+- `TREED_SHELL_RELEASE_API_URL` — default `https://api.github.com/repos/TreeD-Hub/printer-ui/releases`, GitHub Releases API.
 - `TREED_SHELL_RELEASE_TAG_PREFIX` — default `ui-main-`, префикс production UI release tag.
 - `TREED_SHELL_UI_ASSET_NAME` — default `treed-shell-ui.zip`, имя release asset.
 - `TREED_SHELL_UI_ARCHIVE_URL` — optional direct archive URL; при наличии loader не обращается к GitHub Releases API.
