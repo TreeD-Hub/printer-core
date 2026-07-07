@@ -55,14 +55,15 @@
 - для `G28 Z` переводит голову в центр пластины из `_TREED_GEOMETRY_CFG`, вызывает базовый `G28.1 Z` с `probe:z_virtual_endstop`, затем уточняет Z через `PROBE` и `SET_KINEMATIC_POSITION`;
 - если `G28 Z` вызван без готовых X/Y, макрос завершится с явной ошибкой и подсказкой сначала выполнить `G28` или `G28 X Y`.
 
-Raw-координаты профиля: `X0` — левый край, `Y0` — ближняя сервисная зона, печатная пластина начинается с `Y65`.
-Для слайсера рабочий `0,0` задается через print-offset и соответствует левому ближнему углу печатной области.
+Raw-координаты профиля и область печати остаются `X0..245 / Y0..245`.
+Стол и print area имеют размер `245x245`, без расширения механики за `Y245`.
+Eddy scan area меньше области печати: текущий штатный сервисный mesh сканирует `X5..240 / Y5..215`, потому что sensing point датчика смещен относительно сопла и физически не покрывает всю заднюю часть стола.
 
 В текущем Eddy-профиле `stepper_z.endstop_pin = probe:z_virtual_endstop`, поэтому:
 - `G28 Z` / кнопка Home Z в UI используют Eddy как обязательный Z-endstop и сразу делают точную PROBE-коррекцию;
 - `TREED_Z_PARK_ZERO_EDDY` остается публичным рабочим макросом поиска Z0 через Eddy после `PROBE_EDDY_CURRENT_CALIBRATE`;
 - `[force_move] enable_force_move: True` входит в штатный профиль, потому что `SET_KINEMATIC_POSITION` нужен для Eddy Z-home correction;
-- `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`.
+- `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`, который строит Eddy service mesh внутри safe scan area, а не скан всей области печати.
 
 `START_PRINT` сначала прогревает стол до `BED_TEMP` и делает preheat сопла, затем выполняет рабочий Eddy Z-home, включает print-offset, строит/загружает mesh и только после этого делает `SMART_PARK`.
 Так Z0, mesh и парковка фиксируются в тепловом состоянии печати.
@@ -137,7 +138,7 @@ LIGHT_OFF
 Базовый порядок:
 1. Навести датчик примерно в центр стола и около 20 мм над поверхностью.
 2. Выполнить `LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy`, затем `TREED_SAVE_CONFIG`.
-3. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`.
+3. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`. Макрос ставит Eddy в центр безопасной scan area, а не в заднюю недостижимую зону стола.
 4. Снова выполнить `TREED_SAVE_CONFIG`.
 5. После рестарта выполнить `G28`, затем для компенсации thermal drift выполнить `SET_IDLE_TIMEOUT TIMEOUT=36000`, `TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4`, пройти запрошенные paper test шаги и сохранить через `TREED_SAVE_CONFIG`.
    Если камера/датчик стабильно выходят выше 56C, `TARGET` подбирать по фактической максимальной температуре Eddy.

@@ -88,6 +88,8 @@ function Get-GcodeMacroBlock {
 # Блок 2: Загрузка Eddy-профиля и профильного compatibility include.
 $RemovedZ0Adjust = "z0" + "_adjust"
 $probeEddy = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
+$geometry = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/geometry.cfg"
+$steppers = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/steppers.cfg"
 $forceMoveCompat = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/eddy_force_move_calibration.cfg"
 $macrosFlow = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_print_flow.cfg"
 $profileReadme = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/README.md"
@@ -97,6 +99,7 @@ $eddyZ0Cfg = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_Z0_CFG"
 $reloadZOffset = Get-GcodeMacroBlock $probeEddy "_RELOAD_Z_OFFSET_FROM_PROBE"
 $setZFromProbe = Get-GcodeMacroBlock $probeEddy "SET_Z_FROM_PROBE"
 $captureLiveZ = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET"
+$eddyMeshCfg = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_MESH_CFG"
 $eddyMesh = Get-GcodeMacroBlock $probeEddy "TREED_BED_MESH_CALIBRATE_EDDY"
 $startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
@@ -107,7 +110,7 @@ Assert-Contains $probeEddy '(?ms)^\[temperature_probe btt_eddy\]\s+sensor_type:\
 Assert-NotContains $probeEddy '(?m)^\[temperature_sensor _btt_eddy_mcu\]\s*$' "Eddy MCU diagnostic temperature must not be exposed as a UI temperature sensor"
 Assert-Contains $profileReadme 'TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4' "Eddy README must document temperature drift calibration"
 Assert-NotContains $forceMoveCompat '(?m)^\[force_move\]' "legacy Eddy calibration include must not duplicate runtime force_move section"
-Assert-Contains $probeEddy '(?m)^\s*y_offset:\s*30\.0\s*$' "Eddy Y offset must place the probe 30mm farther from Y0 than the nozzle"
+Assert-Contains $probeEddy '(?m)^\s*y_offset:\s*-30\.0\s*$' "Eddy Y offset must place the sensing point 30mm closer to Y0 than the nozzle at Y245"
 
 Assert-NotContains $probeEddy $RemovedZ0Adjust "Eddy profile must not use fixed base Z adjustment"
 Assert-NotContains $probeEddy 'Eddy Z0 adjust applied' "Eddy profile must not report fixed SET_GCODE_OFFSET Z adjustment"
@@ -132,8 +135,25 @@ Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)
 Assert-Contains $macrosFlow 'DEFAULT_MESH_METHOD = "scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must prefer scan over rapid_scan for precision"
 Assert-NotContains $macrosFlow 'mesh_method\|default\("rapid_scan"\)' "Adaptive mesh fallback must not silently return to rapid_scan"
 Assert-NotContains $macrosFlow 'DEFAULT_MESH_METHOD = "rapid_scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must not use rapid_scan in precision profile"
+Assert-NotContains $macrosFlow 'full bed mesh calibration' "START_PRINT must not name Eddy service mesh as full bed mesh"
+Assert-Contains $macrosFlow 'Eddy service mesh calibration' "START_PRINT must name the fixed scan-area mesh honestly"
 
-# Блок 5: Bed mesh не должен безусловно переhome-ить уже известные оси.
+# Блок 5: Eddy mesh использует отдельную scan area без изменения механики.
+Assert-Contains $geometry '(?m)^variable_print_size_y:\s*245\.0\s*$' "Print area Y must stay 245"
+Assert-Contains $geometry '(?m)^variable_bed_size_y:\s*245\.0\s*$' "Bed area Y must stay 245"
+Assert-Contains $steppers '(?ms)^\[stepper_y\].*?^position_max:\s*245\s*$' "Stepper Y max must stay 245"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_x:\s*5\.0\s*$' "Eddy scan min X must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_y:\s*5\.0\s*$' "Eddy scan min Y must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_x:\s*240\.0\s*$' "Eddy scan max X must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_y:\s*215\.0\s*$' "Eddy scan max Y must be explicit"
+Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_min:\s*5,5\s*$' "bed_mesh parser fallback must use Eddy scan min"
+Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_max:\s*240,215\s*$' "bed_mesh parser fallback must use Eddy scan max"
+Assert-Contains $eddyMesh 'MESH_MIN=\{scan_min_x\},\{scan_min_y\}' "Eddy mesh must pass explicit scan min to Klipper"
+Assert-Contains $eddyMesh 'MESH_MAX=\{scan_max_x\},\{scan_max_y\}' "Eddy mesh must pass explicit scan max to Klipper"
+Assert-Contains $eddyMesh 'Eddy scan area: X\{scan_min_x\}\.\.\{scan_max_x\} Y\{scan_min_y\}\.\.\{scan_max_y\}' "Eddy mesh must report the smaller scan area"
+Assert-Contains $eddyMesh 'Print area: X\{print_min_x\}\.\.\{print_max_x\} Y\{print_min_y\}\.\.\{print_max_y\}' "Eddy mesh must report the unchanged print area"
+
+# Блок 6: Bed mesh не должен безусловно переhome-ить уже известные оси.
 Assert-NotContains $eddyMesh '(?ms)^\s*BED_MESH_CLEAR\s*$\s*^\s*G28\s*$' "Eddy mesh must not unconditionally run full G28 after a successful START_PRINT homing"
 Assert-Contains $eddyMesh 'printer\.toolhead\.homed_axes\|lower' "Eddy mesh must inspect current homed axes before deciding on homing"
 Assert-ContainsBefore $eddyMesh '(?m)^\s*{% if ''x'' not in homed or ''y'' not in homed %}\s*$' '(?m)^\s*G28\s*$' "Eddy mesh must full-home only when X or Y is unknown"

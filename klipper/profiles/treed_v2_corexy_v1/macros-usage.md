@@ -234,11 +234,14 @@ BED_MESH_CALIBRATE PROFILE=default METHOD=automatic
 ```
 
 Макрос:
-- учитывает offset Eddy и габарит головы;
+- использует отдельную безопасную Eddy scan area `X5..240 / Y5..215`;
+- не расширяет область движения и печати `X0..245 / Y0..245`;
 - чистит старую mesh-трансформацию;
 - доhomит только неизвестные оси;
 - временно отключает print-offset, если он был включен;
-- передает безопасные `MESH_MIN/MESH_MAX` в базовый Klipper `BED_MESH_CALIBRATE_BASE`.
+- передает `MESH_MIN=5,5` и `MESH_MAX=240,215` в базовый Klipper `BED_MESH_CALIBRATE_BASE`.
+
+Это Eddy service mesh в safe scan area, а не скан всей области печати. Scan area меньше стола, потому что sensing point датчика смещен относительно сопла и не может физически покрыть всю заднюю часть `245x245`.
 
 ### `TREED_Z_PARK_ZERO_EDDY`
 
@@ -254,7 +257,7 @@ TREED_Z_PARK_ZERO_EDDY
 PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy
 ```
 
-Первичная калибровка Eddy с учетом геометрии профиля и runtime `[force_move]`. Макрос делает `G28 X Y`, ставит Eddy в центр пластины и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`.
+Первичная калибровка Eddy с учетом безопасной scan area и runtime `[force_move]`. Макрос делает `G28 X Y`, ставит Eddy в центр `X5..240 / Y5..215` и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`.
 
 После интерактивной калибровки сохранять через:
 
