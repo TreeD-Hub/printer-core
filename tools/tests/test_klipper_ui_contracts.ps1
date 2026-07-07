@@ -26,10 +26,24 @@ function Assert-Contains {
   }
 }
 
+function Assert-NotContains {
+  param(
+    [string]$Content,
+    [string]$Pattern,
+    [string]$Message
+  )
+
+  if ($Content -match $Pattern) {
+    throw "FAIL: $Message"
+  }
+}
+
 # Блок 2: Загрузка device contract и include-агрегатора.
 $macros = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros.cfg") -Raw
 $contract = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_ui_contract.cfg") -Raw
 $probeEddy = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg") -Raw
+$utils = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_utils.cfg") -Raw
+$kamp = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_kamp.cfg") -Raw
 
 Assert-Contains $macros '(?m)^\[include macros_ui_contract\.cfg\]\s*$' "macros.cfg must include UI device contract"
 Assert-Contains $contract '(?m)^\[gcode_macro _TREED_UI_CONTRACT\]\s*$' "UI device contract macro must exist"
@@ -85,5 +99,24 @@ foreach ($macro in @(
   Assert-Contains $probeEddy "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "Eddy workflow macro must exist: $macro"
   Assert-Contains $contract ([regex]::Escape($macro)) "required macro list must include $macro"
 }
+
+# Блок 6: Видимая сервисная поверхность Fluidd и скрытые KAMP helper-ы.
+foreach ($macro in @(
+  "CALIBRATE_SCREWS",
+  "CALIBRATE_BED_MESH",
+  "CALIBRATE_EDDY_DRIVE",
+  "CALIBRATE_EDDY_HEIGHT",
+  "CALIBRATE_EDDY_TEMP",
+  "CHECK_Z0"
+)) {
+  Assert-Contains $probeEddy "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "Fluidd service alias must exist: $macro"
+}
+foreach ($macro in @("MOTION_TEST", "MOTION_LIMITS_DEFAULT")) {
+  Assert-Contains $utils "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "Fluidd motion alias must exist: $macro"
+}
+Assert-Contains $kamp '(?m)^\[gcode_macro _TREED_KAMP_SMART_PARK\]\s*$' "KAMP smart park helper must be hidden from Fluidd"
+Assert-Contains $kamp '(?m)^\[gcode_macro _TREED_KAMP_LINE_PURGE\]\s*$' "KAMP line purge helper must be hidden from Fluidd"
+Assert-NotContains $kamp '(?m)^\[gcode_macro SMART_PARK\]\s*$' "KAMP smart park must not be public in active profile"
+Assert-NotContains $kamp '(?m)^\[gcode_macro LINE_PURGE\]\s*$' "KAMP line purge must not be public in active profile"
 
 Write-Host "PASS: Klipper UI device contract"

@@ -13,7 +13,7 @@
 
 Контракт интеграции:
 - Upstream-файлы в этом каталоге являются read-only reference snapshot.
-- Активная TreeD-реализация `SMART_PARK`, `LINE_PURGE` и `_KAMP_Settings` находится в `../macros_kamp.cfg`.
+- Активная TreeD-реализация `_TREED_KAMP_SMART_PARK`, `_TREED_KAMP_LINE_PURGE` и `_KAMP_Settings` находится в `../macros_kamp.cfg`.
 - Профиль не включает файлы этого каталога напрямую, чтобы purge/park использовали `_TREED_GEOMETRY_CFG`.
 
 Как обновлять snapshot:

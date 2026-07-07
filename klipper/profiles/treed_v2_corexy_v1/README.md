@@ -65,11 +65,11 @@ Eddy scan area меньше области печати: текущий штат
 - `[force_move] enable_force_move: True` входит в штатный профиль, потому что `SET_KINEMATIC_POSITION` нужен для Eddy Z-home correction;
 - `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`, который строит Eddy service mesh внутри safe scan area, а не скан всей области печати.
 
-`START_PRINT` сначала прогревает стол до `BED_TEMP` и делает preheat сопла, затем выполняет рабочий Eddy Z-home, включает print-offset, строит/загружает mesh и только после этого делает `SMART_PARK`.
+`START_PRINT` сначала прогревает стол до `BED_TEMP` и делает preheat сопла, затем выполняет рабочий Eddy Z-home, включает print-offset, строит/загружает mesh и только после этого делает скрытый KAMP park helper.
 Так Z0, mesh и парковка фиксируются в тепловом состоянии печати.
-`SMART_PARK` паркует голову у стола на Z0 перед финальным нагревом сопла.
+`_TREED_KAMP_SMART_PARK` паркует голову у стола на Z0 перед финальным нагревом сопла.
 Финальный нагрев задает `EXTRUDER_TEMP`, но ждет только нижнюю готовность `EXTRUDER_TEMP - HOTEND_READY_MARGIN` (`3C` по умолчанию), поэтому штатный overshoot выше цели не блокирует старт purge/первого слоя.
-`LINE_PURGE` после готовности сопла сначала поднимается на `purge_height`, затем едет к старту purge-линии.
+`_TREED_KAMP_LINE_PURGE` после готовности сопла сначала поднимается на `purge_height`, затем едет к старту purge-линии.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;

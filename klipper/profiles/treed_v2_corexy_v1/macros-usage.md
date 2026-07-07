@@ -63,7 +63,7 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive
 4. При необходимости запускает light/full input shaper.
 5. Включает print-offset рабочей зоны.
 6. Загружает или строит bed mesh через Eddy.
-7. Выполняет `SMART_PARK` и `LINE_PURGE` рядом с объектом.
+7. Выполняет скрытые `_TREED_KAMP_SMART_PARK` и `_TREED_KAMP_LINE_PURGE` рядом с объектом.
 8. Запускает runtime-сессию камеры.
 
 Для `MESH=adaptive` нужны object labels в G-code и `enable_object_processing` в Moonraker. Без polygon-метаданных старт завершится ошибкой до финального purge.
@@ -339,20 +339,20 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive SHAPER=light SHAPER_ACCE
 
 ## 9. KAMP park/purge
 
-Обычно эти макросы вручную не вызываются: `START_PRINT` вызывает их сам после homing, print-offset и mesh.
+Эти helper-ы скрыты от Fluidd префиксом `_` и вручную обычно не вызываются: `START_PRINT` вызывает их сам после homing, print-offset и mesh.
 
-### `SMART_PARK`
+### `_TREED_KAMP_SMART_PARK`
 
 ```gcode
-SMART_PARK
+_TREED_KAMP_SMART_PARK
 ```
 
 Паркует голову рядом с минимальной точкой объекта в print-координатах. Требует object metadata через `[exclude_object]`. Если оси не homed, сам вызовет `G28`.
 
-### `LINE_PURGE`
+### `_TREED_KAMP_LINE_PURGE`
 
 ```gcode
-LINE_PURGE
+_TREED_KAMP_LINE_PURGE
 ```
 
 Делает purge-линию рядом с объектом с клипингом по рабочей области. Требует:
@@ -417,6 +417,16 @@ TREED_MOTION_LIMITS_DEFAULT
 ```
 
 Восстанавливает `VELOCITY`, `ACCEL` и `SQUARE_CORNER_VELOCITY` из секции `[printer]`.
+
+Короткие aliases для Fluidd:
+- `CALIBRATE_SCREWS` -> `TREED_SCREWS_TILT_CALIBRATE`;
+- `CALIBRATE_BED_MESH` -> `TREED_EDDY_BED_MESH_CALIBRATE`;
+- `CALIBRATE_EDDY_DRIVE` -> `TREED_EDDY_CALIBRATE_DRIVE_CURRENT`;
+- `CALIBRATE_EDDY_HEIGHT` -> `TREED_EDDY_PRIMARY_HEIGHT_START`;
+- `CALIBRATE_EDDY_TEMP` -> `TREED_EDDY_TEMPERATURE_START`;
+- `CHECK_Z0` -> `TREED_EDDY_CHECK_Z0`;
+- `MOTION_TEST` -> `TREED_XY_MOTION_TEST`;
+- `MOTION_LIMITS_DEFAULT` -> `TREED_MOTION_LIMITS_DEFAULT`.
 
 ## 12. Capability state для TreeD Shell
 
