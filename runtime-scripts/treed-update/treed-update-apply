@@ -51,6 +51,8 @@ SHELL_ARCHIVE_PATH="${SHELL_RUNTIME_DIR}/treed-shell-ui.zip"
 SHELL_RELEASE_API_URL="${TREED_SHELL_RELEASE_API_URL:-https://api.github.com/repos/TreeD-Hub/printer-ui/releases}"
 SHELL_ASSET_NAME="treed-shell-ui.zip"
 SHELL_SERVICE="${TREED_SHELL_SERVICE:-treed-shell.service}"
+SHELL_HTTP_PORT="${TREED_SHELL_HTTP_PORT:-8787}"
+SHELL_START_TIMEOUT="${TREED_SHELL_START_TIMEOUT:-45}"
 mkdir -p "$(dirname "${STATE_FILE}")" "$(dirname "${LOG_FILE}")" "$(dirname "${LOCK_FILE}")"
 exec >>"${LOG_FILE}" 2>&1
 
@@ -144,6 +146,26 @@ raise SystemExit(f"release asset {asset_name!r} not found for {target_tag!r}")
 PY
 }
 
+wait_shell_ready() {
+  local deadline=$((SECONDS + SHELL_START_TIMEOUT))
+  local consecutive_ready=0
+
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    if systemctl is-active --quiet "${SHELL_SERVICE}" \
+      && curl -fsS --max-time 2 "http://127.0.0.1:${SHELL_HTTP_PORT}/index.html" >/dev/null 2>&1; then
+      consecutive_ready=$((consecutive_ready + 1))
+      if [ "${consecutive_ready}" -ge 3 ]; then
+        return 0
+      fi
+    else
+      consecutive_ready=0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
 apply_shell_update() {
   local archive_url=""
   local tmp_archive=""
@@ -194,11 +216,13 @@ PY
     return 1
   fi
 
-  if ! systemctl restart "${SHELL_SERVICE}" || ! systemctl is-active --quiet "${SHELL_SERVICE}"; then
+  if ! systemctl restart "${SHELL_SERVICE}" || ! wait_shell_ready; then
     rm -rf "${SHELL_WEB_DIR}"
     if [ -d "${previous_dir}" ]; then
       mv "${previous_dir}" "${SHELL_WEB_DIR}"
-      systemctl restart "${SHELL_SERVICE}" || true
+      if systemctl restart "${SHELL_SERVICE}"; then
+        wait_shell_ready || true
+      fi
     fi
     return 1
   fi

@@ -20,7 +20,7 @@ import re
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Mapping, Optional, TYPE_CHECKING
 
 LOGGER = logging.getLogger(__name__)
 
@@ -48,12 +48,16 @@ TARGET_ALIASES = {
     "printer-core": "printer-core",
     "treed-mainshellos": "printer-core",
 }
+UPDATE_RUNTIME_OBJECTS: Mapping[str, Optional[List[str]]] = {
+    "print_stats": ["state"],
+}
 
 
 class TreeDUpdate:
     def __init__(self, config: ConfigHelper) -> None:
         # Блок 3: Конфиг путей, release API и публичных endpoints.
         self.server = config.get_server()
+        self.klippy_apis = self.server.lookup_component("klippy_apis")
         self.repo_path = Path(config.get("repo_path", "/home/pi/treed/printer-core"))
         self.version_file = Path(config.get("version_file", str(self.repo_path / "VERSION")))
         self.shell_manifest_path = Path(config.get(
@@ -108,12 +112,13 @@ class TreeDUpdate:
 
     async def _handle_apply(self, web_request: object) -> Dict[str, Any]:
         # Блок 6: Запуск update для явно выбранного release target.
-        current_status = await self._check_releases()
         requested_target_id = _request_optional_string(web_request, "targetId") or "printer-core"
         target_id = _normalize_target_id(requested_target_id)
         if target_id is None:
             raise self.server.error(f"unknown update target: {requested_target_id}")
 
+        await self._ensure_apply_allowed()
+        current_status = await self._check_releases()
         target = _find_release(current_status["releaseResults"], target_id)
         if target is None:
             raise self.server.error(f"unknown update target: {requested_target_id}")
@@ -131,6 +136,8 @@ class TreeDUpdate:
         if state.get("busy") is True:
             return self._build_status("Обновление уже выполняется.")
 
+        # Release-check может быть долгим: закрываем гонку со стартом печати.
+        await self._ensure_apply_allowed()
         self._write_state({
             "status": "queued",
             "busy": True,
@@ -141,6 +148,36 @@ class TreeDUpdate:
         })
         await self._start_apply(target_id, target_tag)
         return self._build_status(f"Запущено обновление {target_tag}.")
+
+    async def _ensure_apply_allowed(self) -> None:
+        # Apply fail-closed: updater не запускается без достоверного print state.
+        try:
+            objects = await self.klippy_apis.query_objects(
+                UPDATE_RUNTIME_OBJECTS,
+                default={},
+            )
+        except Exception as error:
+            raise self.server.error(
+                "printer state is unavailable; update apply is blocked",
+                503,
+            ) from error
+
+        print_stats = objects.get("print_stats") if isinstance(objects, dict) else None
+        print_state = (
+            str(print_stats.get("state", "")).strip().lower()
+            if isinstance(print_stats, dict)
+            else ""
+        )
+        if not print_state:
+            raise self.server.error(
+                "printer state is unavailable; update apply is blocked",
+                503,
+            )
+        if print_state in {"printing", "paused"}:
+            raise self.server.error(
+                "updates are unavailable during active print",
+                409,
+            )
 
     async def _check_releases(self) -> Dict[str, Any]:
         # Блок 7: Проверка обоих release targets.

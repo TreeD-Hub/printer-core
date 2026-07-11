@@ -44,6 +44,7 @@ SHELL_UI_ASSET_NAME="${TREED_SHELL_UI_ASSET_NAME:-treed-shell-ui.zip}"
 SHELL_UI_ARCHIVE_URL="${TREED_SHELL_UI_ARCHIVE_URL:-}"
 SHELL_RUNTIME_DIR="${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}"
 SHELL_WEB_DIR="${TREED_SHELL_WEB_DIR:-${SHELL_RUNTIME_DIR}/ui}"
+SHELL_PREVIOUS_WEB_DIR="${SHELL_RUNTIME_DIR}/ui.previous"
 SHELL_ARCHIVE_PATH="${SHELL_RUNTIME_DIR}/${SHELL_UI_ASSET_NAME}"
 SHELL_RUNTIME_SCRIPT="${SHELL_RUNTIME_DIR}/start-treed-shell-kiosk.sh"
 SHELL_HTTP_PORT="${TREED_SHELL_HTTP_PORT:-8787}"
@@ -244,10 +245,32 @@ install_ui_archive() {
     exit 1
   fi
 
-  rm -rf "${SHELL_WEB_DIR}"
-  mv "${staged_dir}" "${SHELL_WEB_DIR}"
+  rm -rf "${SHELL_PREVIOUS_WEB_DIR}"
+  if [ -d "${SHELL_WEB_DIR}" ]; then
+    mv "${SHELL_WEB_DIR}" "${SHELL_PREVIOUS_WEB_DIR}"
+  fi
+  if ! mv "${staged_dir}" "${SHELL_WEB_DIR}"; then
+    if [ -d "${SHELL_PREVIOUS_WEB_DIR}" ]; then
+      mv "${SHELL_PREVIOUS_WEB_DIR}" "${SHELL_WEB_DIR}"
+    fi
+    log_error "treed-shell-install: failed to publish staged UI bundle"
+    exit 1
+  fi
   chown -R "${PI_USER}:${PI_GROUP}" "${SHELL_WEB_DIR}"
   log_info "treed-shell-install: published UI bundle ${SHELL_WEB_DIR}"
+}
+
+rollback_ui_archive() {
+  if [ ! -d "${SHELL_PREVIOUS_WEB_DIR}" ]; then
+    return 1
+  fi
+
+  systemctl stop treed-shell.service >/dev/null 2>&1 || true
+  rm -rf "${SHELL_WEB_DIR}"
+  mv "${SHELL_PREVIOUS_WEB_DIR}" "${SHELL_WEB_DIR}"
+  chown -R "${PI_USER}:${PI_GROUP}" "${SHELL_WEB_DIR}"
+  systemctl restart treed-shell.service || true
+  log_warn "treed-shell-install: restored previous UI bundle after readiness failure"
 }
 
 # Блок 5: Kiosk launcher, systemd unit и операторская команда переключения.
@@ -423,14 +446,21 @@ EOF
   chmod 0644 "${TREED_UI_ENV_FILE}"
 }
 
-wait_service_active() {
+wait_service_ready() {
   local unit="$1"
   local timeout="$2"
   local i
+  local consecutive_ready=0
 
   for i in $(seq 1 "${timeout}"); do
-    if systemctl is-active --quiet "${unit}"; then
-      return 0
+    if systemctl is-active --quiet "${unit}" \
+      && curl -fsS --max-time 2 "http://127.0.0.1:${SHELL_HTTP_PORT}/index.html" >/dev/null 2>&1; then
+      consecutive_ready=$((consecutive_ready + 1))
+      if [ "${consecutive_ready}" -ge 3 ]; then
+        return 0
+      fi
+    else
+      consecutive_ready=0
     fi
     sleep 1
   done
@@ -451,9 +481,10 @@ apply_selected_ui_mode() {
   case "${UI_MODE}" in
     ts)
       /usr/local/sbin/treed-ui ts
-      if ! wait_service_active "treed-shell.service" "${TREED_SHELL_START_TIMEOUT}"; then
-        log_error "treed-shell-install: treed-shell.service failed to become active within ${TREED_SHELL_START_TIMEOUT}s"
+      if ! wait_service_ready "treed-shell.service" "${TREED_SHELL_START_TIMEOUT}"; then
+        log_error "treed-shell-install: treed-shell.service failed readiness within ${TREED_SHELL_START_TIMEOUT}s"
         print_service_diagnostics "treed-shell.service"
+        rollback_ui_archive || true
         exit 1
       fi
       ;;
