@@ -209,7 +209,31 @@ EOF
 printf 'target\tartifact\tsha256\tconfig\n' > "${MANIFEST_FILE}"
 > "${CHECKSUM_FILE}"
 
-# Блок 4: Функция сборки target с fail-fast и журналом.
+# Блок 4: Проверка итоговой конфигурации EBB42 после olddefconfig.
+validate_ebb42_can_config() {
+  local target_cfg="$1"
+  local required_line=""
+
+  for required_line in \
+    'CONFIG_CANBUS=y' \
+    'CONFIG_CANSERIAL=y' \
+    'CONFIG_STM32_MMENU_CANBUS_PB0_PB1=y' \
+    'CONFIG_STM32_CANBUS_PB0_PB1=y'; do
+    if ! grep -qFx "${required_line}" "${target_cfg}"; then
+      log_error "firmware-build: EBB42 target config missing ${required_line}: ${target_cfg}"
+      return 1
+    fi
+  done
+
+  if grep -qFx 'CONFIG_USBSERIAL=y' "${target_cfg}"; then
+    log_error "firmware-build: EBB42 target config unexpectedly selects USB serial: ${target_cfg}"
+    return 1
+  fi
+
+  return 0
+}
+
+# Блок 5: Функция сборки target с fail-fast и журналом.
 build_target() {
   local target_name="$1"
   local target_config="$2"
@@ -236,6 +260,10 @@ build_target() {
     exit 1
   fi
 
+  if [ "${target_name}" = "ebb42_can" ] && ! validate_ebb42_can_config "${target_cfg}"; then
+    exit 1
+  fi
+
   if [ ! -f "${build_output}" ]; then
     log_error "firmware-build: ${build_output_rel} not found after target ${target_name}"
     exit 1
@@ -250,14 +278,14 @@ build_target() {
   log_info "firmware-build: target ${target_name} OK (${target_artifact})"
 }
 
-# Блок 5: Сборка required target-ов.
+# Блок 6: Сборка required target-ов.
 build_target "main_octopus" "${TREED_FW_MAIN_CONFIG}" '^CONFIG_MACH_STM32F446=y$' "firmware-main-octopus.bin"
 build_target "ebb42_can" "${TREED_FW_EBB_CONFIG}" '^CONFIG_MACH_STM32G0B1=y$' "firmware-ebb42-can.bin"
 
-# Блок 6: Сборка обязательного Eddy target.
+# Блок 7: Сборка обязательного Eddy target.
 build_target "eddy_can" "${TREED_FW_EDDY_CONFIG}" '^CONFIG_MACH_RP2040=y$' "firmware-eddy-can.uf2" "out/klipper.uf2"
 
-# Блок 7: Финализация "latest" ссылки и прав.
+# Блок 8: Финализация "latest" ссылки и прав.
 ln -sfn "${RUN_DIR}" "${LATEST_LINK}"
 chown -R "${PI_USER}:${grp}" "${TREED_FIRMWARE_ARTIFACTS_DIR}" || true
 
