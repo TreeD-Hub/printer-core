@@ -230,16 +230,19 @@ UNLOAD_FILAMENT LENGTH=120 SPEED=8
 ```gcode
 TREED_BED_MESH_CALIBRATE_EDDY PROFILE=default METHOD=scan
 TREED_BED_MESH_CALIBRATE_EDDY PROFILE=treed_adaptive METHOD=scan ADAPTIVE=1 ADAPTIVE_MARGIN=5
+TREED_BED_MESH_CALIBRATE_EDDY PROFILE=eddy_test METHOD=rapid_scan MESH_MIN=80,80 MESH_MAX=165,165 PROBE_COUNT=3,3 SCAN_SPEED=60
 BED_MESH_CALIBRATE PROFILE=default METHOD=automatic
 ```
 
 Макрос:
 - использует отдельную безопасную Eddy scan area `X5..240 / Y5..215`;
+- принимает `MESH_MIN`/`MESH_MAX` внутри этой области и отвергает некорректные координаты до движения;
 - не расширяет область движения и печати `X0..245 / Y0..245`;
 - чистит старую mesh-трансформацию;
 - доhomит только неизвестные оси;
 - временно отключает print-offset, если он был включен;
-- передает `MESH_MIN=5,5` и `MESH_MAX=240,215` в базовый Klipper `BED_MESH_CALIBRATE_BASE`.
+- передает эффективные `MESH_MIN`/`MESH_MAX` в базовый Klipper `BED_MESH_CALIBRATE_BASE`;
+- принимает `SCAN_SPEED` только для `METHOD=rapid_scan`; для остальных методов скорость XY берется из `[bed_mesh] speed`.
 
 Это Eddy service mesh в safe scan area, а не скан всей области печати. Scan area меньше стола, потому что sensing point датчика смещен относительно сопла и не может физически покрыть всю заднюю часть `245x245`.
 

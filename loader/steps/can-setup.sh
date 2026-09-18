@@ -115,6 +115,12 @@ if [ -z "${IP_BIN}" ]; then
   exit 1
 fi
 
+KLIPPER_STATE="$(systemctl show --property=ActiveState --value klipper.service 2>/dev/null || true)"
+if [ "${KLIPPER_STATE}" != "inactive" ]; then
+  echo "[can-setup] ERROR: refuse reconfiguration while klipper.service is ${KLIPPER_STATE:-unknown}" >&2
+  exit 1
+fi
+
 wait_iface_sec=0
 while ! "${IP_BIN}" link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; do
   if [ "${wait_iface_sec}" -ge "${TREED_CAN_IFACE_WAIT_SEC}" ]; then
@@ -166,7 +172,7 @@ cat > "${CAN_UNIT}" <<'EOF'
 Description=TreeD CAN interface setup
 After=local-fs.target
 Wants=network-pre.target
-Before=network.target
+Before=network.target klipper.service
 
 [Service]
 Type=oneshot
