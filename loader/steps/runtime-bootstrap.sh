@@ -124,6 +124,11 @@ ensure_repo_present() {
       '/moonraker/components/treed_*.py' \
       '/moonraker/components/__pycache__/treed_*.pyc'
   fi
+  if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
+    runtime_repo_add_excludes "${repo_dir}" \
+      '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/__pycache__/treed_motor_*.pyc'
+  fi
 
   sync_managed_repo "${repo_dir}" "${repo_url}" "${repo_ref}" "${repo_branch}" "${component}"
 
@@ -131,6 +136,11 @@ ensure_repo_present() {
     runtime_repo_add_excludes "${repo_dir}" \
       '/moonraker/components/treed_*.py' \
       '/moonraker/components/__pycache__/treed_*.pyc'
+  fi
+  if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
+    runtime_repo_add_excludes "${repo_dir}" \
+      '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/__pycache__/treed_motor_*.pyc'
   fi
 }
 
@@ -582,6 +592,10 @@ fi
 
 # Блок 6: Klipper env/service (репозиторий ожидается локально, clone fallback включен).
 ensure_repo_present "${KLIPPER_DIR}" "${KLIPPER_REPO}" "${KLIPPER_REF}" "${KLIPPER_BRANCH}" "Klipper"
+for extension in "${REPO_DIR}/klipper-host/"treed_motor_*.py; do
+  [ -f "${extension}" ] || { log_error "runtime-bootstrap: missing motor extension"; exit 1; }
+  install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${extension}" "${KLIPPER_DIR}/klippy/extras/$(basename "${extension}")"
+done
 
 KLIPPER_REQ_FILE="${KLIPPER_DIR}/scripts/klippy-requirements.txt"
 if [ ! -f "${KLIPPER_REQ_FILE}" ]; then

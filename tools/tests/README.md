@@ -15,11 +15,14 @@
 - `test_runtime_repo_sync.sh` — runnable-проверка exact Git sync, восстановления detached/shallow/wrong-origin checkout и сохранения dirty данных.
 - `test_mainsail_bundle_offline.sh` — runnable offline deployment bundled Mainsail без обращения к GitHub.
 - `test_runtime_update_contracts.ps1` — единая проверка runtime manifest, порядка host/firmware update и production fail-closed gate.
+- `test_motor_calibration_math.py` — геометрия CoreXY, синхронный анализ ADXL, оценка повторной проверки и отказ при потере сэмплов.
+- `test_motor_wave.py` — границы и декодирование таблицы токов TMC5160.
+- `test_motor_calibration_state.py` — несовместимый профиль, отмена, блокировка homing и атомарная сохранность прежнего файла.
 
 ## Контракт
 
 - тесты не требуют Raspberry Pi, systemd или WSL;
-- проверки статические и дополняют, но не заменяют запуск shell-скриптов на целевой Linux-системе.
+- проверки дополняют, но не заменяют запуск shell-скриптов на целевой Linux-системе.
 
 ## Запуск
 
@@ -33,3 +36,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_moonraker_
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_treed_shell_update_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_runtime_update_contracts.ps1"
 ```
+
+Из корня репозитория: `python tools/tests/test_motor_calibration_math.py` и
+`python tools/tests/test_motor_wave.py`.
+Сценарии состояния: `python tools/tests/test_motor_calibration_state.py`.

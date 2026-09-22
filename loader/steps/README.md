@@ -10,9 +10,9 @@
 | 2 | `timezone-sync.sh` | required | Синхронизация timezone/NTP. |
 | 3 | `maintenance-stop.sh` | required | Остановка runtime-сервисов перед provisioning. |
 | 4 | `packages-core.sh` | required | Базовые системные пакеты и numpy/matplotlib/BLAS-зависимости. |
-| 5 | `runtime-bootstrap.sh` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов. |
+| 5 | `runtime-bootstrap.sh` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов; установка TreeD motor host extension в закреплённый Klipper. |
 | 6 | `can-setup.sh` | required | Подъем CAN интерфейса (`can0`) через systemd oneshot + `ip link`. |
-| 7 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum. |
+| 7 | `firmware-build.sh` | required | Сборка firmware main+EBB(+Eddy), публикация artifact/report/checksum; build ID учитывает TreeD motor host-код. |
 | 8 | `boot-hdmi-config.sh` | required | Backend-aware HDMI policy: `auto` (удаляет forced `video=`), `fixed` (добавляет `video=`), `off` (не трогает `video=`). |
 | 9 | `plymouth-theme-install.sh` | required | Установка темы Plymouth. |
 | 10 | `plymouth-initramfs.sh` | required | Пересборка initramfs. |

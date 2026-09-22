@@ -151,6 +151,9 @@ LIGHT_OFF
 
 ADXL345 подключен на EBB42 в `ebb42_can.cfg`. Секция `input_shaper.cfg` намеренно не содержит частоты, типы и damping ratio: эти значения живут в stock `SAVE_CONFIG`-блоке `printer.cfg`, чтобы `SHAPER_CALIBRATE` мог сохранять новые результаты без конфликта с include.
 
+Измерение гармоник двигателей задаёт `motor_calibration.cfg`; состояние и
+границы фазного управления описаны в `docs/motor-noise-calibration.md`.
+
 Ручная full-калибровка:
 
 ```gcode
