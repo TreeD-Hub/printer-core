@@ -4,6 +4,7 @@ MOONRAKER COMPONENT: TREED UPDATE
 Назначение:
 - Предоставляет TreeD Printer UI endpoints проверки и применения обновлений.
 - Разделяет UI bundle `printer-ui` и системный runtime `printer-core`.
+- Сверяет manifest/build с live-версиями required MCU без прошивки.
 Контур:
 - check/status безопасны и read-only;
 - apply запускает root-side updater через ограниченную команду.
@@ -13,14 +14,17 @@ from __future__ import annotations
 
 # Блок 1: Импорты и базовые типы.
 import asyncio
+import csv
+import hashlib
 import json
 import logging
-import os
 import re
+import subprocess
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Mapping, Optional, Tuple, TYPE_CHECKING
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +55,18 @@ TARGET_ALIASES = {
 UPDATE_RUNTIME_OBJECTS: Mapping[str, Optional[List[str]]] = {
     "print_stats": ["state"],
 }
+FIRMWARE_RUNTIME_OBJECTS: Mapping[str, Optional[List[str]]] = {
+    "mcu": ["mcu_version", "mcu_build_versions", "last_stats"],
+    "mcu EBBCan": ["mcu_version", "mcu_build_versions", "last_stats"],
+    "mcu eddy": ["mcu_version", "mcu_build_versions", "last_stats"],
+}
+MCU_TARGETS = (
+    ("main_octopus", "Octopus", "mcu"),
+    ("ebb42_can", "EBBCan", "mcu EBBCan"),
+    ("eddy_can", "Eddy", "mcu eddy"),
+)
+GIT_VERSION_RE = re.compile(r"(?:^|-)g([0-9a-fA-F]{7,40})(-dirty)?$")
+PLAIN_SHA_RE = re.compile(r"^([0-9a-fA-F]{7,40})(-dirty)?$")
 
 
 class TreeDUpdate:
@@ -66,6 +82,19 @@ class TreeDUpdate:
         ))
         self.state_file = Path(config.get("state_file", "/tmp/treed-update-state.json"))
         self.log_file = Path(config.get("log_file", "/tmp/treed-update-apply.log"))
+        self.runtime_manifest_path = Path(config.get(
+            "runtime_manifest_path",
+            str(self.repo_path / "runtime-versions.env"),
+        ))
+        self.klipper_repo_path = Path(config.get("klipper_repo_path", "/home/pi/klipper"))
+        self.firmware_manifest_path = Path(config.get(
+            "firmware_manifest_path",
+            "/home/pi/treed/firmware-artifacts/treed-v2/latest/manifest.tsv",
+        ))
+        self.firmware_observation_file = Path(config.get(
+            "firmware_observation_file",
+            "/tmp/treed-firmware-observed.json",
+        ))
         self.apply_command = config.get("apply_command", "/usr/bin/sudo -n /usr/local/sbin/treed-update-apply")
         self.shell_release_api_url = config.get(
             "printer_ui_release_api_url",
@@ -101,14 +130,23 @@ class TreeDUpdate:
             self._handle_apply,
             wrap_result=False,
         )
+        self.server.register_endpoint(
+            "/server/treed/update/firmware",
+            ["GET"],
+            self._handle_firmware_status,
+            wrap_result=False,
+        )
 
     async def _handle_status(self, _web_request: object) -> Dict[str, Any]:
         # Блок 4: Локальный статус без сетевого refresh.
-        return self._build_status(None)
+        return await self._with_firmware(self._build_status(None))
 
     async def _handle_check(self, _web_request: object) -> Dict[str, Any]:
         # Блок 5: Refresh release data из GitHub Releases API.
-        return await self._check_releases()
+        return await self._with_firmware(await self._check_releases())
+
+    async def _handle_firmware_status(self, _web_request: object) -> Dict[str, Any]:
+        return await self._firmware_status()
 
     async def _handle_apply(self, web_request: object) -> Dict[str, Any]:
         # Блок 6: Запуск update для явно выбранного release target.
@@ -130,11 +168,15 @@ class TreeDUpdate:
             raise self.server.error("targetTag does not match the selected update target")
 
         if target.get("status") != "available":
-            return self._build_status(f"Обновление {target_id} не требуется.")
+            return await self._with_firmware(
+                self._build_status(f"Обновление {target_id} не требуется.")
+            )
 
         state = self._read_state()
         if state.get("busy") is True:
-            return self._build_status("Обновление уже выполняется.")
+            return await self._with_firmware(
+                self._build_status("Обновление уже выполняется.")
+            )
 
         # Release-check может быть долгим: закрываем гонку со стартом печати.
         await self._ensure_apply_allowed()
@@ -147,7 +189,156 @@ class TreeDUpdate:
             "exitCode": 0,
         })
         await self._start_apply(target_id, target_tag)
-        return self._build_status(f"Запущено обновление {target_tag}.")
+        return await self._with_firmware(
+            self._build_status(f"Запущено обновление {target_tag}.")
+        )
+
+    async def _with_firmware(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        payload["firmware"] = await self._firmware_status()
+        return payload
+
+    async def _firmware_status(self) -> Dict[str, Any]:
+        # Блок 7: Раздельная сверка manifest, host checkout, build и live MCU.
+        captured_at = _utc_now()
+        runtime = _read_env_manifest(self.runtime_manifest_path)
+        expected_commit = runtime.get("TREED_KLIPPER_REF")
+        checkout = await asyncio.to_thread(_git_checkout_status, self.klipper_repo_path)
+        build_rows = await asyncio.to_thread(
+            _read_firmware_manifest,
+            self.firmware_manifest_path,
+        )
+        try:
+            klippy_info = await self.klippy_apis.get_klippy_info(default={})
+        except Exception:
+            LOGGER.warning("treed_update: Klippy info unavailable", exc_info=True)
+            klippy_info = {}
+        klippy_info = klippy_info if isinstance(klippy_info, dict) else {}
+        klippy_state = str(klippy_info.get("state", "")).lower()
+        running_version = str(klippy_info.get("software_version", "")) or None
+        objects: Dict[str, Any] = {}
+        if klippy_state == "ready":
+            try:
+                queried = await self.klippy_apis.query_objects(
+                    FIRMWARE_RUNTIME_OBJECTS,
+                    default={},
+                )
+            except Exception:
+                LOGGER.warning("treed_update: live MCU status unavailable", exc_info=True)
+                queried = {}
+            if isinstance(queried, dict):
+                objects = queried
+
+        cached = _read_json_dict(self.firmware_observation_file)
+        cached_mcus = cached.get("mcus", {}) if isinstance(cached.get("mcus"), dict) else {}
+        mcus: List[Dict[str, Any]] = []
+        fresh_cache: Dict[str, Any] = {}
+        for target_id, label, object_name in MCU_TARGETS:
+            object_status = objects.get(object_name)
+            reported_version = (
+                str(object_status.get("mcu_version", "")).strip()
+                if isinstance(object_status, dict)
+                else ""
+            )
+            row = build_rows.get(target_id, {})
+            mcu_status = _build_mcu_status(
+                target_id=target_id,
+                label=label,
+                object_name=object_name,
+                expected_commit=expected_commit,
+                reported_version=reported_version,
+                klipper_repo_path=self.klipper_repo_path,
+                build_row=row,
+                captured_at=captured_at,
+                reachable=klippy_state == "ready" and isinstance(object_status, dict),
+            )
+            if reported_version and isinstance(object_status, dict):
+                mcu_status["stats"] = object_status.get("last_stats")
+                fresh_cache[target_id] = {
+                    "reportedVersion": reported_version,
+                    "reportedCommit": mcu_status.get("reportedCommit"),
+                    "capturedAt": captured_at,
+                    "stats": object_status.get("last_stats"),
+                }
+            else:
+                last_known = cached_mcus.get(target_id)
+                if isinstance(last_known, dict):
+                    mcu_status["lastKnown"] = {**last_known, "stale": True}
+            mcus.append(mcu_status)
+
+        if fresh_cache:
+            merged_cache = dict(cached_mcus)
+            merged_cache.update(fresh_cache)
+            try:
+                _write_json_atomic(
+                    self.firmware_observation_file,
+                    {"capturedAt": captured_at, "mcus": merged_cache},
+                )
+            except OSError:
+                LOGGER.warning("treed_update: cannot persist MCU observation", exc_info=True)
+
+        running_commit, running_dirty = _reported_commit(
+            running_version,
+            self.klipper_repo_path,
+        )
+        if not expected_commit or not checkout.get("commit") or not running_commit:
+            host_status = "unknown"
+        elif checkout.get("dirty") is not False or running_dirty:
+            host_status = "unknown"
+        elif checkout.get("commit") == expected_commit and running_commit == expected_commit:
+            host_status = "current"
+        else:
+            host_status = "update_required"
+        host_current = host_status == "current"
+        build_current = all(
+            item.get("build", {}).get("status") == "current" for item in mcus
+        )
+        build_update_required = any(
+            item.get("build", {}).get("status") == "update_required" for item in mcus
+        )
+        mcu_states = [str(item.get("status")) for item in mcus]
+        if any(state == "unreachable" for state in mcu_states):
+            overall = "unreachable"
+        elif host_status == "update_required" or build_update_required \
+                or any(state == "update_required" for state in mcu_states):
+            overall = "update_required"
+        elif host_current and build_current and all(state == "current" for state in mcu_states):
+            overall = "current"
+        else:
+            overall = "unknown"
+
+        if host_current and build_current \
+                and any(state == "update_required" for state in mcu_states):
+            message = "Программная часть обновлена; требуется обновление MCU."
+        elif overall == "update_required":
+            message = "Требуется обновление host, firmware-артефактов или MCU."
+        elif overall == "current":
+            message = "Host, артефакты и версии, сообщённые MCU, соответствуют manifest."
+        elif overall == "unreachable":
+            message = "Одна или несколько MCU недоступны; последнее известное значение помечено как устаревшее."
+        else:
+            message = "Соответствие firmware не подтверждено."
+
+        return {
+            "status": overall,
+            "message": message,
+            "capturedAt": captured_at,
+            "source": "live_klippy_objects" if klippy_state == "ready" else "klippy_unavailable",
+            "verification": "reported version and Git identity; not a device binary readback",
+            "expectedCommit": expected_commit,
+            "host": {
+                "installedCheckout": checkout,
+                "runningVersion": running_version,
+                "runningCommit": running_commit,
+                "runningDirty": running_dirty,
+                "status": host_status,
+            },
+            "buildStatus": (
+                "current" if build_current
+                else "update_required" if build_update_required
+                else "unknown"
+            ),
+            "mcus": mcus,
+        }
 
     async def _ensure_apply_allowed(self) -> None:
         # Apply fail-closed: updater не запускается без достоверного print state.
@@ -355,7 +546,195 @@ class TreeDUpdate:
         )
 
 
-# Блок 9: Pure helpers.
+# Блок 9: Pure helpers firmware status.
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _read_env_manifest(path: Path) -> Dict[str, str]:
+    if not path.is_file():
+        return {}
+    result: Dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        match = re.match(r'^([A-Z0-9_]+)="([^"]*)"$', line.strip())
+        if match:
+            result[match.group(1)] = match.group(2)
+    return result
+
+
+def _read_json_dict(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _sha256_file(path: Path) -> Optional[str]:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _read_firmware_manifest(path: Path) -> Dict[str, Dict[str, Any]]:
+    if not path.is_file():
+        return {}
+    try:
+        with path.open(encoding="utf-8", errors="replace", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+    except (OSError, csv.Error):
+        return {}
+    result: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        target = str(row.get("target", ""))
+        if target:
+            result[target] = dict(row)
+    return result
+
+
+def _git_checkout_status(path: Path) -> Dict[str, Any]:
+    if not (path / ".git").exists():
+        return {"commit": None, "dirty": None, "source": str(path)}
+    commit = _git_output(path, "rev-parse", "HEAD")
+    dirty_output = _git_output(path, "status", "--porcelain", "--untracked-files=all")
+    return {
+        "commit": commit,
+        "dirty": None if dirty_output is None else bool(dirty_output),
+        "source": str(path),
+    }
+
+
+def _git_output(path: Path, *args: str) -> Optional[str]:
+    try:
+        process = subprocess.run(
+            ["git", "-C", str(path), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if process.returncode != 0:
+        return None
+    return process.stdout.strip()
+
+
+def _reported_commit(version: Optional[str], repo_path: Path) -> Tuple[Optional[str], bool]:
+    value = (version or "").strip()
+    match = GIT_VERSION_RE.search(value) or PLAIN_SHA_RE.match(value)
+    if match is None:
+        return None, False
+    short_commit = match.group(1).lower()
+    dirty = bool(match.group(2))
+    resolved = _git_output(repo_path, "rev-parse", "--verify", f"{short_commit}^{{commit}}")
+    if resolved is None or not re.fullmatch(r"[0-9a-f]{40}", resolved):
+        return None, dirty
+    return resolved, dirty
+
+
+def _build_artifact_status(
+    row: Mapping[str, Any],
+    expected_commit: Optional[str],
+) -> Dict[str, Any]:
+    if not row:
+        return {"status": "unknown"}
+    artifact_value = str(row.get("artifact", ""))
+    config_value = str(row.get("config", ""))
+    dictionary_value = str(row.get("dictionary", ""))
+    artifact = Path(artifact_value) if artifact_value else None
+    config = Path(config_value) if config_value else None
+    dictionary = Path(dictionary_value) if dictionary_value else None
+    recorded_artifact_sha = str(row.get("artifact_sha256", ""))
+    recorded_config_sha = str(row.get("config_sha256", ""))
+    recorded_dictionary_sha = str(row.get("dictionary_sha256", ""))
+    checksums_match = bool(
+        recorded_artifact_sha
+        and recorded_config_sha
+        and recorded_dictionary_sha
+        and artifact is not None
+        and config is not None
+        and dictionary is not None
+        and _sha256_file(artifact) == recorded_artifact_sha
+        and _sha256_file(config) == recorded_config_sha
+        and _sha256_file(dictionary) == recorded_dictionary_sha
+    )
+    source_commit = str(row.get("klipper_commit", "")) or None
+    current = bool(expected_commit and source_commit == expected_commit and checksums_match)
+    status = (
+        "current" if current
+        else "update_required" if checksums_match and expected_commit and source_commit
+        else "unknown"
+    )
+    return {
+        "status": status,
+        "sourceCommit": source_commit,
+        "artifact": artifact_value or None,
+        "artifactSha256": recorded_artifact_sha or None,
+        "config": config_value or None,
+        "configSha256": recorded_config_sha or None,
+        "dictionary": dictionary_value or None,
+        "dictionarySha256": recorded_dictionary_sha or None,
+        "checksumsMatch": checksums_match,
+    }
+
+
+def _build_mcu_status(
+    *,
+    target_id: str,
+    label: str,
+    object_name: str,
+    expected_commit: Optional[str],
+    reported_version: str,
+    klipper_repo_path: Path,
+    build_row: Mapping[str, Any],
+    captured_at: str,
+    reachable: bool,
+) -> Dict[str, Any]:
+    reported_commit, dirty = _reported_commit(reported_version, klipper_repo_path)
+    if not reachable:
+        status = "unreachable"
+    elif not reported_version or reported_commit is None or dirty or not expected_commit:
+        status = "unknown"
+    elif reported_commit == expected_commit:
+        status = "current"
+    else:
+        status = "update_required"
+    return {
+        "id": target_id,
+        "label": label,
+        "object": object_name,
+        "status": status,
+        "expectedCommit": expected_commit,
+        "reportedVersion": reported_version or None,
+        "reportedCommit": reported_commit,
+        "dirty": dirty,
+        "capturedAt": captured_at,
+        "source": "klippy_object" if reachable else "unavailable",
+        "build": _build_artifact_status(build_row, expected_commit),
+    }
+
+
+# Блок 10: Pure helpers release update.
 def _request_optional_string(web_request: object, key: str) -> Optional[str]:
     get_value = getattr(web_request, "get")
     value = get_value(key, None)
@@ -439,6 +818,6 @@ def _find_release(releases: List[Dict[str, Any]], release_id: str) -> Optional[D
     return None
 
 
-# Блок 10: Entry-point загрузки компонента Moonraker.
+# Блок 11: Entry-point загрузки компонента Moonraker.
 def load_component(config: ConfigHelper) -> TreeDUpdate:
     return TreeDUpdate(config)

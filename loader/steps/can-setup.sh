@@ -186,6 +186,8 @@ cat > "${CAN_UNIT}" <<'EOF'
 Description=TreeD CAN interface setup
 After=local-fs.target
 Before=klipper.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=oneshot

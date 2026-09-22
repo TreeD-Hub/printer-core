@@ -21,7 +21,7 @@
 | 13 | `plymouth-systemd.sh` | required | Политика `getty@tty1` и `plymouth-quit*`. |
 | 14 | `klipper-sync.sh` | required | Синхронизация дерева `klipper/` в staging. |
 | 15 | `klipper-core.sh` | required | Раскладка staging в runtime (`printer_data/config`). |
-| 16 | `klipper-anti-shutdown.sh` | required | Обработка состояния MCU `shutdown`. |
+| 16 | `klipper-anti-shutdown.sh` | required | Пассивная фиксация MCU `shutdown`; restart выполняет только оператор. |
 | 17 | `mainsail-web.sh` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
 | 18 | `moonraker-config.sh` | required | Деплой Moonraker-конфига и компонента. |
 | 19 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
@@ -249,10 +249,11 @@ treed-ui status
 
 - `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen`, `restart-ms`, ждет появление интерфейса и выполняет reinit-циклы при старте.
 - `packages-core.sh` перед `apt update/install` сверяет установленный пакетный набор через `dpkg-query`; если все пакеты уже актуально установлены, apt-фаза пропускается.
-- `firmware-build.sh` required: принимает только manifest SHA Klipper и пишет для каждого target полный Klipper commit, config SHA-256 и artifact SHA-256.
+- `firmware-build.sh` required: принимает только manifest SHA Klipper и пишет для каждого target полный Klipper commit, config/artifact/`klipper.dict` SHA-256.
 - `firmware-build.sh` перед сборкой сверяет `inputs.env` в `latest`: commit Klipper и checksum target-конфигов; при совпадении входов повторная сборка пропускается.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
+- `klipper-anti-shutdown.sh` не запускает service restart или `FIRMWARE_RESTART`; readiness и физическая готовность проверяются отдельно.
 - `runtime-bootstrap.sh` после подготовки `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}` проверяет импорт `numpy` и `matplotlib`: если пакет уже есть, логирует skip; если нет, ставит текущий стабильный релиз через pip.
 - `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: в default-режиме (`TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0`) проверяется только состояние `can0`, а `canbus_query.py` не запускается; strict UUID-gate включается через `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
 - `runtime-bootstrap.sh` устанавливает/обновляет Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`; при `TREED_CAMERA_REQUIRED=1` ошибки Crowsnest становятся блокирующими.

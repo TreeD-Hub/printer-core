@@ -53,6 +53,9 @@ class FakeKlippyApis:
             return default
         return {"print_stats": {"state": print_state}}
 
+    async def get_klippy_info(self, default=None):
+        return {"state": "error", "software_version": "test"}
+
 
 class FakeServer:
     def __init__(self, print_state):
