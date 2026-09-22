@@ -8,8 +8,9 @@
 
 ## Контракт
 
-- `loader/steps/mainsail-web.sh` по умолчанию предпочитает этот архив (`TREED_MAINSAIL_PREFER_LOCAL_ZIP=1`).
-- Если нужен live-download из GitHub Releases, установите `TREED_MAINSAIL_PREFER_LOCAL_ZIP=0`.
+- `loader/steps/mainsail-web.sh` всегда сначала проверяет этот архив по version/SHA-256 из `runtime-versions.env`.
+- GitHub Releases используется только как fallback/recovery, если bundled artifact отсутствует или повреждён.
+- Существующий runtime web-root принимается как fallback только при точном совпадении версии с manifest.
 - После установки Moonraker update_manager может обновлять Mainsail в runtime web-root.
 
 ## Runtime

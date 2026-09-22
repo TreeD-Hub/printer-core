@@ -96,8 +96,7 @@
 - `TREED_MAINSAIL_WEB_PATH` — default `/var/www/mainsail`, путь web-root Mainsail (используется в `mainsail-web` и `moonraker-config`).
 - `TREED_MAINSAIL_ZIP_URL` / `TREED_MAINSAIL_VERSION` / `TREED_MAINSAIL_ZIP_SHA256` — immutable artifact contract из runtime manifest.
 - `TREED_MAINSAIL_MOONRAKER_PROXY_URL` — upstream Moonraker для nginx reverse-proxy в `mainsail-web` (default `http://127.0.0.1:7125`).
-- `TREED_MAINSAIL_LOCAL_ZIP` — local fallback archive, default `${REPO_DIR}/mainsail/web/mainsail.zip`.
-- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` — `0|1`, default `1`; bundled archive используется только при совпадении SHA-256 с manifest.
+- `TREED_MAINSAIL_LOCAL_ZIP` — primary offline artifact, default `${REPO_DIR}/mainsail/web/mainsail.zip`; принимается только при совпадении версии и SHA-256 с manifest.
 - `TREED_MAINSAIL_WGET_TIMEOUT` / `TREED_MAINSAIL_WGET_CONNECT_TIMEOUT` / `TREED_MAINSAIL_WGET_READ_TIMEOUT` — таймауты загрузки `mainsail.zip`.
 - `TREED_MAINSAIL_WGET_TRIES` — число попыток загрузки `mainsail.zip` (default `3`).
 - `TREED_MAINSAIL_ALLOW_EXISTING_FALLBACK` — `0|1`, default `1`; при недоступном GitHub разрешает использовать существующий валидный web-root Mainsail.

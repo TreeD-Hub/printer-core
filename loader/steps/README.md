@@ -132,8 +132,7 @@
 - `TREED_MAINSAIL_NGINX_SITE_AVAILABLE` (default `/etc/nginx/sites-available/mainsail`)
 - `TREED_MAINSAIL_NGINX_SITE_ENABLED` (default `/etc/nginx/sites-enabled/mainsail`)
 - `TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED` (default `/etc/nginx/sites-enabled/default`; удаляется при активации сайта Mainsail)
-- `TREED_MAINSAIL_LOCAL_ZIP` (default `${REPO_DIR}/mainsail/web/mainsail.zip`; bundled archive для offline install)
-- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` (`0|1`, default `1`; local archive принимается только с manifest SHA-256)
+- `TREED_MAINSAIL_LOCAL_ZIP` (default `${REPO_DIR}/mainsail/web/mainsail.zip`; primary offline artifact, принимается только с manifest version/SHA-256)
 - `TREED_MAINSAIL_WGET_TIMEOUT` (default `30`; общий timeout `wget` для `mainsail.zip`)
 - `TREED_MAINSAIL_WGET_DNS_TIMEOUT` (default `10`)
 - `TREED_MAINSAIL_WGET_CONNECT_TIMEOUT` (default `10`)
@@ -260,7 +259,7 @@ treed-ui status
 - `klipper-core.sh` раскладывает `printer_data/config` напрямую из staging-дерева `klipper/` (источник правды — репозиторий).
 - Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. Профиль переопределяет `G28` через `macros_homing.cfg`: X/Y идут через `G28_BASE` с отходом на 10 мм от X-max/Y-max и паузой 1 секунду для сброса stall-флага TMC5160, а перед `G28 Z` голова переводится в безопасную точку `X122.5 Y122.5`, если X/Y уже захоумлены или должны быть захоумлены в текущем вызове `G28`; при `G28 Z` без готовых X/Y макрос завершает команду явной ошибкой. При Eddy enabled `stepper_z` использует `probe:z_virtual_endstop`, а `G28 Z` остается на штатном Z-endstop активного профиля; Zmax DIAG на `PG10` остается аппаратным резервом вне основного homing-контура.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
-- `mainsail-web.sh` required: ставит `nginx`, загружает `mainsail.zip` в `${TREED_MAINSAIL_WEB_PATH}` и публикует reverse-proxy конфиг сайта.
+- `mainsail-web.sh` required: сначала использует проверенный bundled `mainsail.zip`, а GitHub download оставляет только fallback/recovery; затем публикует web-root и nginx reverse-proxy.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
 - `moonraker-config.sh` деплоит компонент `[treed_update]`, `/usr/local/sbin/treed-update-apply` и sudoers-правило для раздельного UI/system release update из TreeD Shell.

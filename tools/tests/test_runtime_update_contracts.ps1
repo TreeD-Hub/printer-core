@@ -42,6 +42,45 @@ foreach ($name in @(
 Assert-Match "runtime-versions.env" '(?m)^TREED_MAINSAIL_VERSION="v2\.19\.0"$' "Mainsail is version-pinned"
 Assert-Match "runtime-versions.env" '(?m)^TREED_MAINSAIL_ZIP_SHA256="[0-9a-f]{64}"$' "Mainsail artifact has SHA-256"
 
+$mainsailVersion = [regex]::Match($manifest, '(?m)^TREED_MAINSAIL_VERSION="([^"]+)"$').Groups[1].Value
+$mainsailSha = [regex]::Match($manifest, '(?m)^TREED_MAINSAIL_ZIP_SHA256="([0-9a-f]{64})"$').Groups[1].Value
+$mainsailZip = Join-Path $repoRoot "mainsail\web\mainsail.zip"
+if (-not (Test-Path -LiteralPath $mainsailZip -PathType Leaf)) {
+  throw "FAIL: bundled Mainsail archive is missing"
+}
+& git -C $repoRoot ls-files --error-unmatch "mainsail/web/mainsail.zip" *> $null
+if ($LASTEXITCODE -ne 0) {
+  throw "FAIL: bundled Mainsail archive is not tracked and would be absent from the release archive"
+}
+if ((Get-FileHash -LiteralPath $mainsailZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $mainsailSha) {
+  throw "FAIL: bundled Mainsail checksum does not match runtime manifest"
+}
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead($mainsailZip)
+try {
+  $releaseEntry = $zip.Entries | Where-Object FullName -eq "release_info.json" | Select-Object -First 1
+  if ($null -eq $releaseEntry) {
+    throw "FAIL: bundled Mainsail release_info.json is missing"
+  }
+  $reader = [System.IO.StreamReader]::new($releaseEntry.Open())
+  try {
+    $releaseInfo = $reader.ReadToEnd() | ConvertFrom-Json
+  } finally {
+    $reader.Dispose()
+  }
+  if ($releaseInfo.version -ne $mainsailVersion) {
+    throw "FAIL: bundled Mainsail version expected=$mainsailVersion actual=$($releaseInfo.version)"
+  }
+} finally {
+  $zip.Dispose()
+}
+
+$mainsailOfflineTest = (Join-Path $repoRoot "tools\tests\test_mainsail_bundle_offline.sh").Replace("\", "/").Replace("C:", "/c")
+& $bash $mainsailOfflineTest
+if ($LASTEXITCODE -ne 0) {
+  throw "offline Mainsail deployment test failed"
+}
+
 $loader = Read-RepoFile "loader\loader.sh"
 if ($loader.IndexOf('"runtime-bootstrap"') -ge $loader.IndexOf('"firmware-build"')) {
   throw "FAIL: runtime-bootstrap must precede firmware-build"

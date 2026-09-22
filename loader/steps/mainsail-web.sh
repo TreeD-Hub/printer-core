@@ -38,7 +38,6 @@ TREED_MAINSAIL_NGINX_SITE_ENABLED="${TREED_MAINSAIL_NGINX_SITE_ENABLED:-/etc/ngi
 TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED="${TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED:-/etc/nginx/sites-enabled/default}"
 TREED_MAINSAIL_MOONRAKER_PROXY_URL="${TREED_MAINSAIL_MOONRAKER_PROXY_URL:-http://127.0.0.1:7125}"
 TREED_MAINSAIL_LOCAL_ZIP="${TREED_MAINSAIL_LOCAL_ZIP:-${REPO_DIR}/mainsail/web/mainsail.zip}"
-TREED_MAINSAIL_PREFER_LOCAL_ZIP="${TREED_MAINSAIL_PREFER_LOCAL_ZIP:-1}"
 TREED_MAINSAIL_WGET_TIMEOUT="${TREED_MAINSAIL_WGET_TIMEOUT:-30}"
 TREED_MAINSAIL_WGET_DNS_TIMEOUT="${TREED_MAINSAIL_WGET_DNS_TIMEOUT:-10}"
 TREED_MAINSAIL_WGET_CONNECT_TIMEOUT="${TREED_MAINSAIL_WGET_CONNECT_TIMEOUT:-10}"
@@ -107,7 +106,7 @@ use_local_mainsail_archive() {
 archive_path="${tmp_dir}/mainsail.zip"
 archive_ready=0
 
-if flag_is_true "${TREED_MAINSAIL_PREFER_LOCAL_ZIP}" && use_local_mainsail_archive "preferred"; then
+if use_local_mainsail_archive "primary"; then
   :
 else
   log_info "mainsail-web: downloading Mainsail archive -> ${archive_path}"
