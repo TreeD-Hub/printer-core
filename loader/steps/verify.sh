@@ -16,6 +16,8 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # Блок 1: Библиотеки и базовая инициализация шага.
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/boot-env.sh"
+. "${REPO_DIR}/loader/lib/runtime-manifest.sh"
+load_runtime_manifest
 
 log_info "Step verify: running V2 post-configuration checks (parity mode)"
 
@@ -29,6 +31,9 @@ MOONRAKER_READY_OK=0
 KLIPPER_STATE=""
 KLIPPER_STATE_CLASS=""
 KLIPPER_STATE_MESSAGE=""
+MAIN_MCU_STATUS="disconnected"
+EBB_MCU_STATUS="disconnected"
+EDDY_MCU_STATUS="disconnected"
 
 # Блок 2: Вспомогательные функции подсчета/парсинга/проверок.
 pass() {
@@ -51,6 +56,14 @@ camera_failf() {
     failf "$1"
   else
     diagnostic_failf "$1"
+  fi
+}
+
+hardware_failf() {
+  if is_true "${TREED_ALLOW_HARDWARE_NOT_READY:-0}"; then
+    diagnostic_failf "$1 (allowed by TREED_ALLOW_HARDWARE_NOT_READY=1)"
+  else
+    failf "$1"
   fi
 }
 
@@ -235,6 +248,152 @@ moonraker_server_info_check() {
   rm -f "${tmp}"
 }
 
+moonraker_components_check() {
+  local tmp=""
+  local code=""
+  local component=""
+
+  tmp="$(mktemp '/tmp/treed_verify_components_XXXXXX.json')"
+  code="$(curl -m 8 -sS -o "${tmp}" -w '%{http_code}' "${MOONRAKER_SERVER_INFO_URL}" || true)"
+  if [ "${code}" != "200" ]; then
+    failf "TreeD Moonraker components loaded (http=${code:-n/a})"
+    rm -f "${tmp}"
+    return 0
+  fi
+  for component in treed_shell_command treed_host_network treed_filament_sensor treed_update; do
+    if grep -Fq "\"${component}\"" "${tmp}"; then
+      pass "Moonraker component ${component} loaded"
+    else
+      failf "Moonraker component ${component} loaded"
+    fi
+  done
+  rm -f "${tmp}"
+}
+
+treed_endpoint_check() {
+  local check_name="$1"
+  local url="$2"
+  local tmp=""
+  local code=""
+
+  tmp="$(mktemp '/tmp/treed_verify_endpoint_XXXXXX.json')"
+  code="$(curl -m 12 -sS -o "${tmp}" -w '%{http_code}' "${url}" || true)"
+  if [ "${code}" = "200" ] && [ -s "${tmp}" ]; then
+    pass "${check_name}"
+  else
+    failf "${check_name} (http=${code:-n/a})"
+  fi
+  rm -f "${tmp}"
+}
+
+moonraker_component_journal_check() {
+  local since=""
+  local tmp=""
+
+  since="$(systemctl show -p ActiveEnterTimestamp --value moonraker.service 2>/dev/null | tr -d '\r\n')"
+  case "${since}" in
+    ""|"n/a") since="-20 min" ;;
+  esac
+  tmp="$(mktemp '/tmp/treed_verify_moonraker_XXXXXX.log')"
+  if ! journalctl -u moonraker.service --since "${since}" --no-pager > "${tmp}" 2>/dev/null; then
+    failf "Moonraker component journal readable"
+  elif grep -Eiq 'Unrecognized config section \[treed_(shell_command|host_network|filament_sensor|update)\]|Unable to load component.*treed_' "${tmp}"; then
+    failf "Moonraker has no fresh TreeD component load errors"
+  else
+    pass "Moonraker has no fresh TreeD component load errors"
+  fi
+  rm -f "${tmp}"
+}
+
+runtime_repo_check() {
+  local name="$1"
+  local path="$2"
+  local expected_ref="$3"
+  local expected_origin="$4"
+  local expected_branch="$5"
+  local actual=""
+  local branch=""
+  local origin=""
+  local upstream=""
+  local shallow=""
+
+  if [ ! -d "${path}/.git" ]; then
+    failf "${name} git checkout present (${path})"
+    return 0
+  fi
+  actual="$(git -C "${path}" rev-parse HEAD 2>/dev/null || true)"
+  branch="$(git -C "${path}" symbolic-ref --short -q HEAD 2>/dev/null || true)"
+  origin="$(git -C "${path}" remote get-url origin 2>/dev/null || true)"
+  upstream="$(git -C "${path}" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
+  shallow="$(git -C "${path}" rev-parse --is-shallow-repository 2>/dev/null || true)"
+
+  [ "${actual}" = "${expected_ref}" ] && pass "${name} commit ${actual}" || failf "${name} commit expected=${expected_ref} actual=${actual:-missing}"
+  [ "${branch}" = "${expected_branch}" ] && pass "${name} branch ${branch}" || failf "${name} branch expected=${expected_branch} actual=${branch:-detached}"
+  [ "${origin}" = "${expected_origin}" ] && pass "${name} origin ${origin}" || failf "${name} origin expected=${expected_origin} actual=${origin:-missing}"
+  [ "${upstream}" = "origin/${expected_branch}" ] && pass "${name} upstream ${upstream}" || failf "${name} upstream expected=origin/${expected_branch} actual=${upstream:-missing}"
+  [ "${shallow}" = "false" ] && pass "${name} full git history" || failf "${name} checkout is shallow"
+  [ -z "$(git -C "${path}" status --porcelain --untracked-files=all 2>/dev/null)" ] && pass "${name} checkout clean" || failf "${name} checkout clean"
+}
+
+mainsail_manifest_version_check() {
+  local release_file="${TREED_MAINSAIL_WEB_PATH}/release_info.json"
+  local actual=""
+
+  if [ -f "${release_file}" ]; then
+    actual="$(sed -nE 's|.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*|\1|p' "${release_file}" | head -n 1)"
+  fi
+  if [ "${actual}" = "${TREED_MAINSAIL_VERSION}" ]; then
+    pass "Mainsail version ${actual}"
+  else
+    failf "Mainsail version expected=${TREED_MAINSAIL_VERSION} actual=${actual:-missing}"
+  fi
+}
+
+runtime_git_label() {
+  local path="$1"
+  git -C "${path}" describe --tags --always --dirty 2>/dev/null || printf '%s' "unavailable"
+}
+
+firmware_source_commit() {
+  local target="$1"
+  local manifest="${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv"
+
+  if [ -f "${manifest}" ]; then
+    awk -F '\t' -v target="${target}" 'NR > 1 && $1 == target { print $4; exit }' "${manifest}"
+  fi
+}
+
+print_runtime_summary() {
+  local core_version=""
+  local core_commit=""
+  local mainsail_version=""
+  local crowsnest_label="not-installed"
+
+  core_version="$(tr -d '\r\n' < "${REPO_DIR}/VERSION" 2>/dev/null || true)"
+  core_commit="$(git -C "${REPO_DIR}" rev-parse --short=12 HEAD 2>/dev/null || true)"
+  mainsail_version="$(sed -nE 's|.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*|\1|p' "${TREED_MAINSAIL_WEB_PATH}/release_info.json" 2>/dev/null | head -n 1)"
+  if [ -d "${CROWSNEST_RUNTIME_DIR}/.git" ]; then
+    crowsnest_label="$(runtime_git_label "${CROWSNEST_RUNTIME_DIR}") $(git -C "${CROWSNEST_RUNTIME_DIR}" rev-parse --short=12 HEAD 2>/dev/null || true)"
+  fi
+
+  log_info "TreeD runtime summary"
+  printf '%-27s %s\n' \
+    "TreeD Core:" "${core_version:-unknown} ${core_commit:-unknown}" \
+    "Runtime stack:" "${TREED_RUNTIME_STACK_VERSION}" \
+    "Klipper:" "$(runtime_git_label "${KLIPPER_RUNTIME_DIR}") $(git -C "${KLIPPER_RUNTIME_DIR}" rev-parse --short=12 HEAD 2>/dev/null || true)" \
+    "Moonraker:" "$(runtime_git_label "${MOONRAKER_RUNTIME_DIR}") $(git -C "${MOONRAKER_RUNTIME_DIR}" rev-parse --short=12 HEAD 2>/dev/null || true)" \
+    "Mainsail:" "${mainsail_version:-unknown}" \
+    "KlipperScreen:" "$(runtime_git_label "${TREED_KLIPPERSCREEN_HOME}") $(git -C "${TREED_KLIPPERSCREEN_HOME}" rev-parse --short=12 HEAD 2>/dev/null || true)" \
+    "Crowsnest:" "${crowsnest_label}" \
+    "Main MCU firmware source:" "$(firmware_source_commit main_octopus)" \
+    "EBB firmware source:" "$(firmware_source_commit ebb42_can)" \
+    "Eddy firmware source:" "$(firmware_source_commit eddy_can)" \
+    "Klipper ready:" "$([ "${MOONRAKER_READY_OK}" = "1" ] && printf yes || printf no)" \
+    "Main MCU:" "${MAIN_MCU_STATUS}" \
+    "EBB:" "${EBB_MCU_STATUS}" \
+    "Eddy:" "${EDDY_MCU_STATUS}"
+}
+
 printer_info_check() {
   local check_name="$1"
   local url="$2"
@@ -271,12 +430,7 @@ printer_info_check() {
   done
 
   if [ "${MOONRAKER_PRINTER_INFO_OK}" != "1" ]; then
-    if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
-      failf "${check_name} (http=${code:-n/a}, retries=${retries})"
-    else
-      log_warn "VERIFY ${check_name}: unavailable (http=${code:-n/a}, retries=${retries}, TREED_REQUIRE_KLIPPER_READY=0)"
-      pass "Klipper ready not required (TREED_REQUIRE_KLIPPER_READY=0, printer_info unavailable)"
-    fi
+    hardware_failf "${check_name} unavailable (http=${code:-n/a}, retries=${retries})"
     rm -f "${tmp}"
     return 0
   fi
@@ -288,19 +442,11 @@ printer_info_check() {
       ;;
     startup|error|shutdown|unknown|"")
       log_warn "VERIFY ${check_name}: Klipper state=${KLIPPER_STATE:-unknown}, class=${KLIPPER_STATE_CLASS:-unknown}, state_message=${KLIPPER_STATE_MESSAGE:-missing}"
-      if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
-        failf "Klipper ready required (state=${KLIPPER_STATE:-unknown}, class=${KLIPPER_STATE_CLASS:-unknown}, state_message=${KLIPPER_STATE_MESSAGE:-missing})"
-      else
-        pass "Klipper ready not required (TREED_REQUIRE_KLIPPER_READY=0, state=${KLIPPER_STATE:-unknown}, class=${KLIPPER_STATE_CLASS:-unknown})"
-      fi
+      hardware_failf "Klipper ready required (state=${KLIPPER_STATE:-unknown}, class=${KLIPPER_STATE_CLASS:-unknown}, state_message=${KLIPPER_STATE_MESSAGE:-missing})"
       ;;
     *)
       log_warn "VERIFY ${check_name}: unexpected Klipper state=${KLIPPER_STATE}, class=${KLIPPER_STATE_CLASS:-unknown}, state_message=${KLIPPER_STATE_MESSAGE:-missing}"
-      if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
-        failf "Klipper ready required (unexpected state=${KLIPPER_STATE}, class=${KLIPPER_STATE_CLASS:-unknown})"
-      else
-        pass "Klipper ready not required (TREED_REQUIRE_KLIPPER_READY=0, state=${KLIPPER_STATE}, class=${KLIPPER_STATE_CLASS:-unknown})"
-      fi
+      hardware_failf "Klipper ready required (unexpected state=${KLIPPER_STATE}, class=${KLIPPER_STATE_CLASS:-unknown})"
       ;;
   esac
 
@@ -333,13 +479,9 @@ klipper_mcu_journal_clean_check() {
     return 0
   fi
 
-  patterns="Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|MCU 'EBBCan' shutdown|mcu[.]error|Error configuring printer|Unable to open serial port|mcu 'mcu': Unable to connect|mcu 'EBBCan': Unable to connect"
+  patterns="Lost communication with MCU|Timeout with MCU|MCU 'mcu' shutdown|MCU 'EBBCan' shutdown|MCU 'eddy' shutdown|mcu[.]error|Error configuring printer|Unable to open serial port|mcu 'mcu': Unable to connect|mcu 'EBBCan': Unable to connect|mcu 'eddy': Unable to connect"
   if grep -Eiq "${patterns}" "${tmp}"; then
-    if is_true "${TREED_REQUIRE_KLIPPER_READY:-0}"; then
-      failf "${check_name} (mcu errors found since=${since})"
-    else
-      log_warn "VERIFY ${check_name}: runtime MCU errors found since=${since} (TREED_REQUIRE_KLIPPER_READY=0, not blocking)"
-    fi
+    hardware_failf "${check_name} (mcu errors found since=${since})"
   else
     pass "${check_name}"
   fi
@@ -374,7 +516,7 @@ klipper_can_mcus_connected_check() {
   done
 
   if [ "${code}" != "200" ] || ! grep -qE '"objects"[[:space:]]*:' "${list_tmp}"; then
-    failf "${check_name}: cannot read object list (http=${code:-n/a}, retries=${retries})"
+    hardware_failf "${check_name}: cannot read object list (http=${code:-n/a}, retries=${retries})"
     rm -f "${list_tmp}"
     return 0
   fi
@@ -383,7 +525,7 @@ klipper_can_mcus_connected_check() {
     if grep -Fq "\"${mcu_name}\"" "${list_tmp}"; then
       pass "${check_name}: object '${mcu_name}' present"
     else
-      failf "${check_name}: object '${mcu_name}' missing"
+      hardware_failf "${check_name}: object '${mcu_name}' missing"
     fi
   done
 
@@ -410,7 +552,7 @@ klipper_can_mcus_connected_check() {
   done
 
   if [ "${code}" != "200" ] || ! grep -qE '"status"[[:space:]]*:' "${query_tmp}"; then
-    failf "${check_name}: cannot query MCU status (http=${code:-n/a}, retries=${retries})"
+    hardware_failf "${check_name}: cannot query MCU status (http=${code:-n/a}, retries=${retries})"
     rm -f "${list_tmp}" "${query_tmp}"
     return 0
   fi
@@ -418,8 +560,13 @@ klipper_can_mcus_connected_check() {
   for mcu_name in "${expected_mcus[@]}"; do
     if grep -Fq "\"${mcu_name}\":" "${query_tmp}"; then
       pass "${check_name}: MCU '${mcu_name}' online"
+      case "${mcu_name}" in
+        mcu) MAIN_MCU_STATUS="connected" ;;
+        "mcu EBBCan") EBB_MCU_STATUS="connected" ;;
+        "mcu eddy") EDDY_MCU_STATUS="connected" ;;
+      esac
     else
-      failf "${check_name}: MCU '${mcu_name}' missing in status"
+      hardware_failf "${check_name}: MCU '${mcu_name}' missing in status"
     fi
   done
 
@@ -726,24 +873,29 @@ case "${TREED_EDDY_ENABLED}" in
     ;;
 esac
 
-TREED_REQUIRE_KLIPPER_READY="${TREED_REQUIRE_KLIPPER_READY:-0}"
-case "${TREED_REQUIRE_KLIPPER_READY}" in
-  0|1|true|TRUE|yes|YES|on|ON|false|FALSE|no|NO|off|OFF) ;;
+TREED_ALLOW_HARDWARE_NOT_READY="${TREED_ALLOW_HARDWARE_NOT_READY:-0}"
+case "${TREED_ALLOW_HARDWARE_NOT_READY}" in
+  0|1) ;;
   *)
-    failf "TREED_REQUIRE_KLIPPER_READY is valid (0|1, current=${TREED_REQUIRE_KLIPPER_READY})"
-    TREED_REQUIRE_KLIPPER_READY="0"
+    failf "TREED_ALLOW_HARDWARE_NOT_READY is valid (0|1, current=${TREED_ALLOW_HARDWARE_NOT_READY})"
+    TREED_ALLOW_HARDWARE_NOT_READY="0"
     ;;
 esac
 
 MOONRAKER_SERVER_INFO_URL="http://127.0.0.1:7125/server/info"
 MOONRAKER_PRINTER_INFO_URL="http://127.0.0.1:7125/printer/info"
 MOONRAKER_HOST_NETWORK_STATUS_URL="http://127.0.0.1:7125/server/treed/network/status"
+MOONRAKER_UPDATE_STATUS_URL="http://127.0.0.1:7125/server/treed/update/status"
+MOONRAKER_FILAMENT_STATUS_URL="http://127.0.0.1:7125/server/treed/filament-sensor/settings"
 MOONRAKER_UI_SYSTEM_CAPABILITIES_URL="http://127.0.0.1:7125/printer/objects/query?gcode_macro%20_TREED_SYSTEM_POWER&gcode_macro%20_TREED_SERVICE_COMMANDS"
 WEBCAM_API_URL="http://127.0.0.1:7125/server/webcams/list"
 CAN_UNIT="treed-can-setup.service"
 TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
 TREED_MAINSAIL_NGINX_SITE_ENABLED="${TREED_MAINSAIL_NGINX_SITE_ENABLED:-/etc/nginx/sites-enabled/mainsail}"
 MOONRAKER_BASE_CORE_RUNTIME="${PI_HOME}/printer_data/config/moonraker/base/00-core.conf"
+KLIPPER_RUNTIME_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
+MOONRAKER_RUNTIME_DIR="${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}"
+CROWSNEST_RUNTIME_DIR="${TREED_CROWSNEST_SRC_DIR:-${PI_HOME}/crowsnest}"
 MAINSAIL_HTTP_ROOT_URL="http://127.0.0.1/"
 MAINSAIL_MOONRAKER_PROXY_INFO_URL="http://127.0.0.1/server/info"
 
@@ -1040,6 +1192,14 @@ if [ -f "${TREED_MAINSAIL_WEB_PATH}/release_info.json" ]; then
 else
   failf "Mainsail web root release_info present (${TREED_MAINSAIL_WEB_PATH}/release_info.json)"
 fi
+mainsail_manifest_version_check
+
+runtime_repo_check "Klipper" "${KLIPPER_RUNTIME_DIR}" "${TREED_KLIPPER_REF}" "${TREED_KLIPPER_REPO}" "${TREED_KLIPPER_BRANCH}"
+runtime_repo_check "Moonraker" "${MOONRAKER_RUNTIME_DIR}" "${TREED_MOONRAKER_REF}" "${TREED_MOONRAKER_REPO}" "${TREED_MOONRAKER_BRANCH}"
+runtime_repo_check "KlipperScreen" "${TREED_KLIPPERSCREEN_HOME}" "${TREED_KLIPPERSCREEN_REF}" "${TREED_KLIPPERSCREEN_REPO}" "${TREED_KLIPPERSCREEN_PRIMARY_BRANCH}"
+if [ "${TREED_CROWSNEST_INSTALL:-1}" = "1" ]; then
+  runtime_repo_check "Crowsnest" "${CROWSNEST_RUNTIME_DIR}" "${TREED_CROWSNEST_REF}" "${TREED_CROWSNEST_REPO}" "${TREED_CROWSNEST_BRANCH}"
+fi
 
 if [ -f "${TREED_MAINSAIL_WEB_PATH}/index.html" ]; then
   pass "Mainsail web root index present (${TREED_MAINSAIL_WEB_PATH}/index.html)"
@@ -1051,6 +1211,10 @@ mainsail_web_path_alignment_check
 http_status_ok_check "nginx HTTP root responds 200" "${MAINSAIL_HTTP_ROOT_URL}" "200" "8"
 moonraker_server_info_check "Moonraker HTTP 127.0.0.1:7125 /server/info" "${MOONRAKER_SERVER_INFO_URL}" "direct"
 moonraker_server_info_check "nginx proxy /server/info" "${MAINSAIL_MOONRAKER_PROXY_INFO_URL}" "proxy"
+moonraker_components_check
+moonraker_component_journal_check
+treed_endpoint_check "TreeD update status endpoint" "${MOONRAKER_UPDATE_STATUS_URL}"
+treed_endpoint_check "TreeD filament sensor endpoint" "${MOONRAKER_FILAMENT_STATUS_URL}"
 printer_info_check "Klipper /printer/info" "${MOONRAKER_PRINTER_INFO_URL}"
 ui_system_capabilities_check "TreeD UI system capability macros enabled" "${MOONRAKER_UI_SYSTEM_CAPABILITIES_URL}"
 host_network_status_check "TreeD host network /server/treed/network/status" "${MOONRAKER_HOST_NETWORK_STATUS_URL}"
@@ -1060,13 +1224,13 @@ klipper_can_mcus_connected_check "klipper CAN MCU connectivity"
 if ip -details link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
   pass "CAN interface present (${TREED_CAN_IFACE})"
 else
-  diagnostic_failf "CAN interface present (${TREED_CAN_IFACE})"
+  hardware_failf "CAN interface present (${TREED_CAN_IFACE})"
 fi
 
 if ip link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q '<[^>]*UP[^>]*>'; then
   pass "CAN interface UP (${TREED_CAN_IFACE})"
 else
-  diagnostic_failf "CAN interface UP (${TREED_CAN_IFACE})"
+  hardware_failf "CAN interface UP (${TREED_CAN_IFACE})"
 fi
 
 if ip -details link show "${TREED_CAN_IFACE}" 2>/dev/null | grep -q "bitrate ${TREED_CAN_BITRATE}"; then
@@ -1239,20 +1403,46 @@ if [ "${TREED_FIRMWARE_BUILD_ENABLED}" = "1" ]; then
 
   if [ -f "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv" ]; then
     pass "firmware manifest present"
+    if head -n 1 "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv" \
+      | grep -Fx $'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256' >/dev/null; then
+      pass "firmware manifest schema includes source/config/artifact checksums"
+    else
+      failf "firmware manifest schema includes source/config/artifact checksums"
+    fi
+    for firmware_target in main_octopus ebb42_can eddy_can; do
+      firmware_row="$(awk -F '\t' -v target="${firmware_target}" 'NR > 1 && $1 == target { print; exit }' "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv")"
+      IFS=$'\t' read -r firmware_name firmware_artifact firmware_artifact_sha firmware_commit firmware_config firmware_config_sha <<< "${firmware_row}"
+      if [ "${firmware_name:-}" = "${firmware_target}" ] \
+        && [ "${firmware_commit:-}" = "${TREED_KLIPPER_REF}" ] \
+        && [ -f "${firmware_artifact:-}" ] \
+        && [ -f "${firmware_config:-}" ] \
+        && [ "$(sha256sum "${firmware_artifact}" | awk '{print $1}')" = "${firmware_artifact_sha:-}" ] \
+        && [ "$(sha256sum "${firmware_config}" | awk '{print $1}')" = "${firmware_config_sha:-}" ]; then
+        pass "${firmware_target} firmware source and checksums"
+      else
+        failf "${firmware_target} firmware source and checksums"
+      fi
+    done
   else
     failf "firmware manifest present"
   fi
 
   if [ -f "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/checksums.sha256" ]; then
-    pass "firmware checksums present"
+    if sha256sum -c "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/checksums.sha256" >/dev/null 2>&1; then
+      pass "firmware artifact checksums"
+    else
+      failf "firmware artifact checksums"
+    fi
   else
-    failf "firmware checksums present"
+    failf "firmware artifact checksums present"
   fi
 else
   log_info "VERIFY firmware artifact checks skipped (TREED_FIRMWARE_BUILD_ENABLED=0)"
 fi
 
-# Блок 13: Итог verify (fatal/diagnostic счетчики).
+# Блок 13: Итоговая таблица runtime и verify counters.
+print_runtime_summary
+
 if [ "${fail}" -eq 0 ]; then
   if [ "${VERIFY_DIAGNOSTIC_FAILS}" -eq 0 ]; then
     log_info "verify: all ${ok} checks passed"

@@ -81,31 +81,30 @@
 - `TREED_NONINTERACTIVE` — `0|1`, default `1`; убирает apt/dpkg/needrestart prompts.
 - `TREED_FIRMWARE_BUILD_ENABLED` — `0|1`, default `1`.
 - `TREED_KLIPPER_SRC_DIR` — default `${PI_HOME}/klipper`.
-- `TREED_KLIPPER_REPO` — default `https://github.com/Klipper3d/klipper.git`.
-- `TREED_KLIPPER_REF` — optional pin branch/tag/commit для Klipper.
+- `TREED_RUNTIME_MANIFEST` — default `${REPO_DIR}/runtime-versions.env`; единственный source of truth версий runtime.
+- `TREED_KLIPPER_REPO` / `TREED_KLIPPER_REF` — URL и полный commit SHA из runtime manifest.
 - `TREED_FIRMWARE_ARTIFACTS_DIR` — default `${PI_HOME}/treed/firmware-artifacts/treed-v2`.
 - `TREED_FW_MAIN_CONFIG` / `TREED_FW_EBB_CONFIG` / `TREED_FW_EDDY_CONFIG` — пути к Kconfig target-файлам сборки.
 - `TREED_RUNTIME_BOOTSTRAP` — `0|1`, default `1` (создание/проверка unit-файлов и venv Klipper/Moonraker).
 - `TREED_KLIPPY_ENV_DIR` — default `${PI_HOME}/klippy-env`; venv Klipper, куда `runtime-bootstrap` при первом запуске ставит `numpy` и `matplotlib`.
 - `TREED_CROWSNEST_SRC_DIR` — default `${PI_HOME}/crowsnest`, upstream checkout Crowsnest.
-- `TREED_CROWSNEST_REPO` — default `https://github.com/mainsail-crew/crowsnest.git`.
-- `TREED_CROWSNEST_REF` — optional pin branch/tag/commit для Crowsnest.
+- `TREED_CROWSNEST_REPO` / `TREED_CROWSNEST_REF` — URL и полный commit SHA из runtime manifest.
 - `TREED_CROWSNEST_INSTALL` — `0|1`, default `1`; установка/обновление Crowsnest в `runtime-bootstrap`.
-- `TREED_CROWSNEST_RECREATE` — `0|1`, default `0`; пересоздание `${PI_HOME}/crowsnest`.
-- `TREED_CROWSNEST_UPDATE` — `0|1`, default `1`; `git pull` и повторный unattended install Crowsnest.
+- `TREED_CROWSNEST_RECREATE` — `0|1`, default `0`; сохраняет старый checkout в sibling backup и создаёт manifest checkout заново.
+- `TREED_CROWSNEST_UPDATE` — `0|1`, default `1`; повторный unattended install exact manifest checkout.
 - `TREED_CAMERA_REQUIRED` — `0|1`, default `0`; при `1` Crowsnest/webcam становятся fail-fast.
 - `TREED_MAINSAIL_WEB_PATH` — default `/var/www/mainsail`, путь web-root Mainsail (используется в `mainsail-web` и `moonraker-config`).
-- `TREED_MAINSAIL_ZIP_URL` — URL архива Mainsail для `mainsail-web`.
+- `TREED_MAINSAIL_ZIP_URL` / `TREED_MAINSAIL_VERSION` / `TREED_MAINSAIL_ZIP_SHA256` — immutable artifact contract из runtime manifest.
 - `TREED_MAINSAIL_MOONRAKER_PROXY_URL` — upstream Moonraker для nginx reverse-proxy в `mainsail-web` (default `http://127.0.0.1:7125`).
 - `TREED_MAINSAIL_LOCAL_ZIP` — local fallback archive, default `${REPO_DIR}/mainsail/web/mainsail.zip`.
-- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` — `0|1`, default `1`; использовать bundled archive вместо live-download.
+- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` — `0|1`, default `1`; bundled archive используется только при совпадении SHA-256 с manifest.
 - `TREED_MAINSAIL_WGET_TIMEOUT` / `TREED_MAINSAIL_WGET_CONNECT_TIMEOUT` / `TREED_MAINSAIL_WGET_READ_TIMEOUT` — таймауты загрузки `mainsail.zip`.
 - `TREED_MAINSAIL_WGET_TRIES` — число попыток загрузки `mainsail.zip` (default `3`).
 - `TREED_MAINSAIL_ALLOW_EXISTING_FALLBACK` — `0|1`, default `1`; при недоступном GitHub разрешает использовать существующий валидный web-root Mainsail.
 - `TREED_KLIPPERSCREEN_REPO` — default `https://github.com/KlipperScreen/KlipperScreen.git`.
 - `TREED_KLIPPERSCREEN_PRIMARY_BRANCH` — default `master`, ветка KlipperScreen для Moonraker update_manager.
-- `TREED_KLIPPERSCREEN_REF` — pin branch/tag/commit для managed checkout KlipperScreen; если установленный checkout той же версии или новее, переустановка пропускается.
-- `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` принудительно пересоздает managed checkout KlipperScreen.
+- `TREED_KLIPPERSCREEN_REF` — полный commit SHA из runtime manifest; newer checkout также возвращается на manifest SHA.
+- `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` повторно запускает installer без удаления managed checkout.
 - `TREED_KLIPPERSCREEN_ENV` — путь venv KlipperScreen, default `${PI_HOME}/.KlipperScreen-env`.
 - `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; оставлен для совместимости, активный UI проверяется через `TREED_UI_MODE`.
 - `TREED_UI_MODE` — `ts|ks`, default `ts`; выбранный экранный UI. Если `/etc/default/treed-ui` уже существует, bootstrap берет режим оттуда.
@@ -124,11 +123,11 @@
 - `TREED_SHELL_DEVICE_SCALE_FACTOR` — default `1`, Chromium device scale factor для 1:1 CSS/device pixels.
 - `TREED_SHELL_START_TIMEOUT` — default `45`, ожидание активного `treed-shell.service`.
 - `TREED_KLIPPER_START_REQUIRE_ACTIVE` — `0|1`, default `1`; при `1` `maintenance-start` блокирует loader, если `klipper.service` не стал active в таймаут.
-- `TREED_REQUIRE_KLIPPER_READY` — `0|1`, default `0`; управляет тем, будет ли `Klippy state!=ready` блокировать `verify`.
+- `TREED_ALLOW_HARDWARE_NOT_READY` — `0|1`, default `0`; только явный service/install режим переводит hardware readiness failures в diagnostic.
 
 ## Запуск
 
-`runtime-bootstrap` поддерживает полную Git metadata для Klipper/Moonraker/Crowsnest: новые checkout'ы не создаются shallow-клонами, а существующие shallow-репозитории разворачиваются через `git fetch --unshallow --tags`. Это нужно, чтобы Moonraker update_manager видел реальные semver-версии, а не `v0.0.0-...-inferred`.
+`runtime-bootstrap` приводит Klipper/Moonraker/Crowsnest к точным SHA из `runtime-versions.env`, чинит detached HEAD/origin/upstream/shallow metadata и не использует `reset --hard`. Неизвестный dirty checkout блокирует update; повреждённый checkout сохраняется рядом как `.treed-backup-*`. `printer_data`, `printer.cfg`, `SAVE_CONFIG`, Eddy calibration и пользовательские runtime-данные этим механизмом не затрагиваются.
 
 `runtime-bootstrap` проверяет `numpy` и `matplotlib` в `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}`: если импорт уже работает, установка пропускается; если пакета нет, ставится текущий стабильный релиз через pip в существующий venv Klipper.
 

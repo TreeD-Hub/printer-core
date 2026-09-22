@@ -24,6 +24,7 @@ TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
 TREED_CAN_IFACE_WAIT_SEC="${TREED_CAN_IFACE_WAIT_SEC:-20}"
 TREED_CAN_REINIT_ATTEMPTS="${TREED_CAN_REINIT_ATTEMPTS:-5}"
 TREED_CAN_REINIT_DELAY_SEC="${TREED_CAN_REINIT_DELAY_SEC:-2}"
+TREED_ALLOW_HARDWARE_NOT_READY="${TREED_ALLOW_HARDWARE_NOT_READY:-0}"
 
 if ! printf '%s' "${TREED_CAN_IFACE}" | grep -Eq '^[A-Za-z0-9_.:-]+$'; then
   log_error "can-setup: TREED_CAN_IFACE has invalid format: ${TREED_CAN_IFACE}"
@@ -82,6 +83,13 @@ if [ "${TREED_CAN_REINIT_ATTEMPTS}" -le 0 ]; then
   log_error "can-setup: TREED_CAN_REINIT_ATTEMPTS must be > 0"
   exit 1
 fi
+case "${TREED_ALLOW_HARDWARE_NOT_READY}" in
+  0|1) ;;
+  *)
+    log_error "can-setup: TREED_ALLOW_HARDWARE_NOT_READY must be 0 or 1, got: ${TREED_ALLOW_HARDWARE_NOT_READY}"
+    exit 1
+    ;;
+esac
 
 if ! command -v ip >/dev/null 2>&1; then
   log_error "can-setup: command 'ip' is required but not found"
@@ -108,6 +116,7 @@ TREED_CAN_RESTART_MS="${TREED_CAN_RESTART_MS:-100}"
 TREED_CAN_IFACE_WAIT_SEC="${TREED_CAN_IFACE_WAIT_SEC:-20}"
 TREED_CAN_REINIT_ATTEMPTS="${TREED_CAN_REINIT_ATTEMPTS:-5}"
 TREED_CAN_REINIT_DELAY_SEC="${TREED_CAN_REINIT_DELAY_SEC:-2}"
+TREED_ALLOW_HARDWARE_NOT_READY="${TREED_ALLOW_HARDWARE_NOT_READY:-0}"
 
 IP_BIN="$(command -v ip || true)"
 if [ -z "${IP_BIN}" ]; then
@@ -124,6 +133,10 @@ fi
 wait_iface_sec=0
 while ! "${IP_BIN}" link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; do
   if [ "${wait_iface_sec}" -ge "${TREED_CAN_IFACE_WAIT_SEC}" ]; then
+    if [ "${TREED_ALLOW_HARDWARE_NOT_READY}" = "1" ]; then
+      echo "[can-setup] WARNING: interface unavailable in service mode: ${TREED_CAN_IFACE}" >&2
+      exit 0
+    fi
     echo "[can-setup] ERROR: interface not found after wait (${TREED_CAN_IFACE_WAIT_SEC}s): ${TREED_CAN_IFACE}" >&2
     exit 1
   fi
@@ -162,6 +175,7 @@ TREED_CAN_RESTART_MS=${TREED_CAN_RESTART_MS}
 TREED_CAN_IFACE_WAIT_SEC=${TREED_CAN_IFACE_WAIT_SEC}
 TREED_CAN_REINIT_ATTEMPTS=${TREED_CAN_REINIT_ATTEMPTS}
 TREED_CAN_REINIT_DELAY_SEC=${TREED_CAN_REINIT_DELAY_SEC}
+TREED_ALLOW_HARDWARE_NOT_READY=${TREED_ALLOW_HARDWARE_NOT_READY}
 EOF
 chmod 0644 "${CAN_ENV_FILE}"
 
@@ -171,8 +185,7 @@ cat > "${CAN_UNIT}" <<'EOF'
 [Unit]
 Description=TreeD CAN interface setup
 After=local-fs.target
-Wants=network-pre.target
-Before=network.target klipper.service
+Before=klipper.service
 
 [Service]
 Type=oneshot
@@ -190,11 +203,21 @@ chmod 0644 "${CAN_UNIT}"
 # Блок 6: Активация unit и fail-fast проверка состояния CAN.
 systemctl daemon-reload
 systemctl enable treed-can-setup.service >/dev/null
-systemctl restart treed-can-setup.service
+if ! systemctl restart treed-can-setup.service; then
+  if [ "${TREED_ALLOW_HARDWARE_NOT_READY}" = "1" ]; then
+    log_warn "can-setup: service failed in explicit hardware-not-ready mode"
+  else
+    exit 1
+  fi
+fi
 
 if ip -details link show "${TREED_CAN_IFACE}" >/dev/null 2>&1; then
   log_info "can-setup: interface is present (${TREED_CAN_IFACE})"
 else
+  if [ "${TREED_ALLOW_HARDWARE_NOT_READY}" = "1" ]; then
+    log_warn "can-setup: interface unavailable in explicit hardware-not-ready mode (${TREED_CAN_IFACE})"
+    exit 0
+  fi
   log_error "can-setup: cannot read interface details (${TREED_CAN_IFACE})"
   exit 1
 fi

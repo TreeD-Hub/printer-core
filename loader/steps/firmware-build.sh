@@ -12,6 +12,8 @@ set -euo pipefail
 
 # Блок 1: Библиотеки и root-предусловия.
 . "${REPO_DIR}/loader/lib/common.sh"
+. "${REPO_DIR}/loader/lib/runtime-manifest.sh"
+load_runtime_manifest
 
 log_info "Step firmware-build: build firmware artifacts for V2 targets"
 ensure_root
@@ -109,6 +111,10 @@ KLIPPER_HEAD="unknown"
 if command -v git >/dev/null 2>&1 && git -C "${TREED_KLIPPER_SRC_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   KLIPPER_HEAD="$(git -C "${TREED_KLIPPER_SRC_DIR}" rev-parse HEAD 2>/dev/null || printf '%s' "unknown")"
 fi
+if [ "${KLIPPER_HEAD}" != "${TREED_KLIPPER_REF}" ]; then
+  log_error "firmware-build: Klipper checkout is not synced to runtime manifest expected=${TREED_KLIPPER_REF} actual=${KLIPPER_HEAD}"
+  exit 1
+fi
 
 FW_MAIN_SHA="$(firmware_config_sha "${TREED_FW_MAIN_CONFIG}")"
 FW_EBB_SHA="$(firmware_config_sha "${TREED_FW_EBB_CONFIG}")"
@@ -147,14 +153,19 @@ firmware_inputs_current() {
   grep -Fx "ebb_config_sha256=${FW_EBB_SHA}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "eddy_enabled=${TREED_EDDY_ENABLED}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "eddy_config_sha256=${FW_EDDY_SHA}" "${inputs_file}" >/dev/null || return 1
+  head -n 1 "${manifest_file}" \
+    | grep -Fx $'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256' >/dev/null \
+    || return 1
 
-  while IFS=$'\t' read -r target artifact sha config; do
+  while IFS=$'\t' read -r target artifact sha klipper_commit config config_sha; do
     if [ -z "${header}" ]; then
       header=1
       continue
     fi
     [ -n "${artifact}" ] || return 1
     [ -f "${artifact}" ] || return 1
+    [ "${klipper_commit}" = "${KLIPPER_HEAD}" ] || return 1
+    [ -n "${config_sha}" ] || return 1
     artifact_count=$((artifact_count+1))
   done < "${manifest_file}"
 
@@ -206,7 +217,7 @@ eddy_config=${TREED_FW_EDDY_CONFIG}
 eddy_config_sha256=${FW_EDDY_SHA}
 EOF
 
-printf 'target\tartifact\tsha256\tconfig\n' > "${MANIFEST_FILE}"
+printf 'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256\n' > "${MANIFEST_FILE}"
 > "${CHECKSUM_FILE}"
 
 # Блок 4: Проверка итоговой конфигурации EBB42 после olddefconfig.
@@ -247,6 +258,7 @@ build_target() {
   local target_artifact="${target_art_dir}/${artifact_name}"
   local build_output="${TREED_KLIPPER_SRC_DIR}/${build_output_rel}"
   local target_sha=""
+  local config_sha=""
 
   ensure_dir "${target_art_dir}"
   cp -f "${target_config}" "${target_cfg}"
@@ -271,7 +283,10 @@ build_target() {
 
   cp -f "${build_output}" "${target_artifact}"
   target_sha="$(sha256sum "${target_artifact}" | awk '{print $1}')"
-  printf '%s\t%s\t%s\t%s\n' "${target_name}" "${target_artifact}" "${target_sha}" "${target_config}" >> "${MANIFEST_FILE}"
+  config_sha="$(firmware_config_sha "${target_config}")"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${target_name}" "${target_artifact}" "${target_sha}" "${KLIPPER_HEAD}" "${target_config}" "${config_sha}" \
+    >> "${MANIFEST_FILE}"
   printf '%s  %s\n' "${target_sha}" "${target_artifact}" >> "${CHECKSUM_FILE}"
   printf 'target=%s status=ok artifact=%s sha256=%s\n' "${target_name}" "${target_artifact}" "${target_sha}" >> "${REPORT_FILE}"
 

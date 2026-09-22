@@ -36,10 +36,13 @@ if [ -z "${DEPLOY_HOME}" ] || [ ! -d "${DEPLOY_HOME}" ]; then
   exit 1
 fi
 
-# Блок 4: V2 defaults с сохранением внешних env override.
+# Блок 4: Immutable runtime manifest и V2 defaults.
 # Hardware identity для активного профиля дальше сверяется с profile cfg в check-env.
 # Runtime-параметры можно переопределить снаружи:
 # sudo TREED_CAN_BITRATE=500000 bash install.sh
+
+. "${REPO_DIR}/loader/lib/runtime-manifest.sh"
+load_runtime_manifest
 
 : "${TREED_MAIN_MCU_CANBUS_UUID:=d372e54bf965}"
 
@@ -58,6 +61,7 @@ fi
 
 : "${TREED_NONINTERACTIVE:=1}"
 : "${TREED_LOADER_MODE:=apply}"
+: "${TREED_ALLOW_HARDWARE_NOT_READY:=0}"
 
 case "${TREED_LOADER_MODE}" in
   apply|check)
@@ -142,6 +146,7 @@ export TREED_EDDY_CANBUS_UUID
 
 export TREED_NONINTERACTIVE
 export TREED_LOADER_MODE
+export TREED_ALLOW_HARDWARE_NOT_READY
 
 export TREED_KLIPPERSCREEN_INSTALL_SERVICE
 export TREED_KLIPPERSCREEN_BACKEND

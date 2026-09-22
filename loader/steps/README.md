@@ -96,23 +96,24 @@
 ### Runtime bootstrap
 
 - `TREED_RUNTIME_BOOTSTRAP` (`0|1`, default `1`)
+- `TREED_RUNTIME_MANIFEST` (default `${REPO_DIR}/runtime-versions.env`; immutable runtime stack)
 - `TREED_ALLOW_MISSING_REQUIRED_SERVICES_ON_STOP` (`0|1`, default `1`)
 - `TREED_KLIPPER_REPO` (default `https://github.com/Klipper3d/klipper.git`)
-- `TREED_KLIPPER_REF` (optional, empty by default)
+- `TREED_KLIPPER_REF` (полный commit SHA из runtime manifest)
 - `TREED_KLIPPY_ENV_DIR` (default `${PI_HOME}/klippy-env`)
 - `TREED_MOONRAKER_SRC_DIR` (default `${PI_HOME}/moonraker`)
 - `TREED_MOONRAKER_ENV_DIR` (default `${PI_HOME}/moonraker-env`)
 - `TREED_MOONRAKER_REPO` (default `https://github.com/Arksine/moonraker.git`)
-- `TREED_MOONRAKER_REF` (optional, empty by default)
+- `TREED_MOONRAKER_REF` (полный commit SHA из runtime manifest)
 - `TREED_MOONRAKER_POLKIT_SETUP` (`0|1`, default `1`; авто-установка PolicyKit правил Moonraker через `set-policykit-rules.sh`)
 - `TREED_MOONRAKER_POLKIT_REQUIRED` (`0|1`, default `0`; при `1` делает неуспех PolicyKit setup блокирующей ошибкой)
-- `TREED_MOONRAKER_RECREATE` (`0|1`, default `0`; при `1` принудительно пересоздает `${PI_HOME}/moonraker` и `${PI_HOME}/moonraker-env` в `runtime-bootstrap`)
+- `TREED_MOONRAKER_RECREATE` (`0|1`, default `0`; при `1` сохраняет checkout в sibling backup и пересоздает repo/venv)
 - `TREED_CROWSNEST_SRC_DIR` (default `${PI_HOME}/crowsnest`)
 - `TREED_CROWSNEST_REPO` (default `https://github.com/mainsail-crew/crowsnest.git`)
-- `TREED_CROWSNEST_REF` (optional, empty by default)
+- `TREED_CROWSNEST_REF` (полный commit SHA из runtime manifest)
 - `TREED_CROWSNEST_INSTALL` (`0|1`, default `1`; при `1` `runtime-bootstrap` устанавливает/обновляет Crowsnest и `crowsnest.service`)
-- `TREED_CROWSNEST_RECREATE` (`0|1`, default `0`; при `1` принудительно пересоздает `${PI_HOME}/crowsnest`)
-- `TREED_CROWSNEST_UPDATE` (`0|1`, default `1`; при `1` подтягивает Crowsnest repo и повторно запускает unattended installer)
+- `TREED_CROWSNEST_RECREATE` (`0|1`, default `0`; при `1` сохраняет checkout в sibling backup)
+- `TREED_CROWSNEST_UPDATE` (`0|1`, default `1`; повторно запускает unattended installer exact manifest checkout)
 
 ### Moonraker / Camera
 
@@ -126,13 +127,13 @@
 - `TREED_CAM_USTREAMER_CUSTOM_FLAGS` (override всех ustreamer `custom_flags`, default `--format=${TREED_CAM_FORMAT} --encoder=${TREED_CAM_ENCODER}`)
 - `MOONRAKER_READY_RETRIES` (default `30`)
 - `TREED_MAINSAIL_WEB_PATH` (default `/var/www/mainsail`; целевой web-root Mainsail и путь для `[update_manager mainsail]`)
-- `TREED_MAINSAIL_ZIP_URL` (default `https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip`)
+- `TREED_MAINSAIL_ZIP_URL` / `TREED_MAINSAIL_VERSION` / `TREED_MAINSAIL_ZIP_SHA256` (из runtime manifest)
 - `TREED_MAINSAIL_MOONRAKER_PROXY_URL` (default `http://127.0.0.1:7125`; upstream Moonraker для nginx proxy)
 - `TREED_MAINSAIL_NGINX_SITE_AVAILABLE` (default `/etc/nginx/sites-available/mainsail`)
 - `TREED_MAINSAIL_NGINX_SITE_ENABLED` (default `/etc/nginx/sites-enabled/mainsail`)
 - `TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED` (default `/etc/nginx/sites-enabled/default`; удаляется при активации сайта Mainsail)
 - `TREED_MAINSAIL_LOCAL_ZIP` (default `${REPO_DIR}/mainsail/web/mainsail.zip`; bundled archive для offline install)
-- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` (`0|1`, default `1`; предпочитать bundled archive)
+- `TREED_MAINSAIL_PREFER_LOCAL_ZIP` (`0|1`, default `1`; local archive принимается только с manifest SHA-256)
 - `TREED_MAINSAIL_WGET_TIMEOUT` (default `30`; общий timeout `wget` для `mainsail.zip`)
 - `TREED_MAINSAIL_WGET_DNS_TIMEOUT` (default `10`)
 - `TREED_MAINSAIL_WGET_CONNECT_TIMEOUT` (default `10`)
@@ -149,7 +150,7 @@
 - `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` (default `0`, внешний installer не стартует сервис сам)
 - `TREED_KLIPPERSCREEN_REPO` (default `https://github.com/KlipperScreen/KlipperScreen.git`)
 - `TREED_KLIPPERSCREEN_PRIMARY_BRANCH` (default `master`, ветка для Moonraker update_manager)
-- `TREED_KLIPPERSCREEN_REF` (pin branch/tag/commit; checkout той же версии или новее не переустанавливается)
+- `TREED_KLIPPERSCREEN_REF` (полный commit SHA из runtime manifest; checkout обязан совпадать точно)
 - `TREED_KLIPPERSCREEN_START_TIMEOUT` (default `45`)
 - `TREED_KLIPPERSCREEN_HOME`
 - `TREED_KLIPPERSCREEN_ENV` (default `${PI_HOME}/.KlipperScreen-env`)
@@ -202,7 +203,7 @@ treed-ui status
 - `TREED_CAM_HTTP_TIMEOUT` (default `8`)
 - `TREED_MOONRAKER_HTTP_RETRIES` (default `30`)
 - `TREED_KLIPPER_START_REQUIRE_ACTIVE` (`0|1`, default `1`; при `0` ожидание `klipper.service active` в `maintenance-start` диагностическое)
-- `TREED_REQUIRE_KLIPPER_READY` (`0|1`, default `0`; при `1` `verify.sh` считает `Klippy state!=ready` блокирующей ошибкой)
+- `TREED_ALLOW_HARDWARE_NOT_READY` (`0|1`, default `0`; только при `1` hardware readiness failures диагностические)
 - `TREED_ARMBIAN_VERBOSITY` (default `1`)
 - `TREED_ARMBIAN_BOOTLOGO` (default `true`)
 - `TREED_ARMBIAN_CONSOLE` (default `both`)
@@ -230,8 +231,8 @@ treed-ui status
   - managed checkout находится в `${TREED_KLIPPERSCREEN_HOME:-${PI_HOME}/KlipperScreen}`;
   - venv находится в `${TREED_KLIPPERSCREEN_ENV:-${PI_HOME}/.KlipperScreen-env}`;
   - checkout нормализуется в branch-based состояние `${TREED_KLIPPERSCREEN_PRIMARY_BRANCH:-master}` с `origin`, чтобы Moonraker update_manager не видел detached repo;
-  - если checkout полный и его commit равен target или новее target, package-переустановка не выполняется;
-  - если service отсутствует/указывает в другой каталог, installer запускается для восстановления systemd wiring без пересоздания same-or-newer checkout.
+  - checkout синхронизируется ровно на manifest SHA, включая downgrade с произвольного newer commit;
+  - если service отсутствует/указывает в другой каталог, installer запускается для восстановления systemd wiring без удаления checkout.
 - `klipperscreen-theme.sh`
   - `clean`: `KlipperScreen.conf` без `.bak`.
   - `preserve`: `backup_file_once` перед изменением.
@@ -248,14 +249,14 @@ treed-ui status
 
 - `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen`, `restart-ms`, ждет появление интерфейса и выполняет reinit-циклы при старте.
 - `packages-core.sh` перед `apt update/install` сверяет установленный пакетный набор через `dpkg-query`; если все пакеты уже актуально установлены, apt-фаза пропускается.
-- `firmware-build.sh` required: компилирует `main_octopus`, `ebb42_can` и `eddy_can` (если enabled) в отдельный run-dir с `manifest.tsv`, `checksums.sha256`, `build-report.txt`.
+- `firmware-build.sh` required: принимает только manifest SHA Klipper и пишет для каждого target полный Klipper commit, config SHA-256 и artifact SHA-256.
 - `firmware-build.sh` перед сборкой сверяет `inputs.env` в `latest`: commit Klipper и checksum target-конфигов; при совпадении входов повторная сборка пропускается.
 - `firmware-build.sh` fail-fast при отсутствии `make`/toolchain, невалидном target-конфиге или ошибке сборки любого required MCU.
 - `runtime-bootstrap.sh` формирует `klipper.service` с API-сокетом `-a ${PI_HOME}/printer_data/comms/klippy.sock` (ожидается Moonraker секцией `klippy_uds_address`).
 - `runtime-bootstrap.sh` после подготовки `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}` проверяет импорт `numpy` и `matplotlib`: если пакет уже есть, логирует skip; если нет, ставит текущий стабильный релиз через pip.
 - `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: в default-режиме (`TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0`) проверяется только состояние `can0`, а `canbus_query.py` не запускается; strict UUID-gate включается через `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
 - `runtime-bootstrap.sh` устанавливает/обновляет Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`; при `TREED_CAMERA_REQUIRED=1` ошибки Crowsnest становятся блокирующими.
-- `runtime-bootstrap.sh` не создает shallow checkout'ы для Klipper/Moonraker/Crowsnest и разворачивает существующие shallow-репозитории через `git fetch --unshallow --tags`, чтобы Moonraker update_manager видел реальные semver-версии.
+- `runtime-bootstrap.sh` exact-sync'ит managed repos к manifest SHA, чинит detached/origin/upstream/shallow, блокирует unknown dirty и сохраняет поврежденный checkout в `.treed-backup-*`.
 - `klipper-core.sh` раскладывает `printer_data/config` напрямую из staging-дерева `klipper/` (источник правды — репозиторий).
 - Для `treed_v2_corexy_v1` X/Y homing работает в sensorless-контуре (`tmc5160_stepper_x/y:virtual_endstop`): перед deploy требуются TMC5160/TMC5160T Pro, корректная SPI/DIAG обвязка на X/Y и отключение X/Y механических endstop из логики. Профиль переопределяет `G28` через `macros_homing.cfg`: X/Y идут через `G28_BASE` с отходом на 10 мм от X-max/Y-max и паузой 1 секунду для сброса stall-флага TMC5160, а перед `G28 Z` голова переводится в безопасную точку `X122.5 Y122.5`, если X/Y уже захоумлены или должны быть захоумлены в текущем вызове `G28`; при `G28 Z` без готовых X/Y макрос завершает команду явной ошибкой. При Eddy enabled `stepper_z` использует `probe:z_virtual_endstop`, а `G28 Z` остается на штатном Z-endstop активного профиля; Zmax DIAG на `PG10` остается аппаратным резервом вне основного homing-контура.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
@@ -264,5 +265,5 @@ treed-ui status
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
 - `moonraker-config.sh` деплоит компонент `[treed_update]`, `/usr/local/sbin/treed-update-apply` и sudoers-правило для раздельного UI/system release update из TreeD Shell.
 - `moonraker-config.sh` идемпотентно добавляет `treed-shell` в `moonraker.asvc`, чтобы UI мог перезапустить только `treed-shell.service` через штатный Moonraker service endpoint.
-- `verify.sh` разделяет fatal и diagnostic: сервисы/HTTP/boot-путь, а также доступность MCU-объектов Klipper (`mcu`, `mcu EBBCan`, optional `mcu eddy`) остаются блокирующими; `Klippy state`, camera/Crowsnest HTTP и live-параметры CAN-интерфейса по умолчанию диагностические.
+- `verify.sh` production-default fail-closed: `Klippy state=ready`, main MCU, EBBCan, Eddy и свежий MCU journal обязательны; `TREED_ALLOW_HARDWARE_NOT_READY=1` явно включает service/install mode.
 - `verify.sh` не проверяет runtime-конфиги Klipper (`printer.cfg`, include-цепочку, sensorless-параметры): этап оставлен только для runtime-сервисов и доступности контуров.

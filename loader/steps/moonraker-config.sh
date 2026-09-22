@@ -12,6 +12,7 @@ set -euo pipefail
 
 # Блок 1: Библиотеки и root-права.
 . "${REPO_DIR}/loader/lib/common.sh"
+. "${REPO_DIR}/loader/lib/runtime-repo.sh"
 ensure_root
 
 # Блок 2: Старт шага и расчет путей/режима деплоя.
@@ -23,6 +24,9 @@ SRC_BASE_DIR="${REPO_DIR}/moonraker/base"
 DST_BASE_DIR="${PI_HOME}/printer_data/config/moonraker/base"
 DST_GENERATED_DIR="${PI_HOME}/printer_data/config/moonraker/generated"
 SRC_COMPONENT_DIR="${REPO_DIR}/moonraker/components"
+MOONRAKER_RUNTIME_DIR="${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}"
+MOONRAKER_COMPONENTS_DIR="${MOONRAKER_RUNTIME_DIR}/moonraker/components"
+MOONRAKER_ENV_DIR="${TREED_MOONRAKER_ENV_DIR:-${PI_HOME}/moonraker-env}"
 DEPLOY_MODE="${TREED_DEPLOY_MODE_EFFECTIVE:-preserve}"
 TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
 TREED_CROWSNEST_SRC_DIR="${TREED_CROWSNEST_SRC_DIR:-${PI_HOME}/crowsnest}"
@@ -85,61 +89,8 @@ validate_repo_moonraker_layout() {
 }
 
 find_moonraker_components_dir() {
-  local py_path=""
-  local candidate=""
-
-  # Сначала пробуем путь из уже запущенного процесса.
-  py_path="$(ps -eo args 2>/dev/null | grep -Eo '/[^ ]*/moonraker/moonraker\.py' | head -n 1 || true)"
-  if [ -n "${py_path}" ] && [ -f "${py_path}" ]; then
-    candidate="$(dirname "${py_path}")/components"
-    if [ -f "${candidate}/machine.py" ]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  fi
-
-  # Если процесс не запущен, разбираем ExecStart из systemd unit.
-  py_path="$(
-    systemctl cat moonraker.service 2>/dev/null \
-      | sed -n 's/^ExecStart=//p' \
-      | tr ' ' '\n' \
-      | tr -d '"' \
-      | tr -d "'" \
-      | grep -E '/moonraker/moonraker\.py$' \
-      | head -n 1 || true
-  )"
-  if [ -n "${py_path}" ] && [ -f "${py_path}" ]; then
-    candidate="$(dirname "${py_path}")/components"
-    if [ -f "${candidate}/machine.py" ]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  fi
-
-  # Типовые пути KIAUH/дистрибутива.
-  for candidate in \
-    "${PI_HOME}/moonraker/moonraker/components" \
-    "/home/${PI_USER}/moonraker/moonraker/components" \
-    "/usr/share/moonraker/moonraker/components" \
-    "/opt/moonraker/moonraker/components"
-  do
-    if [ -f "${candidate}/machine.py" ]; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-
-  # Финальный fallback-поиск с исключением пути текущего репозитория.
-  candidate="$(
-    find /home /usr /opt \
-      -maxdepth 5 \
-      -type f \
-      -path '*/moonraker/components/machine.py' \
-      ! -path "${REPO_DIR}/*" \
-      2>/dev/null | head -n 1 || true
-  )"
-  if [ -n "${candidate}" ]; then
-    dirname "${candidate}"
+  if [ -f "${MOONRAKER_COMPONENTS_DIR}/machine.py" ]; then
+    printf '%s\n' "${MOONRAKER_COMPONENTS_DIR}"
     return 0
   fi
 
@@ -158,6 +109,10 @@ deploy_treed_moonraker_components() {
     exit 1
   fi
 
+  runtime_repo_add_excludes "${MOONRAKER_RUNTIME_DIR}" \
+    '/moonraker/components/treed_*.py' \
+    '/moonraker/components/__pycache__/treed_*.pyc'
+
   while IFS= read -r -d '' src; do
     component_name="$(basename "${src}")"
     dst="${components_dir}/${component_name}"
@@ -174,7 +129,49 @@ deploy_treed_moonraker_components() {
     exit 1
   fi
 
+  if [ ! -x "${MOONRAKER_ENV_DIR}/bin/python" ]; then
+    log_error "Moonraker runtime Python not found: ${MOONRAKER_ENV_DIR}/bin/python"
+    exit 1
+  fi
+  if ! "${MOONRAKER_ENV_DIR}/bin/python" -m py_compile "${components_dir}"/treed_*.py; then
+    log_error "TreeD Moonraker components failed Python compile check in ${components_dir}"
+    exit 1
+  fi
+
   COMPONENT_DEPLOYED=1
+}
+
+restart_and_verify_moonraker_components() {
+  local tmp=""
+  local code=""
+  local attempt=""
+  local component=""
+  local retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
+
+  systemctl restart moonraker.service
+  tmp="$(mktemp '/tmp/treed_moonraker_components_XXXXXX.json')"
+  for attempt in $(seq 1 "${retries}"); do
+    code="$(curl -m 4 -sS -o "${tmp}" -w '%{http_code}' 'http://127.0.0.1:7125/server/info' || true)"
+    if [ "${code}" = "200" ] && grep -qE '"components"[[:space:]]*:' "${tmp}"; then
+      break
+    fi
+    sleep 1
+  done
+
+  if [ "${code}" != "200" ]; then
+    log_error "Moonraker API not ready after component deploy (http=${code:-n/a})"
+    rm -f "${tmp}"
+    exit 1
+  fi
+  for component in treed_shell_command treed_host_network treed_filament_sensor treed_update; do
+    if ! grep -Fq "\"${component}\"" "${tmp}"; then
+      log_error "Moonraker component is not loaded: ${component}"
+      rm -f "${tmp}"
+      exit 1
+    fi
+  done
+  rm -f "${tmp}"
+  log_info "moonraker-config: all required TreeD components loaded"
 }
 
 deploy_treed_update_command() {
@@ -478,8 +475,6 @@ ensure_generated_fragments_dir
 deploy_treed_moonraker_components
 deploy_treed_update_command
 
-if [ "${CONFIG_DEPLOYED}" -eq 1 ] || [ "${BASE_DEPLOYED}" -eq 1 ] || [ "${COMPONENT_DEPLOYED}" -eq 1 ] || [ "${UPDATE_COMMAND_DEPLOYED}" -eq 1 ]; then
-  log_info "Moonraker restart is deferred to step crowsnest-webcam"
-fi
+restart_and_verify_moonraker_components
 
 log_info "moonraker-config: OK"

@@ -6,15 +6,18 @@ set -euo pipefail
 # ==========================================
 # Назначение:
 # - Обеспечивает managed-установку и базовую работоспособность KlipperScreen.
-# - Не переустанавливает checkout той же версии или новее.
+# - Держит checkout ровно на commit из runtime manifest.
 # - Выполняет проверки health состояния systemd-сервиса.
 # Контур:
 # - required: экранный UI является частью штатного V2 runtime.
 
 # Блок 1: Библиотеки и root-права.
 . "${REPO_DIR}/loader/lib/common.sh"
+. "${REPO_DIR}/loader/lib/runtime-manifest.sh"
+. "${REPO_DIR}/loader/lib/runtime-repo.sh"
 
 ensure_root
+load_runtime_manifest
 
 # Блок 2: Старт шага.
 log_info "Step klipperscreen-install: ensuring KlipperScreen is installed"
@@ -78,35 +81,6 @@ print_klipperscreen_service_diagnostics() {
   journalctl -u "${unit}" -n 80 --no-pager || true
 }
 
-checkout_klipperscreen_ref() {
-  local repo_url="$1"
-  local dst_dir="$2"
-  local ref="$3"
-  local target_commit=""
-
-  sudo -u "${PI_USER}" -H mkdir -p "$(dirname "${dst_dir}")"
-  if ! sudo -u "${PI_USER}" -H git clone "${repo_url}" "${dst_dir}" >/dev/null 2>&1; then
-    log_error "klipperscreen-install: failed to clone ${repo_url} into ${dst_dir}"
-    exit 1
-  fi
-
-  sudo -u "${PI_USER}" -H git -C "${dst_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
-  if ! sudo -u "${PI_USER}" -H git -C "${dst_dir}" rev-parse --verify "origin/${KS_PRIMARY_BRANCH}^{commit}" >/dev/null 2>&1; then
-    log_error "klipperscreen-install: failed to find origin/${KS_PRIMARY_BRANCH} in ${repo_url}"
-    exit 1
-  fi
-
-  target_commit="$(sudo -u "${PI_USER}" -H git -C "${dst_dir}" rev-parse --verify "${ref}^{commit}" 2>/dev/null || true)"
-  if [ -z "${target_commit}" ]; then
-    log_error "klipperscreen-install: failed to checkout ref '${ref}' from ${repo_url}"
-    exit 1
-  fi
-
-  # Moonraker update_manager требует ветку с remote, detached checkout ломает recovery/status.
-  sudo -u "${PI_USER}" -H git -C "${dst_dir}" checkout -B "${KS_PRIMARY_BRANCH}" "${target_commit}" >/dev/null
-  sudo -u "${PI_USER}" -H git -C "${dst_dir}" branch --set-upstream-to="origin/${KS_PRIMARY_BRANCH}" "${KS_PRIMARY_BRANCH}" >/dev/null 2>&1 || true
-}
-
 klipperscreen_package_complete() {
   local package_dir="$1"
 
@@ -115,37 +89,13 @@ klipperscreen_package_complete() {
     && [ -d "${package_dir}/styles" ]
 }
 
-klipperscreen_is_same_or_newer() {
+klipperscreen_is_exact() {
   local installed_dir="$1"
   local target_commit="$2"
   local installed_head=""
-  local installed_ts=""
-  local target_ts=""
 
   installed_head="$(sudo -u "${PI_USER}" -H git -C "${installed_dir}" rev-parse HEAD 2>/dev/null || true)"
-  if [ -z "${installed_head}" ]; then
-    return 1
-  fi
-
-  if [ "${installed_head}" = "${target_commit}" ]; then
-    return 0
-  fi
-
-  sudo -u "${PI_USER}" -H git -C "${installed_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
-  sudo -u "${PI_USER}" -H git -C "${installed_dir}" fetch --depth 1 origin "${target_commit}" >/dev/null 2>&1 || true
-
-  if sudo -u "${PI_USER}" -H git -C "${installed_dir}" merge-base --is-ancestor "${target_commit}" "${installed_head}" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  # Shallow checkout fallback: official KlipperScreen history is linear enough for timestamp gating.
-  installed_ts="$(sudo -u "${PI_USER}" -H git -C "${installed_dir}" show -s --format=%ct "${installed_head}" 2>/dev/null || true)"
-  target_ts="$(sudo -u "${PI_USER}" -H git -C "${KS_STAGING_DIR}" show -s --format=%ct "${target_commit}" 2>/dev/null || true)"
-  if [ -n "${installed_ts}" ] && [ -n "${target_ts}" ] && [ "${installed_ts}" -ge "${target_ts}" ]; then
-    return 0
-  fi
-
-  return 1
+  [ "${installed_head}" = "${target_commit}" ]
 }
 
 klipperscreen_service_points_to_home() {
@@ -165,6 +115,11 @@ klipperscreen_needs_install() {
   local target_commit="$2"
   KLIPPERSCREEN_INSTALL_REASON=""
 
+  if [ "${KLIPPERSCREEN_UPDATED:-0}" = "1" ]; then
+    KLIPPERSCREEN_INSTALL_REASON="package-updated"
+    return 0
+  fi
+
   if [ "${TREED_FORCE_KLIPPERSCREEN_INSTALL:-0}" = "1" ]; then
     log_info "klipperscreen-install: forced reinstall requested"
     KLIPPERSCREEN_INSTALL_REASON="forced"
@@ -183,9 +138,9 @@ klipperscreen_needs_install() {
     return 0
   fi
 
-  if ! klipperscreen_is_same_or_newer "${package_dir}" "${target_commit}"; then
-    log_info "klipperscreen-install: installed KlipperScreen is older than target ${target_commit}"
-    KLIPPERSCREEN_INSTALL_REASON="package-older"
+  if ! klipperscreen_is_exact "${package_dir}" "${target_commit}"; then
+    log_info "klipperscreen-install: installed KlipperScreen differs from target ${target_commit}"
+    KLIPPERSCREEN_INSTALL_REASON="package-mismatch"
     return 0
   fi
 
@@ -195,7 +150,7 @@ klipperscreen_needs_install() {
     return 0
   fi
 
-  log_info "klipperscreen-install: installed package is same-or-newer and service is wired to ${package_dir}"
+  log_info "klipperscreen-install: installed package matches manifest and service is wired to ${package_dir}"
   return 1
 }
 
@@ -210,54 +165,6 @@ patch_klipperscreen_installer_noninteractive() {
     -e 's|sudo apt -f install|sudo env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -f install|g' \
     -e 's|sudo ||g' \
     "${installer}"
-}
-
-repair_klipperscreen_git_state() {
-  local package_dir="$1"
-  local is_shallow=""
-  local branch=""
-  local current_commit=""
-
-  if [ ! -d "${package_dir}/.git" ]; then
-    return 0
-  fi
-
-  if sudo -u "${PI_USER}" -H git -C "${package_dir}" remote get-url origin >/dev/null 2>&1; then
-    sudo -u "${PI_USER}" -H git -C "${package_dir}" remote set-url origin "${KS_REPO_URL}" >/dev/null
-  else
-    sudo -u "${PI_USER}" -H git -C "${package_dir}" remote add origin "${KS_REPO_URL}"
-  fi
-
-  is_shallow="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse --is-shallow-repository 2>/dev/null || printf 'false')"
-  if [ "${is_shallow}" = "true" ]; then
-    if ! sudo -u "${PI_USER}" -H git -C "${package_dir}" fetch --unshallow --tags --prune origin >/dev/null 2>&1; then
-      log_warn "klipperscreen-install: failed to unshallow ${package_dir}, falling back to tag fetch"
-    fi
-  fi
-
-  sudo -u "${PI_USER}" -H git -C "${package_dir}" fetch --tags --prune origin >/dev/null 2>&1 || true
-
-  if ! sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse --verify "origin/${KS_PRIMARY_BRANCH}^{commit}" >/dev/null 2>&1; then
-    log_error "klipperscreen-install: failed to detect origin/${KS_PRIMARY_BRANCH}; Moonraker cannot manage KlipperScreen updates"
-    exit 1
-  fi
-
-  branch="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  if [ "${branch}" = "HEAD" ] || [ -z "${branch}" ]; then
-    current_commit="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse HEAD)"
-    sudo -u "${PI_USER}" -H git -C "${package_dir}" checkout -B "${KS_PRIMARY_BRANCH}" "${current_commit}" >/dev/null
-    branch="${KS_PRIMARY_BRANCH}"
-    log_info "klipperscreen-install: repaired detached checkout to branch ${KS_PRIMARY_BRANCH}"
-  fi
-
-  if [ "${branch}" != "${KS_PRIMARY_BRANCH}" ]; then
-    current_commit="$(sudo -u "${PI_USER}" -H git -C "${package_dir}" rev-parse HEAD)"
-    sudo -u "${PI_USER}" -H git -C "${package_dir}" checkout -B "${KS_PRIMARY_BRANCH}" "${current_commit}" >/dev/null
-    branch="${KS_PRIMARY_BRANCH}"
-    log_info "klipperscreen-install: normalized checkout branch to ${KS_PRIMARY_BRANCH}"
-  fi
-
-  sudo -u "${PI_USER}" -H git -C "${package_dir}" branch --set-upstream-to="origin/${KS_PRIMARY_BRANCH}" "${branch}" >/dev/null 2>&1 || true
 }
 
 ensure_moonraker_allowed_service() {
@@ -341,12 +248,9 @@ if ! command -v git >/dev/null 2>&1; then
   apt_get_noninteractive install git
 fi
 
-KS_REPO_URL="${TREED_KLIPPERSCREEN_REPO:-https://github.com/KlipperScreen/KlipperScreen.git}"
-KS_PRIMARY_BRANCH="${TREED_KLIPPERSCREEN_PRIMARY_BRANCH:-master}"
-KS_PINNED_REF_DEFAULT="35c26ba4d452043695d73fa8ec2acd25bbc8911d"
-KS_REPO_REF="${TREED_KLIPPERSCREEN_REF:-${KS_PINNED_REF_DEFAULT}}"
-KS_STAGING_DIR="${PI_HOME}/treed/.staging/KlipperScreen"
-KS_STAGING_PARENT="$(dirname "${KS_STAGING_DIR}")"
+KS_REPO_URL="${TREED_KLIPPERSCREEN_REPO}"
+KS_PRIMARY_BRANCH="${TREED_KLIPPERSCREEN_PRIMARY_BRANCH}"
+KS_REPO_REF="${TREED_KLIPPERSCREEN_REF}"
 KS_HOME_DEFAULT="${PI_HOME}/KlipperScreen"
 if [ -n "${TREED_KLIPPERSCREEN_HOME:-}" ]; then
   KS_HOME="${TREED_KLIPPERSCREEN_HOME}"
@@ -361,6 +265,7 @@ KS_BACKEND="${TREED_KLIPPERSCREEN_BACKEND:-X}"
 KS_NETWORK="${TREED_KLIPPERSCREEN_NETWORK_MANAGER:-N}"
 KS_START="${TREED_KLIPPERSCREEN_START_AFTER_INSTALL:-0}"
 KLIPPERSCREEN_INSTALL_REASON=""
+KLIPPERSCREEN_UPDATED=0
 
 case "${KS_INSTALL_SERVICE}" in
   0|n|N) KS_INSTALL_SERVICE="N" ;;
@@ -375,35 +280,38 @@ case "${KS_NETWORK}" in
   *) KS_NETWORK="N" ;;
 esac
 
-# На пустой системе эти каталоги могут отсутствовать, а после старых запусков
-# могут принадлежать root. Checkout выполняется от deploy-пользователя.
-ensure_dir "${PI_HOME}/treed"
-chown "${PI_USER}:${PI_GROUP}" "${PI_HOME}/treed"
-ensure_dir "${KS_STAGING_PARENT}"
-chown "${PI_USER}:${PI_GROUP}" "${KS_STAGING_PARENT}"
+# Единственная ожидаемая локальная правка старого loader — patch installer; остальной dirty state блокируется.
+KS_PREVIOUS_COMMIT=""
+if [ -d "${KS_HOME}/.git" ]; then
+  KS_PREVIOUS_COMMIT="$(sudo -u "${PI_USER}" -H git -C "${KS_HOME}" rev-parse HEAD 2>/dev/null || true)"
+  KS_DIRTY_FILES="$(sudo -u "${PI_USER}" -H git -C "${KS_HOME}" status --porcelain --untracked-files=all 2>/dev/null | sed -E 's|^.. ||')"
+  if [ "${KS_DIRTY_FILES}" = "scripts/KlipperScreen-install.sh" ]; then
+    sudo -u "${PI_USER}" -H git -C "${KS_HOME}" checkout -- scripts/KlipperScreen-install.sh
+    log_info "klipperscreen-install: restored loader-managed installer patch"
+  fi
+fi
 
-# Всегда пересобираем staging-клон, чтобы не наследовать старое состояние checkout.
-rm -rf "${KS_STAGING_DIR}"
-checkout_klipperscreen_ref "${KS_REPO_URL}" "${KS_STAGING_DIR}" "${KS_REPO_REF}"
+sync_managed_repo "${KS_HOME}" "${KS_REPO_URL}" "${KS_REPO_REF}" "${KS_PRIMARY_BRANCH}" "KlipperScreen"
+if [ -z "${KS_PREVIOUS_COMMIT}" ] || [ "${KS_PREVIOUS_COMMIT}" != "${KS_REPO_REF}" ]; then
+  KLIPPERSCREEN_UPDATED=1
+fi
 
-if [ ! -f "${KS_STAGING_DIR}/scripts/KlipperScreen-install.sh" ]; then
+if [ ! -f "${KS_HOME}/scripts/KlipperScreen-install.sh" ]; then
   log_error "klipperscreen-install: installer script not found for ref ${KS_REPO_REF}"
   exit 1
 fi
 
-KS_COMMIT="$(sudo -u "${PI_USER}" -H git -C "${KS_STAGING_DIR}" rev-parse --short=12 HEAD)"
-KS_COMMIT_FULL="$(sudo -u "${PI_USER}" -H git -C "${KS_STAGING_DIR}" rev-parse HEAD)"
+KS_COMMIT="$(sudo -u "${PI_USER}" -H git -C "${KS_HOME}" rev-parse --short=12 HEAD)"
+KS_COMMIT_FULL="$(sudo -u "${PI_USER}" -H git -C "${KS_HOME}" rev-parse HEAD)"
 log_info "klipperscreen-install: target ref ${KS_REPO_REF} (commit ${KS_COMMIT})"
 
 if klipperscreen_needs_install "${KS_HOME}" "${KS_COMMIT_FULL}"; then
   case "${KLIPPERSCREEN_INSTALL_REASON}" in
-    forced|package-incomplete|package-older)
-      log_info "klipperscreen-install: installing managed package into ${KS_HOME}"
-      rm -rf "${KS_HOME}"
-      checkout_klipperscreen_ref "${KS_REPO_URL}" "${KS_HOME}" "${KS_REPO_REF}"
+    forced|package-incomplete|package-updated|package-mismatch)
+      log_info "klipperscreen-install: installing manifest package in ${KS_HOME}"
       ;;
     runtime-incomplete|service-missing)
-      log_info "klipperscreen-install: package is same-or-newer; running installer to restore runtime wiring"
+      log_info "klipperscreen-install: manifest package is exact; running installer to restore runtime wiring"
       ;;
     *)
       log_error "klipperscreen-install: unexpected install reason '${KLIPPERSCREEN_INSTALL_REASON}'"
@@ -412,7 +320,7 @@ if klipperscreen_needs_install "${KS_HOME}" "${KS_COMMIT_FULL}"; then
   esac
   patch_klipperscreen_installer_noninteractive "${KS_HOME}/scripts/KlipperScreen-install.sh"
 
-  env \
+  if env \
     USER="${PI_USER}" \
     LOGNAME="${PI_USER}" \
     HOME="${PI_HOME}" \
@@ -425,6 +333,14 @@ if klipperscreen_needs_install "${KS_HOME}" "${KS_COMMIT_FULL}"; then
     APT_LISTCHANGES_FRONTEND="${APT_LISTCHANGES_FRONTEND:-none}" \
     NEEDRESTART_MODE="${NEEDRESTART_MODE:-a}" \
     bash "${KS_HOME}/scripts/KlipperScreen-install.sh"
+  then
+    :
+  else
+    rc=$?
+    sudo -u "${PI_USER}" -H git -C "${KS_HOME}" checkout -- scripts/KlipperScreen-install.sh
+    exit "${rc}"
+  fi
+  sudo -u "${PI_USER}" -H git -C "${KS_HOME}" checkout -- scripts/KlipperScreen-install.sh
 
   chown -R "${PI_USER}:${PI_GROUP}" "${KS_HOME}"
   if [ -d "${KS_ENV}" ]; then
@@ -442,7 +358,6 @@ if ! klipperscreen_package_complete "${KS_HOME}"; then
   exit 1
 fi
 
-repair_klipperscreen_git_state "${KS_HOME}"
 ensure_moonraker_allowed_service "KlipperScreen"
 write_klipperscreen_update_manager_fragment
 restart_moonraker_if_active

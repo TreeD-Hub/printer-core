@@ -49,6 +49,8 @@ export PI_HOME
 
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/boot-env.sh"
+. "${REPO_DIR}/loader/lib/runtime-manifest.sh"
+load_runtime_manifest
 
 # Блок 5: Определение boot-backend и путей (RPi/Armbian/Extlinux aware).
 BOOT_DIR="$(detect_boot_dir)"

@@ -21,7 +21,9 @@
 
 - `moonraker/moonraker.conf` -> `${PI_HOME}/printer_data/config/moonraker.conf`
 - `moonraker/base/*.conf` -> `${PI_HOME}/printer_data/config/moonraker/base/*.conf`
-- `moonraker/components/*.py` -> каталог `moonraker/components` установленного Moonraker
+- `moonraker/components/*.py` -> `${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}/moonraker/components`, тот же checkout, который указан в `moonraker.service`
+
+После копирования loader компилирует компоненты runtime Python, перезапускает Moonraker и проверяет через `/server/info`, что `treed_shell_command`, `treed_host_network`, `treed_filament_sensor` и `treed_update` реально загружены.
 
 `generated` слой:
 

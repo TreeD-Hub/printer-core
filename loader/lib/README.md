@@ -7,6 +7,8 @@
 - `loader/lib/common.sh`
 - `loader/lib/boot-env.sh`
 - `loader/lib/plymouth.sh`
+- `loader/lib/runtime-manifest.sh`
+- `loader/lib/runtime-repo.sh`
 
 ## `common.sh`
 
@@ -49,6 +51,14 @@
 Переменная:
 
 - `PLYMOUTH_THEME_NAME` (по умолчанию `treed`).
+
+## `runtime-manifest.sh`
+
+Загружает единый `runtime-versions.env` и проверяет обязательные immutable SHA/версию/checksum runtime-компонентов.
+
+## `runtime-repo.sh`
+
+Синхронизирует управляемые Git checkout к точному commit из runtime manifest. Dirty checkout не сбрасывается; повреждённый или не-Git каталог сохраняется рядом как backup. Известные runtime-файлы можно добавить в локальный `.git/info/exclude`, не меняя upstream checkout.
 
 ## Правила развития библиотеки
 

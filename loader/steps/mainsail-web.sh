@@ -12,7 +12,9 @@ set -euo pipefail
 
 # Блок 1: Библиотеки, root-права и определение целевого пользователя.
 . "${REPO_DIR}/loader/lib/common.sh"
+. "${REPO_DIR}/loader/lib/runtime-manifest.sh"
 ensure_root
+load_runtime_manifest
 
 PI_USER="${PI_USER:-${SUDO_USER:-pi}}"
 PI_HOME="${PI_HOME:-/home/${PI_USER}}"
@@ -30,7 +32,7 @@ fi
 
 # Блок 2: Конфигурация путей/URL с безопасными дефолтами.
 TREED_MAINSAIL_WEB_PATH="${TREED_MAINSAIL_WEB_PATH:-/var/www/mainsail}"
-TREED_MAINSAIL_ZIP_URL="${TREED_MAINSAIL_ZIP_URL:-https://github.com/mainsail-crew/mainsail/releases/latest/download/mainsail.zip}"
+TREED_MAINSAIL_ZIP_URL="${TREED_MAINSAIL_ZIP_URL}"
 TREED_MAINSAIL_NGINX_SITE_AVAILABLE="${TREED_MAINSAIL_NGINX_SITE_AVAILABLE:-/etc/nginx/sites-available/mainsail}"
 TREED_MAINSAIL_NGINX_SITE_ENABLED="${TREED_MAINSAIL_NGINX_SITE_ENABLED:-/etc/nginx/sites-enabled/mainsail}"
 TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED="${TREED_MAINSAIL_NGINX_DEFAULT_SITE_ENABLED:-/etc/nginx/sites-enabled/default}"
@@ -71,9 +73,14 @@ flag_is_true() {
   esac
 }
 
+mainsail_release_version() {
+  sed -nE 's|.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*|\1|p' "$1" | head -n 1
+}
+
 mainsail_existing_web_root_ready() {
   [ -f "${TREED_MAINSAIL_WEB_PATH}/release_info.json" ] \
-    && [ -f "${TREED_MAINSAIL_WEB_PATH}/index.html" ]
+    && [ -f "${TREED_MAINSAIL_WEB_PATH}/index.html" ] \
+    && [ "$(mainsail_release_version "${TREED_MAINSAIL_WEB_PATH}/release_info.json")" = "${TREED_MAINSAIL_VERSION}" ]
 }
 
 mainsail_existing_fallback_allowed() {
@@ -84,6 +91,10 @@ use_local_mainsail_archive() {
   local reason="$1"
 
   if [ ! -s "${TREED_MAINSAIL_LOCAL_ZIP}" ]; then
+    return 1
+  fi
+  if [ "$(sha256sum "${TREED_MAINSAIL_LOCAL_ZIP}" | awk '{print $1}')" != "${TREED_MAINSAIL_ZIP_SHA256}" ]; then
+    log_warn "mainsail-web: bundled archive does not match runtime manifest, ignoring ${TREED_MAINSAIL_LOCAL_ZIP}"
     return 1
   fi
 
@@ -128,6 +139,11 @@ if [ "${archive_ready}" = "1" ]; then
     log_error "mainsail-web: downloaded archive is empty: ${archive_path}"
     exit 1
   fi
+  archive_sha="$(sha256sum "${archive_path}" | awk '{print $1}')"
+  if [ "${archive_sha}" != "${TREED_MAINSAIL_ZIP_SHA256}" ]; then
+    log_error "mainsail-web: archive checksum mismatch expected=${TREED_MAINSAIL_ZIP_SHA256} actual=${archive_sha}"
+    exit 1
+  fi
   archive_size="$(wc -c < "${archive_path}" | tr -d '[:space:]')"
   log_info "mainsail-web: prepared Mainsail archive (${archive_size} bytes)"
 
@@ -145,6 +161,10 @@ if [ "${archive_ready}" = "1" ]; then
     log_error "mainsail-web: release_info.json not found in downloaded archive"
     exit 1
   fi
+  if [ "$(mainsail_release_version "${tmp_dir}/unpack/release_info.json")" != "${TREED_MAINSAIL_VERSION}" ]; then
+    log_error "mainsail-web: archive version does not match manifest (${TREED_MAINSAIL_VERSION})"
+    exit 1
+  fi
 
   ensure_dir "${TREED_MAINSAIL_WEB_PATH}"
   rsync -a --delete "${tmp_dir}/unpack/" "${TREED_MAINSAIL_WEB_PATH}/"
@@ -157,6 +177,10 @@ if [ ! -f "${TREED_MAINSAIL_WEB_PATH}/release_info.json" ]; then
 fi
 if [ ! -f "${TREED_MAINSAIL_WEB_PATH}/index.html" ]; then
   log_error "mainsail-web: index.html not found after sync: ${TREED_MAINSAIL_WEB_PATH}/index.html"
+  exit 1
+fi
+if ! mainsail_existing_web_root_ready; then
+  log_error "mainsail-web: installed version does not match manifest (${TREED_MAINSAIL_VERSION})"
   exit 1
 fi
 

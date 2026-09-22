@@ -12,7 +12,10 @@ set -euo pipefail
 
 # Блок 1: Библиотеки и root-права.
 . "${REPO_DIR}/loader/lib/common.sh"
+. "${REPO_DIR}/loader/lib/runtime-manifest.sh"
+. "${REPO_DIR}/loader/lib/runtime-repo.sh"
 ensure_root
+load_runtime_manifest
 
 # Блок 2: Контракт пользователя/режима bootstrap.
 if [ -z "${PI_USER:-}" ] || [ -z "${PI_HOME:-}" ]; then
@@ -32,8 +35,9 @@ fi
 
 # Блок 3: Нормализация путей/репозиториев runtime-контуров.
 KLIPPER_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
-KLIPPER_REPO="${TREED_KLIPPER_REPO:-https://github.com/Klipper3d/klipper.git}"
-KLIPPER_REF="${TREED_KLIPPER_REF:-}"
+KLIPPER_REPO="${TREED_KLIPPER_REPO}"
+KLIPPER_REF="${TREED_KLIPPER_REF}"
+KLIPPER_BRANCH="${TREED_KLIPPER_BRANCH}"
 KLIPPY_ENV_DIR="${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}"
 TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
@@ -46,14 +50,16 @@ TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}
 TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED="${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED:-0}"
 MOONRAKER_DIR="${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}"
 MOONRAKER_ENV_DIR="${TREED_MOONRAKER_ENV_DIR:-${PI_HOME}/moonraker-env}"
-MOONRAKER_REPO="${TREED_MOONRAKER_REPO:-https://github.com/Arksine/moonraker.git}"
-MOONRAKER_REF="${TREED_MOONRAKER_REF:-}"
+MOONRAKER_REPO="${TREED_MOONRAKER_REPO}"
+MOONRAKER_REF="${TREED_MOONRAKER_REF}"
+MOONRAKER_BRANCH="${TREED_MOONRAKER_BRANCH}"
 MOONRAKER_POLKIT_SETUP="${TREED_MOONRAKER_POLKIT_SETUP:-1}"
 MOONRAKER_POLKIT_REQUIRED="${TREED_MOONRAKER_POLKIT_REQUIRED:-0}"
 MOONRAKER_RECREATE="${TREED_MOONRAKER_RECREATE:-0}"
 CROWSNEST_DIR="${TREED_CROWSNEST_SRC_DIR:-${PI_HOME}/crowsnest}"
-CROWSNEST_REPO="${TREED_CROWSNEST_REPO:-https://github.com/mainsail-crew/crowsnest.git}"
-CROWSNEST_REF="${TREED_CROWSNEST_REF:-}"
+CROWSNEST_REPO="${TREED_CROWSNEST_REPO}"
+CROWSNEST_REF="${TREED_CROWSNEST_REF}"
+CROWSNEST_BRANCH="${TREED_CROWSNEST_BRANCH}"
 CROWSNEST_INSTALL="${TREED_CROWSNEST_INSTALL:-1}"
 CROWSNEST_RECREATE="${TREED_CROWSNEST_RECREATE:-0}"
 CROWSNEST_UPDATE="${TREED_CROWSNEST_UPDATE:-1}"
@@ -90,68 +96,41 @@ CROWSNEST_VENV_DIR="${PI_HOME}/crowsnest-env"
 KLIPPER_PREFLIGHT_ENV_FILE="/etc/default/treed-klipper-preflight"
 KLIPPER_PREFLIGHT_SCRIPT="/usr/local/sbin/treed-klipper-preflight.sh"
 
-# Блок 4: Вспомогательные функции (run-as-user, clone/update, venv, requirements).
+# Блок 4: Вспомогательные функции (run-as-user, exact sync, venv, requirements).
 run_as_pi() {
   local cmd="$1"
   sudo -u "${PI_USER}" -H bash -lc "${cmd}"
-}
-
-refresh_repo_metadata() {
-  local repo_dir="$1"
-  local is_shallow=""
-
-  is_shallow="$(run_as_pi "set -euo pipefail; cd '${repo_dir}'; git rev-parse --is-shallow-repository 2>/dev/null || printf 'false'")"
-  if [ "${is_shallow}" = "true" ]; then
-    # Moonraker определяет версии через git describe; shallow-история часто не содержит ближайший semver-tag.
-    if run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --unshallow --tags --prune origin >/dev/null 2>&1"; then
-      return 0
-    fi
-    log_warn "runtime-bootstrap: failed to unshallow ${repo_dir}, falling back to tag fetch"
-  fi
-
-  run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --tags --prune origin >/dev/null 2>&1 || true"
 }
 
 ensure_repo_present() {
   local repo_dir="$1"
   local repo_url="$2"
   local repo_ref="$3"
+  local repo_branch="$4"
+  local component="$5"
 
   if [ "${repo_dir}" = "${MOONRAKER_DIR}" ] && [ "${MOONRAKER_RECREATE}" = "1" ]; then
-    log_warn "runtime-bootstrap: forcing moonraker repo recreate (${repo_dir})"
-    rm -rf "${repo_dir}"
+    log_warn "runtime-bootstrap: preserving and recreating moonraker repo (${repo_dir})"
+    backup_managed_repo "${repo_dir}" "${component}"
   fi
 
   if [ "${repo_dir}" = "${CROWSNEST_DIR}" ] && [ "${CROWSNEST_RECREATE}" = "1" ]; then
-    log_warn "runtime-bootstrap: forcing crowsnest repo recreate (${repo_dir})"
-    rm -rf "${repo_dir}"
+    log_warn "runtime-bootstrap: preserving and recreating crowsnest repo (${repo_dir})"
+    backup_managed_repo "${repo_dir}" "${component}"
   fi
 
-  if [ -d "${repo_dir}" ] && [ ! -d "${repo_dir}/.git" ]; then
-    log_warn "runtime-bootstrap: ${repo_dir} exists without .git, recreating from ${repo_url}"
-    rm -rf "${repo_dir}"
+  if [ "${repo_dir}" = "${MOONRAKER_DIR}" ]; then
+    runtime_repo_add_excludes "${repo_dir}" \
+      '/moonraker/components/treed_*.py' \
+      '/moonraker/components/__pycache__/treed_*.pyc'
   fi
 
-  if [ -d "${repo_dir}/.git" ]; then
-    if ! run_as_pi "set -euo pipefail; cd '${repo_dir}'; git remote get-url origin >/dev/null 2>&1"; then
-      log_warn "runtime-bootstrap: ${repo_dir} has no origin remote, recreating from ${repo_url}"
-      rm -rf "${repo_dir}"
-    else
-      refresh_repo_metadata "${repo_dir}"
-    fi
-  fi
+  sync_managed_repo "${repo_dir}" "${repo_url}" "${repo_ref}" "${repo_branch}" "${component}"
 
-  if [ -d "${repo_dir}/.git" ]; then
-    if [ -n "${repo_ref}" ]; then
-      run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --tags --prune; git checkout '${repo_ref}'"
-    fi
-    return 0
-  fi
-
-  ensure_dir "$(dirname "${repo_dir}")"
-  run_as_pi "set -euo pipefail; git clone '${repo_url}' '${repo_dir}'"
-  if [ -n "${repo_ref}" ]; then
-    run_as_pi "set -euo pipefail; cd '${repo_dir}'; git fetch --tags --prune; git checkout '${repo_ref}'"
+  if [ "${repo_dir}" = "${MOONRAKER_DIR}" ]; then
+    runtime_repo_add_excludes "${repo_dir}" \
+      '/moonraker/components/treed_*.py' \
+      '/moonraker/components/__pycache__/treed_*.pyc'
   fi
 }
 
@@ -213,6 +192,7 @@ TREED_KLIPPER_PREFLIGHT=${TREED_KLIPPER_PREFLIGHT}
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC=${TREED_KLIPPER_PREFLIGHT_WAIT_SEC}
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC=${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC}
 TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}
+TREED_ALLOW_HARDWARE_NOT_READY=${TREED_ALLOW_HARDWARE_NOT_READY:-0}
 TREED_MAIN_MCU_CANBUS_UUID=${TREED_MAIN_MCU_CANBUS_UUID}
 TREED_CAN_IFACE=${TREED_CAN_IFACE}
 TREED_EBB_CANBUS_UUID=${TREED_EBB_CANBUS_UUID}
@@ -247,6 +227,7 @@ TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
 TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC="${TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC:-1}"
 TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED="${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED:-0}"
+TREED_ALLOW_HARDWARE_NOT_READY="${TREED_ALLOW_HARDWARE_NOT_READY:-0}"
 TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
@@ -309,6 +290,9 @@ case "${TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED}" in
     exit 1
     ;;
 esac
+if [ "${TREED_ALLOW_HARDWARE_NOT_READY}" = "1" ]; then
+  TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0
+fi
 case "${TREED_EDDY_ENABLED}" in
   1) ;;
   0)
@@ -532,7 +516,7 @@ ensure_crowsnest_runtime() {
       ;;
   esac
 
-  if ! ensure_repo_present "${CROWSNEST_DIR}" "${CROWSNEST_REPO}" "${CROWSNEST_REF}"; then
+  if ! ensure_repo_present "${CROWSNEST_DIR}" "${CROWSNEST_REPO}" "${CROWSNEST_REF}" "${CROWSNEST_BRANCH}" "Crowsnest"; then
     crowsnest_fail_or_skip "runtime-bootstrap: failed to prepare Crowsnest repo (${CROWSNEST_DIR})"
     return 0
   fi
@@ -597,7 +581,7 @@ if getent group dialout >/dev/null 2>&1; then
 fi
 
 # Блок 6: Klipper env/service (репозиторий ожидается локально, clone fallback включен).
-ensure_repo_present "${KLIPPER_DIR}" "${KLIPPER_REPO}" "${KLIPPER_REF}"
+ensure_repo_present "${KLIPPER_DIR}" "${KLIPPER_REPO}" "${KLIPPER_REF}" "${KLIPPER_BRANCH}" "Klipper"
 
 KLIPPER_REQ_FILE="${KLIPPER_DIR}/scripts/klippy-requirements.txt"
 if [ ! -f "${KLIPPER_REQ_FILE}" ]; then
@@ -632,7 +616,7 @@ RestartSec=5
 EOF
 
 # Блок 7: Moonraker repo/env/service (clone при отсутствии).
-ensure_repo_present "${MOONRAKER_DIR}" "${MOONRAKER_REPO}" "${MOONRAKER_REF}"
+ensure_repo_present "${MOONRAKER_DIR}" "${MOONRAKER_REPO}" "${MOONRAKER_REF}" "${MOONRAKER_BRANCH}" "Moonraker"
 
 if [ "${MOONRAKER_RECREATE}" = "1" ] && [ -d "${MOONRAKER_ENV_DIR}" ]; then
   log_warn "runtime-bootstrap: forcing moonraker venv recreate (${MOONRAKER_ENV_DIR})"

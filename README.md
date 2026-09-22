@@ -19,6 +19,8 @@ Rock Pi (Armbian Debian 12)
 
 Версия `printer-core` хранится в `VERSION` в формате `x.y.z`.
 
+Совместимый runtime-стек фиксируется в `runtime-versions.env`: immutable commit SHA для Klipper, Moonraker, KlipperScreen и Crowsnest, а также версия, URL и SHA-256 Mainsail. Loader не выбирает `latest` и перед сборкой firmware обязан синхронизировать host Klipper с этим manifest.
+
 Релиз создается workflow `.github/workflows/release.yml` по тегу `vX.Y.Z`. Тег должен совпадать с содержимым `VERSION`; workflow сохраняет совместимые имена assets `treed-mainshellos-source.zip` и `treed-mainshellos-release.json`.
 
 ## Быстрый запуск (копируй в SSH)
@@ -28,6 +30,8 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 ```
 
 Loader сам определяет `fresh|update|recover`, выбирает `clean|preserve` и ребутает только после `fresh`.
+
+Production apply по умолчанию требует `Klipper state=ready` и подключенные main MCU, EBBCan и Eddy. Для стендовой установки без железа нужен явный `TREED_ALLOW_HARDWARE_NOT_READY=1`; этот режим не означает готовность принтера к печати.
 
 ## Диагностика камеры
 
