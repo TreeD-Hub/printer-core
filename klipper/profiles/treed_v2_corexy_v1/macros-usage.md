@@ -236,7 +236,7 @@ BED_MESH_CALIBRATE PROFILE=default METHOD=automatic
 ```
 
 Макрос:
-- использует отдельную безопасную Eddy scan area `X7.5..237.5 / Y5..210`;
+- использует отдельную безопасную Eddy scan area `X10..235 / Y5..210`;
 - принимает `MESH_MIN`/`MESH_MAX` внутри этой области и отвергает некорректные координаты до движения;
 - не расширяет область движения и печати `X0..245 / Y0..245`;
 - чистит старую mesh-трансформацию;
@@ -263,7 +263,7 @@ TREED_Z_PARK_ZERO_EDDY
 PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy
 ```
 
-Первичная калибровка Eddy с учетом безопасной scan area и runtime `[force_move]`. Макрос делает `G28 X Y`, ставит Eddy в центр `X7.5..237.5 / Y5..210` и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`.
+Первичная калибровка Eddy с учетом безопасной scan area и runtime `[force_move]`. Макрос делает `G28 X Y`, ставит Eddy в центр `X10..235 / Y5..210` и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`.
 
 После интерактивной калибровки сохранять через:
 
