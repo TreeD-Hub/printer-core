@@ -1,0 +1,12 @@
+{
+    "schema_version": 2,
+    "commit": "935268a02a95e129f15c527a9b288d71926a177f",
+    "indexed_at": "2026-09-22T20:15:53Z",
+    "project": "C-Users-Yawllen-Documents-GitHub-printer-core",
+    "nodes": 1796,
+    "edges": 4118,
+    "original_size": 5308416,
+    "compressed_size": 729809,
+    "compression_level": 9,
+    "reconcile_basis": "git-clean-head"
+}

@@ -85,6 +85,14 @@ function Get-GcodeMacroBlock {
   return $match.Value
 }
 
+function Get-ConfigNumber {
+  param([string]$Content, [string]$Key)
+
+  $match = [regex]::Match($Content, "(?m)^\s*$([regex]::Escape($Key)):\s*(-?[0-9.]+)\s*$")
+  if (-not $match.Success) { throw "FAIL: config value $Key not found" }
+  return [double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+}
+
 # Блок 2: Загрузка Eddy-профиля и профильного compatibility include.
 $RemovedZ0Adjust = "z0" + "_adjust"
 $probeEddy = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
@@ -102,6 +110,8 @@ $captureLiveZ = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_CAPTURE_LIVE_Z_OFFSE
 $eddyMeshCfg = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_MESH_CFG"
 $eddyMesh = Get-GcodeMacroBlock $probeEddy "TREED_BED_MESH_CALIBRATE_EDDY"
 $eddyUiMesh = Get-GcodeMacroBlock $probeEddy "TREED_EDDY_BED_MESH_CALIBRATE"
+$bedMeshAlias = Get-GcodeMacroBlock $probeEddy "CALIBRATE_BED_MESH"
+$startKampMesh = Get-GcodeMacroBlock $macrosFlow "_TREED_START_KAMP_PREP"
 $startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
 
@@ -132,7 +142,7 @@ Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.
 Assert-NotContains $startMachinePrep '(?m)^\s*_TREED_HOME_ALL\s*$' "START machine prep must not home before bed preheat"
 Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREHEAT\s*$' '(?m)^\s*_TREED_HOME_ALL\s*$' "START_PRINT must wait for bed preheat before Eddy homing"
 Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_HOME_ALL\s*$' '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "START_PRINT must enable print offset only after hot Eddy homing"
-Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)^\s*_TREED_START_KAMP_PREP\s*$' "START_PRINT must prepare mesh and smart park after hot homing"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)^\s*_TREED_START_KAMP_PREP\{mesh_bounds\}\s*$' "START_PRINT must prepare mesh and smart park after hot homing"
 Assert-Contains $macrosFlow 'DEFAULT_MESH_METHOD = "scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must prefer scan over rapid_scan for precision"
 Assert-NotContains $macrosFlow 'mesh_method\|default\("rapid_scan"\)' "Adaptive mesh fallback must not silently return to rapid_scan"
 Assert-NotContains $macrosFlow 'DEFAULT_MESH_METHOD = "rapid_scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must not use rapid_scan in precision profile"
@@ -143,27 +153,80 @@ Assert-Contains $macrosFlow 'Eddy service mesh calibration' "START_PRINT must na
 Assert-Contains $geometry '(?m)^variable_print_size_y:\s*245\.0\s*$' "Print area Y must stay 245"
 Assert-Contains $geometry '(?m)^variable_bed_size_y:\s*245\.0\s*$' "Bed area Y must stay 245"
 Assert-Contains $steppers '(?ms)^\[stepper_y\].*?^position_max:\s*245\s*$' "Stepper Y max must stay 245"
-Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_x:\s*5\.0\s*$' "Eddy scan min X must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_x:\s*7\.5\s*$' "Eddy scan min X must be explicit"
 Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_y:\s*5\.0\s*$' "Eddy scan min Y must be explicit"
-Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_x:\s*240\.0\s*$' "Eddy scan max X must be explicit"
-Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_y:\s*215\.0\s*$' "Eddy scan max Y must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_x:\s*237\.5\s*$' "Eddy scan max X must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_y:\s*210\.0\s*$' "Eddy scan max Y must be explicit"
 Assert-NotContains $eddyMeshCfg '(?m)^\s*variable_speed:' "Eddy mesh must not expose an unused speed variable"
-Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_min:\s*5,5\s*$' "bed_mesh parser fallback must use Eddy scan min"
-Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_max:\s*240,215\s*$' "bed_mesh parser fallback must use Eddy scan max"
+Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_min:\s*7\.5,5\s*$' "bed_mesh parser fallback must use Eddy scan min"
+Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_max:\s*237\.5,210\s*$' "bed_mesh parser fallback must use Eddy scan max"
 Assert-Contains $eddyMesh 'params\.MESH_MIN\|default\(default_mesh_min\)' "Eddy mesh must honor MESH_MIN with a safe default"
 Assert-Contains $eddyMesh 'params\.MESH_MAX\|default\(default_mesh_max\)' "Eddy mesh must honor MESH_MAX with a safe default"
 Assert-Contains $eddyMesh 'mesh_min_raw\.split\(","\)' "Eddy mesh must parse MESH_MIN coordinates"
 Assert-Contains $eddyMesh 'mesh_max_raw\.split\(","\)' "Eddy mesh must parse MESH_MAX coordinates"
 Assert-Contains $eddyMesh 'scan_min_x < safe_min_x or scan_max_x > safe_max_x' "Eddy mesh must reject probe bounds outside the safe scan area"
+Assert-Contains $eddyMesh 'scan_min_y < safe_min_y or scan_max_y > safe_max_y' "Eddy mesh must reject Y bounds outside the safe scan area"
+Assert-Contains $eddyMesh 'tool_scan_min_x = scan_min_x - probe_x_offset' "Eddy mesh must convert X from probe to tool coordinates"
+Assert-Contains $eddyMesh 'tool_scan_max_x = scan_max_x - probe_x_offset' "Eddy mesh must convert max X from probe to tool coordinates"
+Assert-Contains $eddyMesh 'tool_scan_min_y = scan_min_y - probe_y_offset' "Eddy mesh must convert Y from probe to tool coordinates"
+Assert-Contains $eddyMesh 'tool_scan_max_y = scan_max_y - probe_y_offset' "Eddy mesh must convert max Y from probe to tool coordinates"
 Assert-Contains $eddyMesh 'tool_scan_min_y < th\.axis_minimum\.y\|float or tool_scan_max_y > th\.axis_maximum\.y\|float' "Eddy mesh must validate converted Y movement bounds"
 Assert-Contains $eddyMesh 'METHOD=\{method\} MESH_MIN=\{scan_min_x\},\{scan_min_y\} MESH_MAX=\{scan_max_x\},\{scan_max_y\}' "Eddy mesh must pass effective bounds to Klipper"
 Assert-Contains $eddyMesh 'METHOD=\{method\}.*?SCAN_SPEED=\{effective_speed\}' "rapid_scan must receive SCAN_SPEED"
 Assert-Contains $eddyMesh 'params\.SCAN_SPEED is defined' "non-rapid methods must reject SCAN_SPEED instead of pretending to use it"
 Assert-Contains $eddyMesh 'params\.SPEED is defined' "legacy SPEED must fail explicitly"
 Assert-Contains $eddyMesh 'Eddy mesh: profile=\{profile\} method=\{method\} probe=' "Eddy mesh must report effective parameters"
+Assert-Contains $eddyMesh 'Eddy safe scan area: X\{safe_min_x\}\.\.\{safe_max_x\} Y\{safe_min_y\}\.\.\{safe_max_y\}' "Eddy mesh must report new safe scan bounds"
+Assert-Contains $eddyMesh 'Eddy scan area is smaller than print area because probe cannot physically cover full bed\.' "Eddy mesh must retain the scan area explanation"
 Assert-Contains $eddyMesh 'Print area: X\{print_min_x\}\.\.\{print_max_x\} Y\{print_min_y\}\.\.\{print_max_y\}' "Eddy mesh must report the unchanged print area"
-Assert-ContainsBefore $eddyUiMesh '(?m)^\s*SAVE_VARIABLE VARIABLE=treed_eddy_mesh_done VALUE=0\s*$' '(?m)^\s*TREED_BED_MESH_CALIBRATE_EDDY PROFILE=default METHOD=scan\s*$' "UI mesh workflow must clear previous mesh success before a new scan"
-Assert-ContainsBefore $eddyUiMesh '(?m)^\s*TREED_BED_MESH_CALIBRATE_EDDY PROFILE=default METHOD=scan\s*$' '(?m)^\s*SAVE_VARIABLE VARIABLE=treed_eddy_mesh_done VALUE=1\s*$' "UI mesh workflow must mark success only after the scan"
+Assert-ContainsBefore $eddyUiMesh '(?m)^\s*SAVE_VARIABLE VARIABLE=treed_eddy_mesh_done VALUE=0\s*$' '(?m)^\s*TREED_BED_MESH_CALIBRATE_EDDY PROFILE=default METHOD=scan\{mesh_bounds\}\s*$' "UI mesh workflow must clear previous mesh success before a new scan"
+Assert-ContainsBefore $eddyUiMesh '(?m)^\s*TREED_BED_MESH_CALIBRATE_EDDY PROFILE=default METHOD=scan\{mesh_bounds\}\s*$' '(?m)^\s*SAVE_VARIABLE VARIABLE=treed_eddy_mesh_done VALUE=1\s*$' "UI mesh workflow must mark success only after the scan"
+Assert-Contains $eddyUiMesh 'MESH_MIN=" ~ params\.MESH_MIN if params\.MESH_MIN is defined' "UI mesh must forward an explicit min only when supplied"
+Assert-Contains $eddyUiMesh 'MESH_MAX=" ~ params\.MESH_MAX if params\.MESH_MAX is defined' "UI mesh must forward an explicit max only when supplied"
+Assert-Contains $bedMeshAlias 'TREED_EDDY_BED_MESH_CALIBRATE \{rawparams\}' "CALIBRATE_BED_MESH must forward explicit bounds"
+Assert-Contains $startPrint 'MESH_MIN=" ~ params\.MESH_MIN if params\.MESH_MIN is defined' "START_PRINT must forward an explicit min only when supplied"
+Assert-Contains $startPrint 'MESH_MAX=" ~ params\.MESH_MAX if params\.MESH_MAX is defined' "START_PRINT must forward an explicit max only when supplied"
+Assert-Contains $startKampMesh 'MESH_MIN=" ~ params\.MESH_MIN if params\.MESH_MIN is defined' "START_PRINT KAMP phase must keep an explicit min"
+Assert-Contains $startKampMesh 'MESH_MAX=" ~ params\.MESH_MAX if params\.MESH_MAX is defined' "START_PRINT KAMP phase must keep an explicit max"
+Assert-Contains $startKampMesh 'TREED_BED_MESH_CALIBRATE_EDDY PROFILE=treed_adaptive.*?\{mesh_bounds\}' "Adaptive mesh must forward explicit bounds"
+Assert-Contains $startKampMesh 'TREED_BED_MESH_CALIBRATE_EDDY PROFILE=\{MESH_PROFILE\}.*?\{mesh_bounds\}' "Calibration mesh must forward explicit bounds"
+
+$safeMinX = Get-ConfigNumber $eddyMeshCfg 'variable_scan_min_x'
+$safeMinY = Get-ConfigNumber $eddyMeshCfg 'variable_scan_min_y'
+$safeMaxX = Get-ConfigNumber $eddyMeshCfg 'variable_scan_max_x'
+$safeMaxY = Get-ConfigNumber $eddyMeshCfg 'variable_scan_max_y'
+$bedMin = [regex]::Match($probeEddy, '(?m)^mesh_min:\s*([0-9.]+),([0-9.]+)\s*$')
+$bedMax = [regex]::Match($probeEddy, '(?m)^mesh_max:\s*([0-9.]+),([0-9.]+)\s*$')
+if (-not $bedMin.Success -or -not $bedMax.Success) { throw 'FAIL: bed_mesh bounds not found' }
+$invariant = [Globalization.CultureInfo]::InvariantCulture
+if ([double]::Parse($bedMin.Groups[1].Value, $invariant) -ne $safeMinX -or
+    [double]::Parse($bedMin.Groups[2].Value, $invariant) -ne $safeMinY -or
+    [double]::Parse($bedMax.Groups[1].Value, $invariant) -ne $safeMaxX -or
+    [double]::Parse($bedMax.Groups[2].Value, $invariant) -ne $safeMaxY) {
+  throw 'FAIL: bed_mesh and Eddy macro bounds differ'
+}
+
+foreach ($case in @(
+  @{ Name='full safe area'; Min=@(7.5,5); Max=@(237.5,210); Accept=$true },
+  @{ Name='narrower area'; Min=@(40,40); Max=@(205,180); Accept=$true },
+  @{ Name='old X min'; Min=@(5,5); Max=@(237.5,210); Accept=$false },
+  @{ Name='old X max'; Min=@(7.5,5); Max=@(240,210); Accept=$false },
+  @{ Name='old Y max'; Min=@(7.5,5); Max=@(237.5,215); Accept=$false },
+  @{ Name='outside Y min'; Min=@(7.5,4.9); Max=@(237.5,210); Accept=$false },
+  @{ Name='outside Y max'; Min=@(7.5,5); Max=@(237.5,210.1); Accept=$false }
+)) {
+  $accepted = $case.Min[0] -ge $safeMinX -and $case.Min[1] -ge $safeMinY -and
+              $case.Max[0] -le $safeMaxX -and $case.Max[1] -le $safeMaxY -and
+              $case.Min[0] -lt $case.Max[0] -and $case.Min[1] -lt $case.Max[1]
+  if ($accepted -ne $case.Accept) { throw "FAIL: Eddy safe area case $($case.Name)" }
+}
+$offsetX = Get-ConfigNumber $probeEddy 'x_offset'
+$offsetY = Get-ConfigNumber $probeEddy 'y_offset'
+if ($offsetX -ne 0 -or $offsetY -ne -30 -or
+    $safeMinX - $offsetX -ne 7.5 -or $safeMaxX - $offsetX -ne 237.5 -or
+    $safeMinY - $offsetY -ne 35 -or $safeMaxY - $offsetY -ne 240) {
+  throw 'FAIL: Eddy probe-to-tool coordinates differ from the safe area contract'
+}
 
 # Блок 6: Bed mesh не должен безусловно переhome-ить уже известные оси.
 Assert-NotContains $eddyMesh '(?ms)^\s*BED_MESH_CLEAR\s*$\s*^\s*G28\s*$' "Eddy mesh must not unconditionally run full G28 after a successful START_PRINT homing"

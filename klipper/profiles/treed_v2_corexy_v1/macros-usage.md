@@ -51,6 +51,7 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive
 | `MESH` | `load` | `load`, `adaptive`, `calibrate` или `none`. |
 | `MESH_PROFILE` | `default` | Имя профиля mesh для `load`/`calibrate`. |
 | `MESH_METHOD` | `scan` для `adaptive`, иначе `automatic` | Метод построения mesh: `rapid_scan`, `scan`, `automatic`, `manual`. |
+| `MESH_MIN`, `MESH_MAX` | границы Eddy safe scan area | Необязательная более узкая область для `adaptive`/`calibrate`, в координатах датчика. |
 | `ADAPTIVE_MARGIN` | `5` | Отступ adaptive mesh от объектов. |
 | `HOTEND_READY_MARGIN` | `3` | Сколько градусов можно не дождаться до цели сопла перед purge. |
 | `SHAPER` | `none` | `none`, `light` или `full` перед печатью. |
@@ -235,7 +236,7 @@ BED_MESH_CALIBRATE PROFILE=default METHOD=automatic
 ```
 
 Макрос:
-- использует отдельную безопасную Eddy scan area `X5..240 / Y5..215`;
+- использует отдельную безопасную Eddy scan area `X7.5..237.5 / Y5..210`;
 - принимает `MESH_MIN`/`MESH_MAX` внутри этой области и отвергает некорректные координаты до движения;
 - не расширяет область движения и печати `X0..245 / Y0..245`;
 - чистит старую mesh-трансформацию;
@@ -243,6 +244,8 @@ BED_MESH_CALIBRATE PROFILE=default METHOD=automatic
 - временно отключает print-offset, если он был включен;
 - передает эффективные `MESH_MIN`/`MESH_MAX` в базовый Klipper `BED_MESH_CALIBRATE_BASE`;
 - принимает `SCAN_SPEED` только для `METHOD=rapid_scan`; для остальных методов скорость XY берется из `[bed_mesh] speed`.
+
+`TREED_EDDY_BED_MESH_CALIBRATE` и `CALIBRATE_BED_MESH` также передают необязательные `MESH_MIN`/`MESH_MAX` в эту обертку. При `y_offset: -30` штатная область датчика `Y5..210` соответствует перемещению головы `Y35..240`.
 
 Это Eddy service mesh в safe scan area, а не скан всей области печати. Scan area меньше стола, потому что sensing point датчика смещен относительно сопла и не может физически покрыть всю заднюю часть `245x245`.
 
@@ -260,7 +263,7 @@ TREED_Z_PARK_ZERO_EDDY
 PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy
 ```
 
-Первичная калибровка Eddy с учетом безопасной scan area и runtime `[force_move]`. Макрос делает `G28 X Y`, ставит Eddy в центр `X5..240 / Y5..215` и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`.
+Первичная калибровка Eddy с учетом безопасной scan area и runtime `[force_move]`. Макрос делает `G28 X Y`, ставит Eddy в центр `X7.5..237.5 / Y5..210` и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`.
 
 После интерактивной калибровки сохранять через:
 
