@@ -66,7 +66,7 @@
 - `TREED_STATE_FILE` — default `/run/treed-loader/state.env`.
 - `TREED_CAN_IFACE` — должен совпадать с активным profile cfg `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
-- `TREED_CAN_TXQUEUE` — default `1024`.
+- `TREED_CAN_TXQUEUE` — default `128`.
 - `TREED_CAN_RESTART_MS` — default `100` (применяется в `ip link ... restart-ms` при каждом старте `treed-can-setup.service`).
 - `TREED_CAN_IFACE_WAIT_SEC` — default `20` (ожидание появления `can0` после boot/USB init).
 - `TREED_CAN_REINIT_ATTEMPTS` — default `5` (количество циклов down/up для восстановления CAN после reboot).

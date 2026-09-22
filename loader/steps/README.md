@@ -69,7 +69,7 @@
 - `TREED_MAIN_MCU_CANBUS_UUID` (должен совпадать с активным profile cfg `d372e54bf965`)
 - `TREED_CAN_IFACE` (должен совпадать с активным profile cfg `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
-- `TREED_CAN_TXQUEUE` (default `1024`)
+- `TREED_CAN_TXQUEUE` (default `128`)
 - `TREED_CAN_RESTART_MS` (default `100`; значение `restart-ms` для auto-recovery CAN controller)
 - `TREED_CAN_IFACE_WAIT_SEC` (default `20`; ожидание появления `can0` после boot/USB init)
 - `TREED_CAN_REINIT_ATTEMPTS` (default `5`; число циклов down/up при инициализации CAN)

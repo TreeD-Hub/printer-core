@@ -12,7 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 - `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, default `d372e54bf965`.
 - `TREED_CAN_IFACE` — default `can0`.
 - `TREED_CAN_BITRATE` — default `1000000`.
-- `TREED_CAN_TXQUEUE` — default `1024`.
+- `TREED_CAN_TXQUEUE` — default `128`.
 - `TREED_DEPLOY_MODE` — `auto|clean|preserve`, default `auto`; auto выбирает режим по `/run/treed-loader/state.env`.
 - `TREED_KLIPPER_PREFLIGHT` — `0|1`, default `1`; включает readiness-проверку перед стартом Klipper.
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` — default `12`; общий таймаут ожидания CAN-интерфейса.

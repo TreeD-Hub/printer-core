@@ -91,7 +91,7 @@ Required:
 Optional:
 - `TREED_CAN_IFACE` (default `can0`)
 - `TREED_CAN_BITRATE` (default `1000000`)
-- `TREED_CAN_TXQUEUE` (default `1024`)
+- `TREED_CAN_TXQUEUE` (default `128`)
 - `TREED_KLIPPER_PREFLIGHT` (`0|1`, default `1`)
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`)
