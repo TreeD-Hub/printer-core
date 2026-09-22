@@ -231,6 +231,7 @@ treed-ui status
   - venv находится в `${TREED_KLIPPERSCREEN_ENV:-${PI_HOME}/.KlipperScreen-env}`;
   - checkout нормализуется в branch-based состояние `${TREED_KLIPPERSCREEN_PRIMARY_BRANCH:-master}` с `origin`, чтобы Moonraker update_manager не видел detached repo;
   - checkout синхронизируется ровно на manifest SHA, включая downgrade с произвольного newer commit;
+  - `styles/treed-oled/` зарегистрирован как loader-owned overlay в локальном `.git/info/exclude`; прочие untracked/tracked изменения блокируют sync;
   - если service отсутствует/указывает в другой каталог, installer запускается для восстановления systemd wiring без удаления checkout.
 - `klipperscreen-theme.sh`
   - `clean`: `KlipperScreen.conf` без `.bak`.

@@ -96,6 +96,15 @@ Assert-Match "loader\steps\runtime-bootstrap.sh" "runtime_repo_add_excludes" "ma
 Assert-Match "loader\steps\moonraker-config.sh" 'restart_and_verify_moonraker_components' "Moonraker restarts and verifies components"
 Assert-Match "loader\steps\mainsail-web.sh" 'archive checksum mismatch' "Mainsail artifact checksum is enforced"
 Assert-Match "loader\steps\klipperscreen-install.sh" 'installed package matches manifest' "KlipperScreen requires exact manifest commit"
+Assert-Match "loader\steps\klipperscreen-install.sh" 'runtime_repo_add_excludes "\$\{KS_HOME\}" ''/styles/treed-oled/''' "KlipperScreen registers only the TreeD-owned theme overlay"
+Assert-Match "loader\steps\klipperscreen-theme.sh" 'THEME_DST="\$\{KS_STYLES_DIR\}/\$\{TREED_THEME_NAME\}"' "KlipperScreen theme deploy owns the excluded directory"
+$ksInstall = Read-RepoFile "loader\steps\klipperscreen-install.sh"
+$ksExcludePattern = 'runtime_repo_add_excludes "\$\{KS_HOME\}" ''/styles/treed-oled/'''
+$ksExcludeMatches = [regex]::Matches($ksInstall, $ksExcludePattern)
+$ksSyncIndex = $ksInstall.IndexOf('sync_managed_repo "${KS_HOME}"')
+if ($ksExcludeMatches.Count -lt 2 -or $ksExcludeMatches[0].Index -gt $ksSyncIndex -or $ksExcludeMatches[$ksExcludeMatches.Count - 1].Index -lt $ksSyncIndex) {
+  throw "FAIL: KlipperScreen theme exclude must be registered before and after exact sync"
+}
 Assert-Match "loader\steps\verify.sh" 'TREED_ALLOW_HARDWARE_NOT_READY:-0' "production hardware gate is default"
 Assert-Match "loader\steps\verify.sh" "mcu 'EBBCan': Unable to connect" "EBB connection errors are fatal by default"
 Assert-Match "loader\steps\verify.sh" 'hardware_failf "Klipper ready required' "Klipper ready is a production hardware gate"

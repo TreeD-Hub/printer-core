@@ -92,7 +92,60 @@ sync_managed_repo "${tmp}/managed" "${remote}" "${target_commit}" master Moonrak
 assert_synced "${tmp}/managed"
 [ -f "${tmp}/managed/managed-runtime.txt" ]
 
-# Блок 7: Повреждённая Git metadata сохраняется перед восстановлением.
+# Блок 7: KlipperScreen theme overlay разрешён целиком и переживает exact/repeated sync.
+git clone "${remote}" "${tmp}/ks-theme" >/dev/null
+git -C "${tmp}/ks-theme" checkout -B master "${old_commit}" >/dev/null
+runtime_repo_add_excludes "${tmp}/ks-theme" '/styles/treed-oled/'
+mkdir -p "${tmp}/ks-theme/styles/treed-oled/images"
+printf 'theme-v1\n' > "${tmp}/ks-theme/styles/treed-oled/style.css"
+printf '<svg/>\n' > "${tmp}/ks-theme/styles/treed-oled/images/icon.svg"
+git -C "${tmp}/ks-theme" check-ignore -q styles/treed-oled/style.css
+git -C "${tmp}/ks-theme" check-ignore -q styles/treed-oled/images/icon.svg
+sync_managed_repo "${tmp}/ks-theme" "${remote}" "${target_commit}" master KlipperScreen
+assert_synced "${tmp}/ks-theme"
+[ -f "${tmp}/ks-theme/styles/treed-oled/style.css" ]
+[ -f "${tmp}/ks-theme/styles/treed-oled/images/icon.svg" ]
+
+rm -rf "${tmp}/ks-theme/styles/treed-oled"
+mkdir -p "${tmp}/ks-theme/styles/treed-oled/images"
+printf 'theme-v2\n' > "${tmp}/ks-theme/styles/treed-oled/style.css"
+printf '<svg>v2</svg>\n' > "${tmp}/ks-theme/styles/treed-oled/images/icon.svg"
+sync_managed_repo "${tmp}/ks-theme" "${remote}" "${target_commit}" master KlipperScreen
+assert_synced "${tmp}/ks-theme"
+grep -Fx 'theme-v2' "${tmp}/ks-theme/styles/treed-oled/style.css" >/dev/null
+
+# Блок 8: Неизвестный файл рядом с managed theme блокирует sync.
+git clone "${remote}" "${tmp}/ks-random-style" >/dev/null
+runtime_repo_add_excludes "${tmp}/ks-random-style" '/styles/treed-oled/'
+mkdir -p "${tmp}/ks-random-style/styles"
+printf 'unknown\n' > "${tmp}/ks-random-style/styles/random-file.txt"
+if sync_managed_repo "${tmp}/ks-random-style" "${remote}" "${target_commit}" master KlipperScreen; then
+  printf 'unknown KlipperScreen style unexpectedly synced\n' >&2
+  exit 1
+fi
+[ -f "${tmp}/ks-random-style/styles/random-file.txt" ]
+
+# Блок 9: Неизвестный файл в корне KlipperScreen блокирует sync.
+git clone "${remote}" "${tmp}/ks-root-unknown" >/dev/null
+runtime_repo_add_excludes "${tmp}/ks-root-unknown" '/styles/treed-oled/'
+printf 'unknown\n' > "${tmp}/ks-root-unknown/local.txt"
+if sync_managed_repo "${tmp}/ks-root-unknown" "${remote}" "${target_commit}" master KlipperScreen; then
+  printf 'unknown KlipperScreen root file unexpectedly synced\n' >&2
+  exit 1
+fi
+[ -f "${tmp}/ks-root-unknown/local.txt" ]
+
+# Блок 10: Tracked user modification в KlipperScreen блокирует sync.
+git clone "${remote}" "${tmp}/ks-tracked-dirty" >/dev/null
+runtime_repo_add_excludes "${tmp}/ks-tracked-dirty" '/styles/treed-oled/'
+printf 'user-change\n' >> "${tmp}/ks-tracked-dirty/runtime.txt"
+if sync_managed_repo "${tmp}/ks-tracked-dirty" "${remote}" "${target_commit}" master KlipperScreen; then
+  printf 'tracked KlipperScreen modification unexpectedly synced\n' >&2
+  exit 1
+fi
+grep -Fx 'user-change' "${tmp}/ks-tracked-dirty/runtime.txt" >/dev/null
+
+# Блок 11: Повреждённая Git metadata сохраняется перед восстановлением.
 git clone "${remote}" "${tmp}/corrupt" >/dev/null
 printf 'broken-index\n' > "${tmp}/corrupt/.git/index"
 sync_managed_repo "${tmp}/corrupt" "${remote}" "${target_commit}" master Moonraker
@@ -100,7 +153,7 @@ assert_synced "${tmp}/corrupt"
 corrupt_backup="$(find "${tmp}" -maxdepth 1 -type d -name 'corrupt.treed-backup-*' -print -quit)"
 [ -n "${corrupt_backup}" ]
 
-# Блок 8: Некорректный каталог сохраняется рядом и заменяется валидным checkout.
+# Блок 12: Некорректный каталог сохраняется рядом и заменяется валидным checkout.
 mkdir "${tmp}/broken"
 printf 'keep-me\n' > "${tmp}/broken/local.txt"
 sync_managed_repo "${tmp}/broken" "${remote}" "${target_commit}" master Moonraker

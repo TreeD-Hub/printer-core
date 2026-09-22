@@ -280,7 +280,10 @@ case "${KS_NETWORK}" in
   *) KS_NETWORK="N" ;;
 esac
 
-# Единственная ожидаемая локальная правка старого loader — patch installer; остальной dirty state блокируется.
+# TreeD theme — loader-owned untracked overlay; любые другие untracked paths остаются блокирующими.
+runtime_repo_add_excludes "${KS_HOME}" '/styles/treed-oled/'
+
+# Единственная ожидаемая tracked-правка старого loader — patch installer; остальной dirty state блокируется.
 KS_PREVIOUS_COMMIT=""
 if [ -d "${KS_HOME}/.git" ]; then
   KS_PREVIOUS_COMMIT="$(sudo -u "${PI_USER}" -H git -C "${KS_HOME}" rev-parse HEAD 2>/dev/null || true)"
@@ -292,6 +295,7 @@ if [ -d "${KS_HOME}/.git" ]; then
 fi
 
 sync_managed_repo "${KS_HOME}" "${KS_REPO_URL}" "${KS_REPO_REF}" "${KS_PRIMARY_BRANCH}" "KlipperScreen"
+runtime_repo_add_excludes "${KS_HOME}" '/styles/treed-oled/'
 if [ -z "${KS_PREVIOUS_COMMIT}" ] || [ "${KS_PREVIOUS_COMMIT}" != "${KS_REPO_REF}" ]; then
   KLIPPERSCREEN_UPDATED=1
 fi
