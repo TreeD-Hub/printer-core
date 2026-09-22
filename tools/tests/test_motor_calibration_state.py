@@ -107,6 +107,63 @@ class MotorStateTest(unittest.TestCase):
         finally:
             HOMING.HomingMove.homing_move = calibration.HOMING_MOVE_ORIGINAL
 
+    def test_tuning_passes_have_bounded_cruise_windows(self):
+        self.subject.xy_speeds = (100., 150., 200.)
+        self.subject.xy_accel = self.subject.old_accel = 15000.
+        self.subject.xy_margin = 25.
+        self.subject.xy_settle = .15
+        self.subject.min_cruise = .2
+        self.subject.z_low, self.subject.z_high = 25., 50.
+        self.subject.z_speeds = (2., 3.)
+        self.subject._ready = Mock(return_value={
+            'axis_minimum': (0., 0., -5.),
+            'axis_maximum': (245., 245., 255.)})
+        self.subject.toolhead = types.SimpleNamespace(
+            get_max_velocity=lambda: (600., 15000.),
+            get_kinematics=lambda: types.SimpleNamespace(
+                max_z_velocity=15., max_z_accel=500.))
+
+        jobs = self.subject._geometry(calibration.XY_MOTORS)
+        self.assertEqual(len(jobs), 12)
+        self.assertTrue(all(accel == 15000. and
+                            all(25. <= point[0] <= 220. and
+                                25. <= point[1] <= 220.
+                                for point in (start, end))
+                            for _, _, accel, start, end in jobs))
+        joint = list(self.subject._joint_jobs((100., 200.)))
+        self.assertEqual(len(joint), 8)
+        self.assertEqual({job[1] for job in joint}, {100., 200.})
+
+    def test_unmeasurable_tune_rejected_before_homing(self):
+        self.subject.state = 'idle'
+        self.subject.phase_enabled = False
+        self.subject.xy_speeds = (100., 200., 350.)
+        self.subject.xy_accel = 15000.
+        self.subject.reactor = types.SimpleNamespace(monotonic=lambda: 0.)
+        self.subject.get_status = Mock(return_value={'phase_supported': True})
+        self.subject._check_base_tables = Mock()
+        self.subject._stepper_frequency = Mock(return_value=619.)
+        self.subject._ready_before_home = Mock()
+        steppers = [types.SimpleNamespace(get_name=lambda name=name: name)
+                    for name in calibration.XY_MOTORS]
+        toolhead = types.SimpleNamespace(
+            get_max_velocity=lambda: (600., 15000.),
+            get_kinematics=lambda: types.SimpleNamespace(
+                get_steppers=lambda: steppers))
+        chip = types.SimpleNamespace(
+            start_internal_client=lambda: None, data_rate=3200.)
+        self.subject.printer = types.SimpleNamespace(
+            lookup_object=lambda name, default=None: {
+                'toolhead': toolhead, 'adxl345': chip}.get(name, default))
+        gcmd = types.SimpleNamespace(
+            get=lambda key, default=None: {
+                'MODE': 'tune', 'MOTORS': 'XY'}.get(key, default),
+            error=ValueError)
+
+        with self.assertRaisesRegex(ValueError, 'sensor_bandwidth'):
+            self.subject.cmd_calibrate(gcmd)
+        self.subject._ready_before_home.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

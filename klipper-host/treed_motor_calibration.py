@@ -23,17 +23,19 @@ class TreedMotorCalibration:
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
         self.reactor = self.printer.get_reactor()
-        self.xy_speeds = config.getfloatlist('xy_speeds', (15., 25., 35.))
+        self.xy_speeds = config.getfloatlist('xy_speeds', (100., 150., 200.))
         self.z_speeds = config.getfloatlist('z_speeds', (2., 3.))
-        self.xy_accel = config.getfloat('xy_accel', 500., above=0.)
+        self.xy_accel = config.getfloat('xy_accel', 15000., above=0.)
         self.z_accel = config.getfloat('z_accel', 30., above=0.)
         self.xy_margin = config.getfloat('xy_margin', 25., minval=10.)
         self.z_low = config.getfloat('z_low', 25., minval=15.)
         self.z_high = config.getfloat('z_high', 50., above=self.z_low)
-        self.min_cruise = config.getfloat('min_cruise_seconds', 0.6, minval=0.5)
+        self.min_cruise = config.getfloat('min_cruise_seconds', 0.2, minval=0.2)
+        self.xy_settle = config.getfloat('xy_settle_seconds', 0.15,
+                                         minval=0.05)
         limits = (self.xy_speeds + self.z_speeds +
                   (self.xy_accel, self.z_accel, self.xy_margin,
-                   self.z_low, self.z_high, self.min_cruise))
+                   self.z_low, self.z_high, self.min_cruise, self.xy_settle))
         if (not self.xy_speeds or not self.z_speeds or
                 not all(math.isfinite(value) and value > 0. for value in limits)):
             raise config.error('motor calibration needs finite positive limits')
@@ -410,7 +412,7 @@ class TreedMotorCalibration:
         if xlo >= xhi or ylo >= yhi or zlo >= zhi:
             raise motor_math.MeasurementError('unsafe_bounded_area')
         center = ((xlo + xhi) * .5, (ylo + yhi) * .5, zlo)
-        half_span = min((xhi - xlo) * .5, (yhi - ylo) * .5, 40.)
+        half_span = min((xhi - xlo) * .5, (yhi - ylo) * .5)
         jobs = []
         for motor in motors:
             speeds = self.z_speeds if motor == 'stepper_z' else self.xy_speeds
@@ -431,7 +433,9 @@ class TreedMotorCalibration:
                 else:
                     start, end = motor_math.diagonal(motor, center, half_span, 1)
                     length = math.dist(start, end)
-                motor_math.cruise_window(length, speed, accel, self.min_cruise)
+                motor_math.cruise_window(
+                    length, speed, accel, self.min_cruise,
+                    self.xy_settle if motor in XY_MOTORS else .30)
                 jobs.extend(((motor, speed, accel, start, end),
                              (motor, speed, accel, end, start)))
         return jobs
@@ -483,7 +487,8 @@ class TreedMotorCalibration:
             raise motor_math.MeasurementError('sensor_data_loss')
         length = math.dist(start, end)
         enter, leave = motor_math.cruise_window(
-            length, speed, accel, self.min_cruise)
+            length, speed, accel, self.min_cruise,
+            self.xy_settle if motor in XY_MOTORS else .30)
         frequency = self._stepper_frequency(motor, speed, start, end)
         inverted = stepper.get_dir_inverted()[0]
         sign = ((1 if end[2] > start[2] else -1) * (-1 if inverted else 1)
@@ -500,6 +505,8 @@ class TreedMotorCalibration:
             samples, idle, move_start + enter, move_start + leave,
             frequency)
         quality = ('valid' if any(h['quality'] == 'valid' for h in harmonics.values())
+                   else 'unmeasurable' if all(
+                       h['quality'] == 'unmeasurable' for h in harmonics.values())
                    else 'insufficient_signal')
         return {'motor': motor, 'direction': 'positive' if sign > 0 else 'negative',
                 'trajectory': ('vertical_z' if motor == 'stepper_z' else
@@ -525,14 +532,14 @@ class TreedMotorCalibration:
         x = (lo[0] + hi[0]) / 2.
         y = (lo[1] + hi[1]) / 2.
         z = max(lo[2] + 5., self.z_low)
-        span = min((hi[0] - lo[0]) / 2. - self.xy_margin, 40.)
+        span = (hi[0] - lo[0]) / 2. - self.xy_margin
         if span <= 0:
             raise motor_math.MeasurementError('unsafe_joint_area')
         a, b = (x - span, y, z), (x + span, y, z)
         accel = min(self.xy_accel, self.old_accel)
         for speed in speeds:
             motor_math.cruise_window(2. * span, speed, accel,
-                                      self.min_cruise)
+                                      self.min_cruise, self.xy_settle)
             for motor in XY_MOTORS:
                 yield (motor, speed, accel, a, b)
                 yield (motor, speed, accel, b, a)
@@ -742,9 +749,11 @@ class TreedMotorCalibration:
         except StopIteration as done:
             self.progress = 1.
             if self.mode == 'measure':
-                state = ('insufficient_signal' if any(
-                    r['quality'] == 'insufficient_signal' for r in self.results)
-                         else 'measured')
+                state = ('unmeasurable' if any(
+                    r['quality'] == 'unmeasurable' for r in self.results)
+                         else 'insufficient_signal' if any(
+                             r['quality'] == 'insufficient_signal'
+                             for r in self.results) else 'measured')
             elif self.mode == 'tune':
                 self.candidate = done.value
                 state = 'candidate'
@@ -793,6 +802,19 @@ class TreedMotorCalibration:
                                  ['stepper_x', 'stepper_y', 'stepper_z'])
         if any(m not in self.kin_steppers for m in self.requested_motors):
             raise gcmd.error('requested motor missing from active kinematics')
+        if any(m in XY_MOTORS for m in self.requested_motors):
+            if self.toolhead.get_max_velocity()[1] < self.xy_accel:
+                raise gcmd.error('set runtime acceleration to at least xy_accel first')
+        if mode == 'tune':
+            for motor in XY_MOTORS:
+                slope = 1 if motor == 'stepper_x' else -1
+                frequency = self._stepper_frequency(
+                    motor, max(self.xy_speeds), (0., 0., 0.),
+                    (1., slope, 0.))
+                if 8. * frequency >= self.chip.data_rate:
+                    raise gcmd.error(
+                        'ADXL345 sensor_bandwidth: cannot verify H2 at %.0f mm/s'
+                        % max(self.xy_speeds))
         self._ready_before_home(gcmd)
         self.results = []
         if mode == 'tune':

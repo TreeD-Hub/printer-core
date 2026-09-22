@@ -62,8 +62,14 @@ def _quality(samples, start, end, frequency):
         raise MeasurementError('non_monotonic_sample_time')
     period = statistics.median(deltas)
     rate = 1. / period
-    if max(deltas) > period * 1.5:
-        raise MeasurementError('dropped_samples')
+    missing = sum(max(0, round(delta / period) - 1)
+                  for delta in deltas if delta > period * 1.5)
+    largest_gap = max(deltas)
+    loss_fraction = missing / (len(window) + missing)
+    if largest_gap > period * 3.5 or loss_fraction > .01:
+        raise MeasurementError(
+            'dropped_samples: estimated_missing=%d samples=%d max_gap_ms=%.3f'
+            % (missing, len(window), largest_gap * 1000.))
     if frequency * 4. >= rate:
         raise MeasurementError('sensor_bandwidth')
     if (times[-1] - times[0]) * frequency < 12.:
@@ -71,7 +77,7 @@ def _quality(samples, start, end, frequency):
     # ADXL345 full-resolution +/-16g: отсечь отсчёты у предела датчика.
     if any(abs(v) >= 150000. for s in window for v in s[1:4]):
         raise MeasurementError('sensor_saturation')
-    return window, rate
+    return window, rate, missing, largest_gap
 
 
 def _lockin(samples, frequency, harmonic=1):
@@ -99,7 +105,8 @@ def measure_harmonics(samples, idle_samples, start, end, base_frequency,
     for harmonic in harmonics:
         frequency = base_frequency * harmonic
         try:
-            window, rate = _quality(samples, start, end, frequency)
+            window, rate, missing, largest_gap = _quality(
+                samples, start, end, frequency)
         except MeasurementError as exc:
             if str(exc) not in ('sensor_bandwidth', 'too_few_periods'):
                 raise
@@ -111,7 +118,7 @@ def measure_harmonics(samples, idle_samples, start, end, base_frequency,
             raise MeasurementError('command_phase_missing')
         idle_start = idle_samples[0][0] if idle_samples else 0.
         idle_end = idle_samples[-1][0] if idle_samples else 0.
-        idle, _ = _quality(idle_samples, idle_start, idle_end, frequency)
+        idle, _, _, _ = _quality(idle_samples, idle_start, idle_end, frequency)
         components = _lockin(window, frequency, harmonic)
         amplitude = _magnitude(components)
         floor = _magnitude(_lockin(idle, frequency))
@@ -120,6 +127,8 @@ def measure_harmonics(samples, idle_samples, start, end, base_frequency,
             'quality': 'valid' if signal_ok else 'insufficient_signal',
             'frequency_hz': frequency, 'amplitude_mm_s2': amplitude,
             'noise_floor_mm_s2': floor, 'sample_rate_hz': rate,
+            'estimated_missing_samples': missing,
+            'largest_sample_gap_ms': largest_gap * 1000.,
             'samples': len(window), 'periods': (window[-1][0] - window[0][0]) * frequency,
             'command_phase_components_mm_s2': components,
         }
@@ -138,6 +147,13 @@ def compare_verification(baseline, corrected):
         if any(base[k] != candidate[k] for k in
                ('motor', 'direction', 'speed_mm_s', 'trajectory')):
             return {'accepted': False, 'reason': 'unmatched_passes'}
+        if not any(base['harmonics'][harmonic]['quality'] == 'valid'
+                   for harmonic in ('H2', 'H4')):
+            return {'accepted': False,
+                    'reason': 'unmeasurable_verification_condition',
+                    'condition': {key: base[key] for key in
+                                  ('motor', 'direction', 'speed_mm_s',
+                                   'trajectory')}}
         motor = base['motor']
         for harmonic in ('H2', 'H4'):
             first, second = (base['harmonics'][harmonic],

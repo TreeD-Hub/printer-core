@@ -48,7 +48,12 @@ class MotorMathTest(unittest.TestCase):
         result = motor.measure_harmonics(samples, idle, 2., 2.9, base)
         self.assertAlmostEqual(result['H2']['amplitude_mm_s2'], 30., delta=1.)
         self.assertAlmostEqual(result['H4']['amplitude_mm_s2'], 12., delta=1.)
-        with self.assertRaisesRegex(motor.MeasurementError, 'dropped_samples'):
+        one_missing = motor.measure_harmonics(
+            samples[:1500] + samples[1501:], idle, 2., 2.9, base)
+        self.assertEqual(one_missing['H2']['estimated_missing_samples'], 1)
+        self.assertAlmostEqual(one_missing['H2']['amplitude_mm_s2'], 30., delta=1.)
+        with self.assertRaisesRegex(
+                motor.MeasurementError, 'dropped_samples: estimated_missing=100'):
             motor.measure_harmonics(samples[:100] + samples[200:], idle,
                                     2., 2.9, base)
         quiet = [s + (2. * math.pi * base * s[0],) for s in idle]
@@ -59,6 +64,9 @@ class MotorMathTest(unittest.TestCase):
         self.assertEqual(fast['H2']['quality'], 'insufficient_signal')
         self.assertEqual(fast['H4']['quality'], 'unmeasurable')
         self.assertEqual(fast['H4']['reason'], 'sensor_bandwidth')
+        diagonal_motor_hz = motor.electrical_frequency(
+            350. * math.sqrt(2.), 40., 200.)
+        self.assertGreater(8. * diagonal_motor_hz, rate)
 
     def test_independent_verification_rejects_single_motor_regression(self):
         def row(name, amplitude):
@@ -79,6 +87,19 @@ class MotorMathTest(unittest.TestCase):
         corrected[4] = row('stepper_y', 24.)
         self.assertEqual(motor.compare_verification(baseline, corrected)['reason'],
                          'individual_condition_regressed')
+
+    def test_verification_rejects_unmeasurable_high_speed(self):
+        def row():
+            return {'motor': 'stepper_x', 'direction': 'positive',
+                    'speed_mm_s': 350., 'trajectory': 'isolated_diagonal',
+                    'harmonics': {
+                        'H2': {'quality': 'unmeasurable'},
+                        'H4': {'quality': 'unmeasurable'}}}
+
+        verdict = motor.compare_verification([row(), row()], [row(), row()])
+        self.assertFalse(verdict['accepted'])
+        self.assertEqual(verdict['reason'],
+                         'unmeasurable_verification_condition')
 
 
 if __name__ == '__main__':
