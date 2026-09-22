@@ -260,7 +260,7 @@ moonraker_components_check() {
     rm -f "${tmp}"
     return 0
   fi
-  for component in treed_shell_command treed_host_network treed_filament_sensor treed_update; do
+  for component in treed_shell_command treed_host_network treed_filament_sensor treed_update treed_recovery; do
     if grep -Fq "\"${component}\"" "${tmp}"; then
       pass "Moonraker component ${component} loaded"
     else
@@ -385,9 +385,9 @@ print_runtime_summary() {
     "Mainsail:" "${mainsail_version:-unknown}" \
     "KlipperScreen:" "$(runtime_git_label "${TREED_KLIPPERSCREEN_HOME}") $(git -C "${TREED_KLIPPERSCREEN_HOME}" rev-parse --short=12 HEAD 2>/dev/null || true)" \
     "Crowsnest:" "${crowsnest_label}" \
-    "Main MCU firmware source:" "$(firmware_source_commit main_octopus)" \
-    "EBB firmware source:" "$(firmware_source_commit ebb42_can)" \
-    "Eddy firmware source:" "$(firmware_source_commit eddy_can)" \
+    "Main artifact source:" "$(firmware_source_commit main_octopus) (not device readback)" \
+    "EBB artifact source:" "$(firmware_source_commit ebb42_can) (not device readback)" \
+    "Eddy artifact source:" "$(firmware_source_commit eddy_can) (not device readback)" \
     "Klipper ready:" "$([ "${MOONRAKER_READY_OK}" = "1" ] && printf yes || printf no)" \
     "Main MCU:" "${MAIN_MCU_STATUS}" \
     "EBB:" "${EBB_MCU_STATUS}" \
@@ -1404,23 +1404,25 @@ if [ "${TREED_FIRMWARE_BUILD_ENABLED}" = "1" ]; then
   if [ -f "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv" ]; then
     pass "firmware manifest present"
     if head -n 1 "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv" \
-      | grep -Fx $'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256' >/dev/null; then
-      pass "firmware manifest schema includes source/config/artifact checksums"
+      | grep -Fx $'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256\tdictionary\tdictionary_sha256' >/dev/null; then
+      pass "firmware manifest schema includes source/config/artifact/dictionary checksums"
     else
-      failf "firmware manifest schema includes source/config/artifact checksums"
+      failf "firmware manifest schema includes source/config/artifact/dictionary checksums"
     fi
     for firmware_target in main_octopus ebb42_can eddy_can; do
       firmware_row="$(awk -F '\t' -v target="${firmware_target}" 'NR > 1 && $1 == target { print; exit }' "${TREED_FIRMWARE_ARTIFACTS_DIR}/latest/manifest.tsv")"
-      IFS=$'\t' read -r firmware_name firmware_artifact firmware_artifact_sha firmware_commit firmware_config firmware_config_sha <<< "${firmware_row}"
+      IFS=$'\t' read -r firmware_name firmware_artifact firmware_artifact_sha firmware_commit firmware_config firmware_config_sha firmware_dictionary firmware_dictionary_sha <<< "${firmware_row}"
       if [ "${firmware_name:-}" = "${firmware_target}" ] \
         && [ "${firmware_commit:-}" = "${TREED_KLIPPER_REF}" ] \
         && [ -f "${firmware_artifact:-}" ] \
         && [ -f "${firmware_config:-}" ] \
+        && [ -f "${firmware_dictionary:-}" ] \
         && [ "$(sha256sum "${firmware_artifact}" | awk '{print $1}')" = "${firmware_artifact_sha:-}" ] \
-        && [ "$(sha256sum "${firmware_config}" | awk '{print $1}')" = "${firmware_config_sha:-}" ]; then
-        pass "${firmware_target} firmware source and checksums"
+        && [ "$(sha256sum "${firmware_config}" | awk '{print $1}')" = "${firmware_config_sha:-}" ] \
+        && [ "$(sha256sum "${firmware_dictionary}" | awk '{print $1}')" = "${firmware_dictionary_sha:-}" ]; then
+        pass "${firmware_target} firmware source, dictionary and checksums"
       else
-        failf "${firmware_target} firmware source and checksums"
+        failf "${firmware_target} firmware source, dictionary and checksums"
       fi
     done
   else

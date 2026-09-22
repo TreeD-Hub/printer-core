@@ -6,6 +6,7 @@
 
 - `tools/tests/` — локальные контрактные проверки loader/steps.
 - `tools/skills/` — локальные skills для Codex, используемые в этом репозитории.
+- `tools/collect_eddy_diagnostic.sh` — passive по умолчанию пакет CAN/MCU; `eddy-scan` требует отдельного разрешения движения.
 
 ## `tools/skills/`
 
@@ -30,4 +31,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_loader_con
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_eddy_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_parking_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_system_capabilities_contracts.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_shutdown_recovery_contracts.ps1"
 ```

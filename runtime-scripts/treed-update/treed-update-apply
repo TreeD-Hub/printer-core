@@ -107,6 +107,7 @@ if ! flock -n 9; then
 fi
 
 apply_core_update() {
+  local dirty=""
   if [ ! -d "${REPO_DIR}/.git" ]; then
     echo "treed-update: repo checkout not found: ${REPO_DIR}" >&2
     return 1
@@ -117,8 +118,14 @@ apply_core_update() {
   fi
 
   cd "${REPO_DIR}"
+  dirty="$(git status --porcelain --untracked-files=all)"
+  if [ -n "${dirty}" ]; then
+    echo "treed-update: printer-core has local changes; refusing to overwrite" >&2
+    printf '%s\n' "${dirty}" >&2
+    return 1
+  fi
   git fetch --tags --force origin "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}"
-  git checkout --force "${TARGET_TAG}"
+  git checkout --detach "${TARGET_TAG}"
   TREED_DEPLOY_MODE=auto TREED_NONINTERACTIVE=1 bash install.sh
 }
 

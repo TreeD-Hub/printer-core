@@ -8,6 +8,7 @@
 - `treed_host_network.py`
 - `treed_filament_sensor.py`
 - `treed_update.py`
+- `treed_recovery.py`
 
 ## Назначение `treed_shell_command.py`
 
@@ -39,10 +40,22 @@
 
 - регистрирует endpoints обновлений для TreeD Shell:
   - `GET /server/treed/update/status`
+  - `GET /server/treed/update/firmware`
   - `POST /server/treed/update/check`
   - `POST /server/treed/update/apply`
 - проверяет release data отдельно для `treed-shell` и `printer-core`;
 - применяет выбранный `targetId`: UI tag `ui-main-<run>-<attempt>` или системный semver tag `vX.Y.Z` через root-side `/usr/local/sbin/treed-update-apply`.
+- раздельно сообщает expected Klipper SHA, host checkout, running Klippy, build checksums и live `mcu_version` каждой платы;
+- сохраняет последнее успешное наблюдение MCU только как `lastKnown.stale=true`, если Klippy/MCU недоступны;
+- сверка `mcu_version` не называется readback или криптографической проверкой прошитого бинарника.
+
+## Назначение `treed_recovery.py`
+
+- регистрирует `GET /server/treed/recovery/status`, `POST /start` и `POST /cancel`;
+- выполняет ровно один явно запрошенный `FIRMWARE_RESTART`;
+- после `ready` наблюдает required MCU 60 секунд и проверяет свежесть `bytes_read`;
+- сохраняет имя потерянной MCU, CAN/serial counter deltas и историю предыдущих причин;
+- не отправляет motion/heater G-code и не запускает повторные recovery.
 
 ## Интеграция
 
@@ -50,6 +63,7 @@
 - `[treed_host_network]` требует `network-manager`/`nmcli` на host;
 - `[treed_filament_sensor]` пишет только `filament_motion_runtime.cfg`;
 - `[treed_update]` требует deployed `/usr/local/sbin/treed-update-apply` и sudoers-файл из `moonraker-config.sh`;
+- `[treed_recovery]` использует штатный Klippy API и не требует root/sudo;
 - текущие команды используются для camera runtime:
   - `treed_cam_session_start`
   - `treed_cam_snapshot`

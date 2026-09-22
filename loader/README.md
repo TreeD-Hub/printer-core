@@ -42,7 +42,7 @@
 | 13 | `plymouth-systemd` | required | Политика `getty@tty1` и unit Plymouth. |
 | 14 | `klipper-sync` | required | Синхронизация `klipper/` в staging. |
 | 15 | `klipper-core` | required | Раскладка staging в runtime-конфиг. |
-| 16 | `klipper-anti-shutdown` | required | Сброс MCU shutdown при необходимости. |
+| 16 | `klipper-anti-shutdown` | required | Пассивная фиксация shutdown без автоматического recovery. |
 | 17 | `mainsail-web` | required | Установка/обновление web-слоя Mainsail и nginx reverse proxy. |
 | 18 | `moonraker-config` | required | Деплой Moonraker-конфигов и компонента. |
 | 19 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |

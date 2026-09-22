@@ -2,21 +2,23 @@
 set -uo pipefail
 
 # ==========================================
-# ДИАГНОСТИКА: ОДИН ПРОГОН EDDY MESH
+# ДИАГНОСТИКА: ПАССИВНЫЙ CAN/MCU ПАКЕТ И ОПЦИОНАЛЬНЫЙ EDDY SCAN
 # ==========================================
 # Назначение:
-# - Собирает воспроизводимый пакет одного обычного Eddy scan.
-# - Не меняет прошивки, ядро, параметры датчика, offset или геометрию.
+# - По умолчанию пассивно собирает ограниченный пакет host/CAN/Klipper/Moonraker.
+# - Eddy scan доступен только отдельным mode и явным разрешением движения.
 # Контур:
-# - required/read-only кроме одной явно отправленной mesh-команды.
+# - read-only в mode=passive; один mesh в mode=eddy-scan.
 
 # Блок 1: Неподменяемые идентификаторы и пути пакета.
 RUN_ID="${TREED_EDDY_RUN_ID:-}"
+MODE="${TREED_DIAGNOSTIC_MODE:-passive}"
 COMMIT="${TREED_EDDY_REFERENCE_COMMIT:-6947713}"
 CAN_IFACE="can0"
 PI_HOME="${HOME}"
 REPO_DIR="${PI_HOME}/treed/printer-core"
 KLIPPY_LOG="${PI_HOME}/printer_data/logs/klippy.log"
+MOONRAKER_LOG="${PI_HOME}/printer_data/logs/moonraker.log"
 RUNTIME_CFG="${PI_HOME}/printer_data/config/probe_eddy_duo.cfg"
 PROFILE_PATH="klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
 OUT_ROOT="${PI_HOME}/treed/diagnostics"
@@ -29,7 +31,14 @@ if ! [[ "${COMMIT}" =~ ^[0-9a-fA-F]{7,64}$ ]]; then
   echo "TREED_EDDY_DIAG_ERROR: TREED_EDDY_REFERENCE_COMMIT must be a Git commit prefix" >&2
   exit 2
 fi
-if [ "${TREED_EDDY_ALLOW_MOTION:-0}" != "1" ]; then
+case "${MODE}" in
+  passive|eddy-scan) ;;
+  *)
+    echo "TREED_EDDY_DIAG_ERROR: TREED_DIAGNOSTIC_MODE must be passive or eddy-scan" >&2
+    exit 2
+    ;;
+esac
+if [ "${MODE}" = "eddy-scan" ] && [ "${TREED_EDDY_ALLOW_MOTION:-0}" != "1" ]; then
   echo "TREED_EDDY_DIAG_ERROR: set TREED_EDDY_ALLOW_MOTION=1 for the single approved scan" >&2
   exit 2
 fi
@@ -73,6 +82,49 @@ capture_sh() {
   capture "${relative_path}" bash -c "${command}"
 }
 
+copy_log_bounded() {
+  local source="$1"
+  local target="$2"
+  python3 - "${source}" "${target}" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+limit = 8 * 1024 * 1024
+if not source.is_file():
+    target.write_text(f"source unavailable: {source}\n", encoding="utf-8")
+    raise SystemExit(0)
+with source.open("rb") as handle:
+    handle.seek(0, 2)
+    size = handle.tell()
+    handle.seek(max(0, size - limit))
+    data = handle.read()
+text = data.decode("utf-8", errors="replace").replace("\x00", "\\0")
+target.write_text(text, encoding="utf-8")
+PY
+}
+
+write_session_boundaries() {
+  local source="$1"
+  local target="$2"
+  python3 - "${source}" "${target}" <<'PY'
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+patterns = re.compile(r"Start printer at|Git version:|Moonraker Version:|System Time Received|server:klippy_(?:ready|shutdown|disconnect)", re.I)
+if not source.is_file():
+    target.write_text("source unavailable\n", encoding="utf-8")
+    raise SystemExit(0)
+lines = source.read_text(encoding="utf-8", errors="replace").replace("\x00", "\\0").splitlines()
+found = [f"{number}:{line}" for number, line in enumerate(lines, 1) if patterns.search(line)]
+target.write_text("\n".join(found) + ("\n" if found else "no session boundary markers found\n"), encoding="utf-8")
+PY
+}
+
 record_failure() {
   printf '%s\n' "$1" >>"${RUN_DIR}/status.txt"
 }
@@ -80,18 +132,40 @@ record_failure() {
 last_mcu_stats() {
   local target="$1"
   if [ -f "${KLIPPY_LOG}" ]; then
-    grep '^Stats ' "${KLIPPY_LOG}" | tail -n 1 >"${target}" 2>&1 || true
+    python3 - "${KLIPPY_LOG}" "${target}" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+session_target = target.with_suffix(".session.txt")
+with source.open("rb") as handle:
+    handle.seek(0, 2)
+    size = handle.tell()
+    handle.seek(max(0, size - 4 * 1024 * 1024))
+    text = handle.read().decode("utf-8", errors="replace").replace("\x00", "\\0")
+lines = [line for line in text.splitlines() if line.startswith("Stats ")]
+sessions = [line for line in text.splitlines() if line.startswith("Start printer at")]
+target.write_text((lines[-1] if lines else "Stats line unavailable") + "\n", encoding="utf-8")
+session_target.write_text((sessions[-1] if sessions else "session boundary unavailable") + "\n", encoding="utf-8")
+PY
   else
     printf 'klippy.log missing: %s\n' "${KLIPPY_LOG}" >"${target}"
+    printf 'session boundary unavailable\n' >"${target%.txt}.session.txt"
   fi
 }
 
 write_mcu_delta() {
-  python3 - "${RUN_DIR}/klipper/mcu-stats.before.txt" "${RUN_DIR}/klipper/mcu-stats.after.txt" <<'PY' >"${RUN_DIR}/klipper/mcu-stats.delta.txt"
+  python3 - \
+    "${RUN_DIR}/klipper/mcu-stats.before.txt" \
+    "${RUN_DIR}/klipper/mcu-stats.after.txt" \
+    "${RUN_DIR}/klipper/mcu-stats.before.session.txt" \
+    "${RUN_DIR}/klipper/mcu-stats.after.session.txt" \
+    <<'PY' >"${RUN_DIR}/klipper/mcu-stats.delta.txt"
 import re
 import sys
 
-metrics = ("bytes_write", "bytes_read", "bytes_retransmit", "bytes_invalid")
+metrics = ("bytes_write", "bytes_read", "bytes_retransmit", "bytes_invalid", "tx_retries")
 
 def parse(path):
     try:
@@ -104,7 +178,7 @@ def parse(path):
         if ": " not in section:
             continue
         name, values = section.split(": ", 1)
-        found = {key: int(value) for key, value in re.findall(r"\b(bytes_(?:write|read|retransmit|invalid))=(\d+)", values)}
+        found = {key: int(value) for key, value in re.findall(r"\b(bytes_(?:write|read|retransmit|invalid)|tx_retries)=(\d+)", values)}
         if found:
             result[name] = found
     return result, ""
@@ -114,6 +188,11 @@ after, after_error = parse(sys.argv[2])
 if before_error or after_error:
     print("parse_error", before_error or after_error)
     raise SystemExit(1)
+before_session = open(sys.argv[3], encoding="utf-8", errors="replace").read().strip()
+after_session = open(sys.argv[4], encoding="utf-8", errors="replace").read().strip()
+session_known = "unavailable" not in before_session and "unavailable" not in after_session
+same_session = session_known and before_session == after_session
+print(f"session_boundary={'same' if same_session else 'changed' if session_known else 'unavailable'}")
 
 for name in sorted(set(before) | set(after)):
     print(name + ":")
@@ -122,8 +201,46 @@ for name in sorted(set(before) | set(after)):
         new = after.get(name, {}).get(key)
         if old is None or new is None:
             print(f"  {key}=unavailable before={old} after={new}")
+        elif not same_session:
+            print(f"  {key}=unavailable before={old} after={new} reason=session_boundary")
+        elif new < old:
+            print(f"  {key}=unavailable before={old} after={new} reason=counter_reset")
         else:
             print(f"  {key}: before={old} after={new} delta={new - old}")
+PY
+}
+
+write_can_delta() {
+  python3 - "${RUN_DIR}/can/ip-details.before.txt" "${RUN_DIR}/can/ip-details.after.txt" <<'PY' >"${RUN_DIR}/can/ip-details.delta.txt"
+import re
+import sys
+
+def parse(path):
+    text = open(path, encoding="utf-8", errors="replace").read().replace("\x00", "\\0")
+    result = {}
+    for direction in ("RX", "TX"):
+        match = re.search(rf"{direction}:\s+bytes\s+packets\s+errors[^\n]*\n\s*(\d+)\s+(\d+)\s+(\d+)", text)
+        if match:
+            result[f"{direction.lower()}_errors_total"] = int(match.group(3))
+    berr = re.search(r"berr-counter\s+tx\s+(\d+)\s+rx\s+(\d+)", text)
+    if berr:
+        result["berr_tx_current"] = int(berr.group(1))
+        result["berr_rx_current"] = int(berr.group(2))
+    return result
+
+before = parse(sys.argv[1])
+after = parse(sys.argv[2])
+for key in ("rx_errors_total", "tx_errors_total"):
+    old = before.get(key)
+    new = after.get(key)
+    if old is None or new is None:
+        print(f"{key}=unavailable before={old} after={new}")
+    elif new < old:
+        print(f"{key}=unavailable before={old} after={new} reason=counter_reset")
+    else:
+        print(f"{key}: before={old} after={new} delta={new - old}")
+for key in ("berr_rx_current", "berr_tx_current"):
+    print(f"{key}: before={before.get(key, 'unavailable')} after={after.get(key, 'unavailable')} (instantaneous, no delta interpretation)")
 PY
 }
 
@@ -149,10 +266,13 @@ finalize() {
     fi
   fi
 
-  if [ -f "${KLIPPY_LOG}" ]; then
-    sed -n "${LOG_START_LINE},\$p" "${KLIPPY_LOG}" >"${RUN_DIR}/klipper/klippy.interval.log"
+  if [ "${MODE}" = "eddy-scan" ] && [ -f "${KLIPPY_LOG}" ]; then
+    sed -n "${LOG_START_LINE},\$p" "${KLIPPY_LOG}" | tail -n 20000 >"${RUN_DIR}/klipper/klippy.interval.log"
+  elif [ "${MODE}" = "passive" ]; then
+    printf 'not applicable in passive mode\n' >"${RUN_DIR}/klipper/klippy.interval.log"
   fi
   capture "can/ip-details.after.txt" ip -details -statistics link show "${CAN_IFACE}"
+  write_can_delta || record_failure "can_stats_delta_unavailable"
   capture "kernel/messages.interval.txt" journalctl -k --since "${STARTED_AT:-now}" --until "${ENDED_AT}" --no-pager
   capture "moonraker/gcode-store.after.json" curl -fsS "http://127.0.0.1:7125/server/gcode_store?count=200"
 
@@ -161,10 +281,15 @@ finalize() {
     printf 'reference_commit=%s\n' "${COMMIT}"
     printf 'started_at=%s\n' "${STARTED_AT:-not_started}"
     printf 'ended_at=%s\n' "${ENDED_AT}"
+    printf 'mode=%s\n' "${MODE}"
     printf 'scan_result=%s\n' "${SCAN_RESULT}"
     printf 'exit_code=%s\n' "${rc}"
-    printf 'scan_command=TREED_BED_MESH_CALIBRATE_EDDY PROFILE=eddy_diag_%s METHOD=scan\n' "${RUN_ID}"
-    printf 'save_config_sent=0\nrestart_sent=0\n'
+    if [ "${MODE}" = "eddy-scan" ]; then
+      printf 'scan_command=TREED_BED_MESH_CALIBRATE_EDDY PROFILE=eddy_diag_%s METHOD=scan\n' "${RUN_ID}"
+    else
+      printf 'scan_command=not_sent\n'
+    fi
+    printf 'save_config_sent=0\nrestart_sent=0\nfirmware_restart_sent=0\ncan_reconfigured=0\n'
   } >"${RUN_DIR}/manifest.env"
 
   if ! tar -C "${OUT_ROOT}" -czf "${OUT_ROOT}/eddy-${RUN_ID}.tar.gz" "eddy-${RUN_ID}"; then
@@ -181,10 +306,14 @@ trap finalize EXIT
 
 # Блок 2: Read-only снимок загруженной конфигурации, версий и владельца can0.
 capture "versions/host.txt" bash -c 'hostnamectl; uname -a; cat /etc/os-release'
+capture "versions/boot.txt" bash -c 'printf "boot_id="; cat /proc/sys/kernel/random/boot_id; printf "uptime="; cat /proc/uptime'
 capture "versions/klipper.txt" git -C "${PI_HOME}/klipper" log -1 --format='commit=%H%nsubject=%s'
 capture "versions/driver-gs_usb.txt" modinfo gs_usb
 capture "versions/usb-can.txt" lsusb -d 1d50:606f
-capture_sh "versions/mcu-from-klippy.txt" "grep -E '^Loaded MCU' '${KLIPPY_LOG}' || true"
+capture_sh "versions/mcu-from-klippy.txt" "tail -c 8388608 '${KLIPPY_LOG}' 2>/dev/null | grep -E '^Loaded MCU' || true"
+capture "versions/mcu-live.json" curl -fsS "http://127.0.0.1:7125/printer/objects/query?mcu&mcu%20EBBCan&mcu%20eddy&webhooks"
+capture_sh "versions/runtime-manifest.txt" "sed -n '1,160p' '${REPO_DIR}/runtime-versions.env'"
+capture_sh "versions/firmware-manifest.txt" "sed -n '1,160p' '${PI_HOME}/treed/firmware-artifacts/treed-v2/latest/manifest.tsv'"
 capture "can/ip-details.before.txt" ip -details -statistics link show "${CAN_IFACE}"
 capture "can/ethtool-driver.txt" ethtool -i "${CAN_IFACE}"
 capture "system/can-unit.txt" systemctl cat treed-can-setup.service
@@ -192,10 +321,29 @@ capture "system/can-unit-properties.txt" systemctl show treed-can-setup.service 
 capture "system/can-unit-dependencies.txt" systemctl list-dependencies --all treed-can-setup.service
 capture "system/klipper-unit-properties.txt" systemctl show klipper.service -p Before -p After -p Wants -p Requires -p Conflicts -p ActiveState
 capture "system/klipper-unit-dependencies.txt" systemctl list-dependencies --all klipper.service
+capture "system/unit-states.txt" systemctl show klipper.service moonraker.service treed-can-setup.service -p Id -p ActiveState -p SubState -p Result -p ExecMainStatus
+capture "kernel/current-boot.txt" journalctl -k -b -n 4000 --no-pager
 capture_sh "config/runtime-printer-include.txt" "grep -nF 'probe_eddy_duo.cfg' '${PI_HOME}/printer_data/config/printer.cfg' || true"
 capture "moonraker/configfile-before.json" curl -fsS "http://127.0.0.1:7125/printer/objects/query?configfile"
 capture "moonraker/printer-info-before.json" curl -fsS "http://127.0.0.1:7125/printer/info"
 capture "moonraker/gcode-store.before.json" curl -fsS "http://127.0.0.1:7125/server/gcode_store?count=200"
+
+STARTED_AT="$(date --iso-8601=seconds)"
+last_mcu_stats "${RUN_DIR}/klipper/mcu-stats.before.txt"
+copy_log_bounded "${KLIPPY_LOG}" "${RUN_DIR}/klipper/klippy.current.log"
+copy_log_bounded "${MOONRAKER_LOG}" "${RUN_DIR}/moonraker/moonraker.current.log"
+write_session_boundaries "${RUN_DIR}/klipper/klippy.current.log" "${RUN_DIR}/klipper/session-boundaries.txt"
+write_session_boundaries "${RUN_DIR}/moonraker/moonraker.current.log" "${RUN_DIR}/moonraker/session-boundaries.txt"
+
+if [ "${MODE}" = "passive" ]; then
+  SCAN_RESULT="not_requested"
+  if command -v candump >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
+    capture "can/candump.log" timeout 10 candump -L "${CAN_IFACE}"
+  else
+    printf 'candump unavailable; passive capture skipped\n' >"${RUN_DIR}/can/candump.unavailable.txt"
+  fi
+  exit 0
+fi
 
 if ! git -C "${REPO_DIR}" cat-file -e "${COMMIT}^{commit}" 2>"${RUN_DIR}/config/reference-commit.error.txt"; then
   SCAN_RESULT="reference_commit_missing"

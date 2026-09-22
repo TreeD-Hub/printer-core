@@ -5,8 +5,8 @@ set -Eeuo pipefail
 # ШАГ LOADER: KLIPPER ANTI SHUTDOWN
 # ==========================================
 # Назначение:
-# - Проверяет состояние Klippy и очищает MCU shutdown при необходимости.
-# - Использует fail-fast контроль ошибок и журналирование.
+# - Пассивно фиксирует состояние Klippy после раскладки конфигурации.
+# - Не выполняет restart/FIRMWARE_RESTART: восстановление запускает только оператор.
 # Контур:
 # - required, но с безопасными best-effort retry там, где это не ломает provisioning.
 
@@ -18,7 +18,7 @@ ensure_root
 
 # Блок 2: Базовые переменные и пути диагностики.
 STEP="klipper-anti-shutdown"
-log_info "Step ${STEP}: clearing MCU shutdown if present"
+log_info "Step ${STEP}: inspect MCU shutdown without automatic recovery"
 
 DEPLOY_USER="${SUDO_USER:-$(id -un)}"
 DEPLOY_HOME="$(getent passwd "${DEPLOY_USER}" | cut -d: -f6 || true)"
@@ -157,90 +157,20 @@ klippy_state_is_shutdown() {
   return 1
 }
 
-send_klippy_gcode() {
-  local sock_path="$1"
-  local timeout="${2:-2}"
-  local gcode="$3"
-
-  # Отправляем gcode/script в Klippy через тот же сокет API.
-  python3 - "${sock_path}" "${timeout}" "${gcode}" <<'PY'
-import json
-import socket
-import sys
-
-if len(sys.argv) < 4:
-    raise SystemExit(2)
-
-sock_path = sys.argv[1]
-timeout = float(sys.argv[2])
-gcode = sys.argv[3]
-
-request = {
-    "id": 2,
-    "method": "gcode/script",
-    "params": {"script": gcode},
-}
-payload = (json.dumps(request) + "\x03").encode("utf-8")
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.settimeout(timeout)
-
-try:
-    sock.connect(sock_path)
-    sock.sendall(payload)
-
-    data = b""
-    while b"\x03" not in data:
-        chunk = sock.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-finally:
-    sock.close()
-
-if b"\x03" not in data:
-    raise SystemExit(3)
-
-raw = data.split(b"\x03", 1)[0]
-msg = json.loads(raw.decode("utf-8", errors="replace"))
-
-if not isinstance(msg, dict):
-    raise SystemExit(4)
-if "error" in msg:
-    raise SystemExit(5)
-PY
-}
-
-# Блок 4: Основной сценарий — проверка сокета, state и FIRMWARE_RESTART.
-# Гарантируем, что Klipper запущен; рестарт нефатален, но обязательно логируется.
+# Блок 4: Основной сценарий — только проверка активного Klippy.
 if ! systemctl is-active --quiet "${KLIPPER_SERVICE}"; then
-  if err="$(systemctl restart "${KLIPPER_SERVICE}" 2>&1)"; then
-    log_info "${STEP}: restarted ${KLIPPER_SERVICE}"
-  else
-    rc=$?
-    log_warn "${STEP}: systemctl restart ${KLIPPER_SERVICE} failed rc=${rc}: ${err}"
-  fi
+  log_info "${STEP}: ${KLIPPER_SERVICE} is inactive; inspection deferred to maintenance-start/verify"
+  exit 0
 fi
-# Ждем появление klippy.sock до 30 секунд.
+
+# Активный service может ещё создавать socket; ожидание не изменяет состояние.
 for _ in $(seq 1 30); do
   [ -S "$SOCK" ] && break
   sleep 1
 done
 
 if [ ! -S "$SOCK" ]; then
-  log_warn "${STEP}: klippy.sock not found at ${SOCK}; retrying ${KLIPPER_SERVICE} restart"
-  if err="$(systemctl restart "${KLIPPER_SERVICE}" 2>&1)"; then
-    log_info "${STEP}: restarted ${KLIPPER_SERVICE}"
-  else
-    rc=$?
-    log_warn "${STEP}: systemctl restart ${KLIPPER_SERVICE} failed rc=${rc}: ${err}"
-  fi
-  sleep 2
-fi
-
-
-if [ ! -S "$SOCK" ]; then
-  log_warn "${STEP}: socket missing at ${SOCK}; skipping anti-shutdown"
+  log_warn "${STEP}: socket missing at ${SOCK}; no automatic restart performed"
   exit 0
 fi
 
@@ -256,30 +186,11 @@ else
 fi
 
 if klippy_state_is_shutdown "${klippy_state}" "${klippy_state_message}"; then
-  log_info "${STEP}: Klippy state=${klippy_state:-unknown}, shutdown detected; sending FIRMWARE_RESTART"
-  if command -v python3 >/dev/null 2>&1; then
-    if send_klippy_gcode "${SOCK}" "${TREED_ANTI_SHUTDOWN_INFO_TIMEOUT:-2}" "FIRMWARE_RESTART" >/dev/null 2>&1
-    then
-      :
-    else
-      rc=$?
-      log_warn "${STEP}: failed to send FIRMWARE_RESTART via klippy API rc=${rc}"
-    fi
-    klippy_info="$(wait_klippy_state "${SOCK}" "${TREED_ANTI_SHUTDOWN_STATE_TIMEOUT:-20}" 2>/dev/null || true)"
-    klippy_state="$(klippy_info_state "${klippy_info}" | tr -d '\r\n')"
-    klippy_state_message="$(klippy_info_state_message "${klippy_info}" | tr -d '\r\n')"
-    if klippy_state_is_shutdown "${klippy_state}" "${klippy_state_message}"; then
-      log_warn "${STEP}: shutdown remains after FIRMWARE_RESTART (state=${klippy_state:-unknown}, state_message=${klippy_state_message:-missing})"
-    else
-      log_info "${STEP}: state after FIRMWARE_RESTART=${klippy_state:-unknown}"
-    fi
-  else
-    log_warn "${STEP}: cannot send FIRMWARE_RESTART (python3 required); skipping"
-  fi
+  log_warn "${STEP}: shutdown detected (state=${klippy_state:-unknown}, state_message=${klippy_state_message:-missing}); explicit operator recovery required"
 elif [ -n "${klippy_state}" ]; then
-  log_info "${STEP}: klippy state=${klippy_state}; FIRMWARE_RESTART not required"
+  log_info "${STEP}: klippy state=${klippy_state}; no recovery action performed"
 else
-  log_warn "${STEP}: unable to query klippy state via ${SOCK}; anti-shutdown auto-restart skipped"
+  log_warn "${STEP}: unable to query klippy state via ${SOCK}; no recovery action performed"
 fi
 
 if [ ! -f "$LOG" ]; then

@@ -163,7 +163,7 @@ restart_and_verify_moonraker_components() {
     rm -f "${tmp}"
     exit 1
   fi
-  for component in treed_shell_command treed_host_network treed_filament_sensor treed_update; do
+  for component in treed_shell_command treed_host_network treed_filament_sensor treed_update treed_recovery; do
     if ! grep -Fq "\"${component}\"" "${tmp}"; then
       log_error "Moonraker component is not loaded: ${component}"
       rm -f "${tmp}"

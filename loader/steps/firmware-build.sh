@@ -130,7 +130,11 @@ firmware_inputs_current() {
   local target=""
   local artifact=""
   local sha=""
+  local klipper_commit=""
   local config=""
+  local config_sha=""
+  local dictionary=""
+  local dictionary_sha=""
   local artifact_count=0
 
   if [ ! -e "${LATEST_LINK}" ]; then
@@ -154,18 +158,21 @@ firmware_inputs_current() {
   grep -Fx "eddy_enabled=${TREED_EDDY_ENABLED}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "eddy_config_sha256=${FW_EDDY_SHA}" "${inputs_file}" >/dev/null || return 1
   head -n 1 "${manifest_file}" \
-    | grep -Fx $'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256' >/dev/null \
+    | grep -Fx $'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256\tdictionary\tdictionary_sha256' >/dev/null \
     || return 1
 
-  while IFS=$'\t' read -r target artifact sha klipper_commit config config_sha; do
+  while IFS=$'\t' read -r target artifact sha klipper_commit config config_sha dictionary dictionary_sha; do
     if [ -z "${header}" ]; then
       header=1
       continue
     fi
     [ -n "${artifact}" ] || return 1
     [ -f "${artifact}" ] || return 1
+    [ -n "${dictionary}" ] || return 1
+    [ -f "${dictionary}" ] || return 1
     [ "${klipper_commit}" = "${KLIPPER_HEAD}" ] || return 1
     [ -n "${config_sha}" ] || return 1
+    [ -n "${dictionary_sha}" ] || return 1
     artifact_count=$((artifact_count+1))
   done < "${manifest_file}"
 
@@ -217,7 +224,7 @@ eddy_config=${TREED_FW_EDDY_CONFIG}
 eddy_config_sha256=${FW_EDDY_SHA}
 EOF
 
-printf 'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256\n' > "${MANIFEST_FILE}"
+printf 'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256\tdictionary\tdictionary_sha256\n' > "${MANIFEST_FILE}"
 > "${CHECKSUM_FILE}"
 
 # Блок 4: Проверка итоговой конфигурации EBB42 после olddefconfig.
@@ -256,8 +263,11 @@ build_target() {
   local target_cfg="${CFG_DIR}/${target_name}.config"
   local target_art_dir="${ART_DIR}/${target_name}"
   local target_artifact="${target_art_dir}/${artifact_name}"
+  local target_dictionary="${target_art_dir}/klipper.dict"
   local build_output="${TREED_KLIPPER_SRC_DIR}/${build_output_rel}"
+  local dictionary_output="${TREED_KLIPPER_SRC_DIR}/out/klipper.dict"
   local target_sha=""
+  local dictionary_sha=""
   local config_sha=""
 
   ensure_dir "${target_art_dir}"
@@ -280,15 +290,24 @@ build_target() {
     log_error "firmware-build: ${build_output_rel} not found after target ${target_name}"
     exit 1
   fi
+  if [ ! -f "${dictionary_output}" ]; then
+    log_error "firmware-build: out/klipper.dict not found after target ${target_name}"
+    exit 1
+  fi
 
   cp -f "${build_output}" "${target_artifact}"
+  cp -f "${dictionary_output}" "${target_dictionary}"
   target_sha="$(sha256sum "${target_artifact}" | awk '{print $1}')"
-  config_sha="$(firmware_config_sha "${target_config}")"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "${target_name}" "${target_artifact}" "${target_sha}" "${KLIPPER_HEAD}" "${target_config}" "${config_sha}" \
+  dictionary_sha="$(sha256sum "${target_dictionary}" | awk '{print $1}')"
+  config_sha="$(firmware_config_sha "${target_cfg}")"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${target_name}" "${target_artifact}" "${target_sha}" "${KLIPPER_HEAD}" "${target_cfg}" "${config_sha}" "${target_dictionary}" "${dictionary_sha}" \
     >> "${MANIFEST_FILE}"
   printf '%s  %s\n' "${target_sha}" "${target_artifact}" >> "${CHECKSUM_FILE}"
-  printf 'target=%s status=ok artifact=%s sha256=%s\n' "${target_name}" "${target_artifact}" "${target_sha}" >> "${REPORT_FILE}"
+  printf '%s  %s\n' "${config_sha}" "${target_cfg}" >> "${CHECKSUM_FILE}"
+  printf '%s  %s\n' "${dictionary_sha}" "${target_dictionary}" >> "${CHECKSUM_FILE}"
+  printf 'target=%s status=ok artifact=%s sha256=%s dictionary=%s dictionary_sha256=%s\n' \
+    "${target_name}" "${target_artifact}" "${target_sha}" "${target_dictionary}" "${dictionary_sha}" >> "${REPORT_FILE}"
 
   log_info "firmware-build: target ${target_name} OK (${target_artifact})"
 }

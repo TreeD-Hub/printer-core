@@ -25,6 +25,15 @@ function Assert-Match([string]$Path, [string]$Pattern, [string]$Message) {
   }
 }
 
+function Get-Sha256([string]$Path) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes($Path)))).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $sha256.Dispose()
+  }
+}
+
 $bashTest = (Join-Path $repoRoot "tools\tests\test_runtime_repo_sync.sh").Replace("\", "/").Replace("C:", "/c")
 & $bash $bashTest
 if ($LASTEXITCODE -ne 0) {
@@ -52,7 +61,7 @@ if (-not (Test-Path -LiteralPath $mainsailZip -PathType Leaf)) {
 if ($LASTEXITCODE -ne 0) {
   throw "FAIL: bundled Mainsail archive is not tracked and would be absent from the release archive"
 }
-if ((Get-FileHash -LiteralPath $mainsailZip -Algorithm SHA256).Hash.ToLowerInvariant() -ne $mainsailSha) {
+if ((Get-Sha256 $mainsailZip) -ne $mainsailSha) {
   throw "FAIL: bundled Mainsail checksum does not match runtime manifest"
 }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -88,8 +97,10 @@ if ($loader.IndexOf('"runtime-bootstrap"') -ge $loader.IndexOf('"firmware-build"
 
 Assert-Match "loader\steps\runtime-bootstrap.sh" 'ensure_repo_present "\$\{KLIPPER_DIR\}".*"Klipper"' "Klipper uses exact managed sync"
 Assert-Match "loader\steps\runtime-bootstrap.sh" 'ensure_repo_present "\$\{MOONRAKER_DIR\}".*"Moonraker"' "Moonraker uses exact managed sync"
+Assert-Match "runtime-scripts\treed-update\treed-update-apply" 'git status --porcelain --untracked-files=all' "runtime updater refuses unknown local changes"
+Assert-Match "runtime-scripts\treed-update\treed-update-apply" 'git checkout --detach' "runtime updater switches to the selected tag without forced overwrite"
 Assert-Match "loader\steps\firmware-build.sh" 'KLIPPER_HEAD.*TREED_KLIPPER_REF' "firmware build rejects unsynced Klipper"
-Assert-Match "loader\steps\firmware-build.sh" 'artifact_sha256.*klipper_commit.*config_sha256' "firmware manifest records source and checksums"
+Assert-Match "loader\steps\firmware-build.sh" 'artifact_sha256.*klipper_commit.*config_sha256.*dictionary_sha256' "firmware manifest records source, artifact, config and dictionary checksums"
 Assert-Match "loader\steps\verify.sh" 'sha256sum.*firmware_artifact' "verify checks firmware artifact content"
 Assert-Match "loader\steps\moonraker-config.sh" 'MOONRAKER_COMPONENTS_DIR=.*moonraker/components' "components deploy to active managed checkout"
 Assert-Match "loader\steps\runtime-bootstrap.sh" "runtime_repo_add_excludes" "managed Moonraker components do not leave checkout dirty"
@@ -108,7 +119,7 @@ if ($ksExcludeMatches.Count -lt 2 -or $ksExcludeMatches[0].Index -gt $ksSyncInde
 Assert-Match "loader\steps\verify.sh" 'TREED_ALLOW_HARDWARE_NOT_READY:-0' "production hardware gate is default"
 Assert-Match "loader\steps\verify.sh" "mcu 'EBBCan': Unable to connect" "EBB connection errors are fatal by default"
 Assert-Match "loader\steps\verify.sh" 'hardware_failf "Klipper ready required' "Klipper ready is a production hardware gate"
-Assert-Match "loader\steps\verify.sh" 'for component in treed_shell_command treed_host_network treed_filament_sensor treed_update' "TreeD component load is verified"
+Assert-Match "loader\steps\verify.sh" 'for component in treed_shell_command treed_host_network treed_filament_sensor treed_update treed_recovery' "TreeD component load is verified"
 Assert-Match "loader\steps\verify.sh" 'Mainsail version expected=' "Mainsail installed version is verified"
 
 Write-Output "PASS: reproducible runtime update contracts"
