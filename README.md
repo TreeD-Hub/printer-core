@@ -162,7 +162,7 @@ G28
 TREED_Z_PARK_ZERO_EDDY
 ```
 
-`PROBE_EDDY_CURRENT_CALIBRATE_AUTO` сам использует runtime `[force_move]`, ставит Eddy в центр безопасной scan area `X10..235 / Y5..210` с учетом offset и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`. После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper; использовать `preserve` или `auto`.
+`PROBE_EDDY_CURRENT_CALIBRATE_AUTO` сам использует runtime `[force_move]`, ставит Eddy в центр безопасной scan area `X10..235 / Y10..210` с учетом offset и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`. После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper; использовать `preserve` или `auto`.
 
 ## Сервисные тесты движения
 
