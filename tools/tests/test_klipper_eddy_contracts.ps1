@@ -77,7 +77,7 @@ function Get-GcodeMacroBlock {
   )
 
   $escapedName = [regex]::Escape($MacroName)
-  $match = [regex]::Match($Content, "(?ms)^\[gcode_macro $escapedName\].*?(?=^\[|\z)")
+  $match = [regex]::Match($Content, "(?ms)^\[gcode_macro $escapedName\].*?(?=^\[gcode_macro |\z)")
   if (-not $match.Success) {
     throw "FAIL: macro $MacroName not found"
   }
@@ -116,7 +116,6 @@ $startSmartPark = Get-GcodeMacroBlock $macrosFlow "_TREED_START_SMART_PARK"
 $startPrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_PREP_STATE"
 $startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
-$startAfterPreheat = Get-GcodeMacroBlock $macrosFlow "_TREED_START_AFTER_PREHEAT"
 
 # Блок 3: Проверка штатного Eddy Z-home без постоянного z0_adjust.
 Assert-Contains $probeEddy '(?ms)^\[force_move\]\s+enable_force_move:\s*True' "Eddy runtime profile must enable SET_KINEMATIC_POSITION"
@@ -155,10 +154,10 @@ Assert-ContainsBefore $startPrep '(?m)^\s*_TREED_KAMP_REQUIRE_READY\s*$' '(?m)^\
 Assert-ContainsBefore $startPrep '(?m)^\s*BED_MESH_CLEAR\s*$' '(?m)^\s*SET_GCODE_VARIABLE MACRO=_TREED_START_STATE\b' "Очистка mesh должна предшествовать изменению state"
 Assert-ContainsBefore $startPrep '(?m)^\s*BED_MESH_CLEAR\s*$' '(?m)^\s*_TREED_PRINT_OFFSET_DISABLE\s*$' "Сначала сбрасывается старая mesh"
 Assert-NotContains $startMachinePrep '(?m)^\s*_TREED_HOME_ALL\s*$' "Подготовка машины не должна делать homing до прогрева"
-Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREHEAT\s*$' '(?m)^\s*PAUSE_BASE\s*$' "Нагрев запускается до отменяемого ожидания"
-Assert-ContainsBefore $startAfterPreheat '(?m)^\s*_TREED_HOME_ALL\s*$' '(?m)^\s*_TREED_START_INPUT_SHAPER\s*$' "Shaper выполняется после homing"
-Assert-ContainsBefore $startAfterPreheat '(?m)^\s*_TREED_START_INPUT_SHAPER\s*$' '(?m)^\s*_TREED_START_ADAPTIVE_MESH\s*$' "Mesh строится после сервисной калибровки"
-Assert-ContainsBefore $startAfterPreheat '(?m)^\s*_TREED_START_ADAPTIVE_MESH\s*$' '(?m)^\s*_TREED_START_SMART_PARK\s*$' "Smart park выполняется после mesh"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREHEAT\s*$' '(?m)^\s*_TREED_HOME_ALL\s*$' "Homing выполняется после прогрева стола"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_HOME_ALL\s*$' '(?m)^\s*_TREED_START_INPUT_SHAPER\s*$' "Shaper выполняется после homing"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_INPUT_SHAPER\s*$' '(?m)^\s*_TREED_START_ADAPTIVE_MESH\s*$' "Mesh строится после сервисной калибровки"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_ADAPTIVE_MESH\s*$' '(?m)^\s*_TREED_START_SMART_PARK\s*$' "Smart park выполняется после mesh"
 Assert-Contains $startAdaptiveMesh 'TREED_BED_MESH_CALIBRATE_EDDY PROFILE=treed_adaptive METHOD=rapid_scan ADAPTIVE=1 ADAPTIVE_MARGIN=\{st\.adaptive_margin\}' "Обычная печать всегда строит rapid adaptive mesh"
 Assert-NotContains $startPrint 'BED_MESH_PROFILE LOAD' "START_PRINT не должен загружать старую mesh"
 Assert-ContainsBefore $startSmartPark '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)^\s*_TREED_KAMP_SMART_PARK\s*$' "Smart park должен работать в print coords"
