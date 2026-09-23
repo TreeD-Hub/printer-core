@@ -135,8 +135,7 @@ Assert-Contains $zHopBeforeXy 'if z_hop <= 0\.0' "Z-hop must reject nonpositive 
 Assert-Contains $zHopBeforeXy '(?m)^\s*G1 Z\{target_z - current_z\} F1500\s*$' "Z-hop must use a positive relative move independent of G-code offsets"
 Assert-ContainsBefore $zHopBeforeXy 'if target_z > current_z' '(?m)^\s*G1 Z\{target_z - current_z\} F1500\s*$' "Z-hop must only move upward after the Z max clamp"
 Assert-ContainsBefore $zHopBeforeXy '(?m)^\s*G91\s*$' '(?m)^\s*G1 Z\{target_z - current_z\} F1500\s*$' "Z-hop must switch to relative coordinates before moving"
-Assert-Contains $zHopBeforeXy 'Z неизвестна; автоматический подъём и XY-движение запрещены' "Unknown Z must stop homing before any motion"
-Assert-NotContains $zHopBeforeXy '(?m)^\s*(FORCE_MOVE|SET_KINEMATIC_POSITION)\b' "Z-hop must not force an unreferenced move or assign fictitious coordinates"
+Assert-ContainsBefore $zHopBeforeXy '(?m)^\s*FORCE_MOVE STEPPER=stepper_z DISTANCE=\{z_hop\} VELOCITY=5 ACCEL=100\s*$' '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z_hop\} SET_HOMED=Z\s*$' "Unknown Z must move away before marking only Z temporarily homed"
 Assert-NotContains $macrosCore '(?m)^\[gcode_macro _TREED_HOME_XY_SENSORLESS\]' "G28 owns X/Y homing; extra X/Y homing wrapper must not exist"
 
 Assert-ContainsBefore $g28 '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' 'TREED_MOTION_GUARD ACTION=HOME_XY' "G28 must run Z-hop before guarded X/Y homing"
