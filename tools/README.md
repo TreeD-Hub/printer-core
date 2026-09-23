@@ -7,6 +7,7 @@
 - `tools/tests/` — локальные контрактные проверки loader/steps.
 - `tools/skills/` — локальные skills для Codex, используемые в этом репозитории.
 - `tools/collect_eddy_diagnostic.sh` — passive по умолчанию пакет CAN/MCU; `eddy-scan` требует отдельного разрешения движения.
+- `tools/treed_sensorless_calibrate.py` — supervised sweep X/Y sensorless с записью StallGuard; запуск и ограничения в `docs/sensorless-calibration.md`.
 
 ## `tools/skills/`
 

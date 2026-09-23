@@ -16,15 +16,16 @@
 7. `profiles/treed_v2_corexy_v1/steppers.cfg`
 8. `profiles/treed_v2_corexy_v1/motion_guard.cfg`
 9. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
-10. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
-11. `filament_motion_runtime.cfg`
-12. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-13. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-14. `profiles/treed_v2_corexy_v1/motor_calibration.cfg`
-15. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-16. `profiles/treed_v2_corexy_v1/macros.cfg`
-17. `profiles/treed_v2_corexy_v1/ui.cfg`
-18. `local_overrides.cfg`
+10. `profiles/treed_v2_corexy_v1/sensorless_calibration.cfg`
+11. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
+12. `filament_motion_runtime.cfg`
+13. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+14. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+15. `profiles/treed_v2_corexy_v1/motor_calibration.cfg`
+16. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+17. `profiles/treed_v2_corexy_v1/macros.cfg`
+18. `profiles/treed_v2_corexy_v1/ui.cfg`
+19. `local_overrides.cfg`
 
 `macros.cfg` дополнительно подключает:
 - `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
@@ -52,6 +53,7 @@
 ## X/Y sensorless (TMC5160 SPI) и Z через активный endstop профиля
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
+Сервисный supervised подбор `speed × SGT` описан в `docs/sensorless-calibration.md`; он не меняет штатный `G28`.
 Профиль подключает override `G28`, который:
 - перед каждым `G28.1 X/Y` ждёт завершения движений и не менее 2 секунд без движения для сброса stall-флага TMC5160, затем делает отход на 10 мм от X-min/Y-max; ток и SGT при homing не меняет;
 - до первого движения очищает активную mesh и G-code offsets, оставляя сервисные raw-координаты; старый print-offset не восстанавливается после homing;

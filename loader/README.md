@@ -130,6 +130,8 @@
 
 `runtime-bootstrap` проверяет `numpy` и `matplotlib` в `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}`: если импорт уже работает, установка пропускается; если пакета нет, ставится текущий стабильный релиз через pip в существующий venv Klipper.
 
+`runtime-bootstrap` также устанавливает `treed_motor_sensorless.py` в Klipper и `treed-sensorless-calibrate` в `${PI_HOME}/treed/bin`; `klipper-core` доставляет его cfg. `check` и `verify` проверяют наличие этих компонентов. Процедура: `docs/sensorless-calibration.md`.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
 ```

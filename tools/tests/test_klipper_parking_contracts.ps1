@@ -76,7 +76,7 @@ function Get-GcodeMacroBlock {
   )
 
   $escapedName = [regex]::Escape($MacroName)
-  $match = [regex]::Match($Content, "(?ms)^\[gcode_macro $escapedName\].*?(?=^\[gcode_macro |\z)")
+  $match = [regex]::Match($Content, "(?ms)^\[gcode_macro $escapedName\].*?(?=^\[|\z)")
   if (-not $match.Success) {
     throw "FAIL: macro $MacroName not found"
   }
@@ -115,6 +115,8 @@ $sensorlessPrepare = Get-GcodeMacroBlock $macrosHoming "_TREED_SENSORLESS_PREPAR
 $zHopBeforeXy = Get-GcodeMacroBlock $macrosCore "_TREED_Z_HOP_BEFORE_XY"
 $endPrint = Get-GcodeMacroBlock $macrosFlow "END_PRINT"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
+$startAfterPreheat = Get-GcodeMacroBlock $macrosFlow "_TREED_START_AFTER_PREHEAT"
+$heatPoll = Get-ConfigSectionBlock $macrosFlow "delayed_gcode _TREED_START_HEAT_POLL"
 $startSmartPark = Get-GcodeMacroBlock $macrosFlow "_TREED_START_SMART_PARK"
 $startKampPurge = Get-GcodeMacroBlock $macrosFlow "_TREED_START_KAMP_PURGE"
 $finalHeat = Get-GcodeMacroBlock $macrosFlow "_TREED_START_FINAL_HEAT"
@@ -199,6 +201,7 @@ Assert-NotContains $resumePrepWipe 'set x_right = x_start \+ 2\.0' "RESUME wipe 
 Assert-Contains $cancelPrint 'G1 Z\{target_z - current_z\} F300' "CANCEL_PRINT keeps a relative Z lift"
 Assert-ContainsBefore $cancelPrint 'if target_z > current_z' 'G1 Z\{target_z - current_z\} F300' "CANCEL_PRINT must never turn its Z-hop into a downward move"
 Assert-ContainsBefore $cancelPrint '(?m)^\s*TURN_OFF_HEATERS\s*$' '(?m)^\s*CANCEL_PRINT_BASE\s*$' "CANCEL_PRINT must disable heaters before base cancellation"
+Assert-ContainsBefore $cancelPrint '(?m)^\s*UPDATE_DELAYED_GCODE ID=_TREED_START_HEAT_POLL DURATION=0\s*$' '(?m)^\s*CANCEL_PRINT_BASE\s*$' "CANCEL_PRINT must stop preheat polling before base cancellation"
 Assert-ContainsBefore $cancelPrint '(?m)^\s*CANCEL_PRINT_BASE\s*$' 'G1 Z\{target_z - current_z\} F300' "CANCEL_PRINT must complete base cancellation before optional motion"
 Assert-Contains $cancelPrint '"z" in toolhead\.homed_axes and current_z >= z_min and current_z <= z_max' "CANCEL_PRINT must skip the lift when Z is not trustworthy"
 Assert-NotContains $cancelPrint '(?m)^\s*G[01]\s+.*\bX' "CANCEL_PRINT must not issue XY moves with X"
@@ -214,9 +217,12 @@ Assert-NotContains $smartPark '(?m)^\s*G28\s*$' "SMART_PARK must not rehome afte
 Assert-NotContains $linePurge '(?m)^\s*G28\s*$' "LINE_PURGE must not rehome after mesh selection"
 Assert-Contains $smartPark 'print_offset_enabled\|int != 1' "SMART_PARK must require print coordinates before moving"
 Assert-Contains $linePurge 'print_offset_enabled\|int != 1' "LINE_PURGE must require print coordinates before moving"
-Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_FINAL_HEAT\s*$' '(?m)^\s*_TREED_START_KAMP_PURGE\s*$' "START_PRINT must heat nozzle before LINE_PURGE"
+Assert-ContainsBefore $startAfterPreheat '(?m)^\s*_TREED_START_SMART_PARK\s*$' '(?m)^\s*_TREED_START_FINAL_HEAT\s*$' "Final heat must start after smart park"
+Assert-ContainsBefore $heatPoll 'hotend_now >= wait_min' '(?m)^\s*_TREED_START_KAMP_PURGE\s*$' "LINE_PURGE must wait for nozzle temperature"
+Assert-ContainsBefore $heatPoll '(?m)^\s*SAVE_GCODE_STATE NAME=PAUSE_STATE\s*$' '(?m)^\s*RESUME_BASE\s*$' "Print must resume from its current state"
+Assert-Contains $startPrint '(?m)^\s*PAUSE_BASE\s*$' "START_PRINT must pause virtual SD while heating"
+Assert-NotContains $macrosFlow '(?m)^\s*(?:M109|M190|TEMPERATURE_WAIT)\b' "START_PRINT must not block cancellation on heater waits"
 Assert-Contains $finalHeat '(?m)^\s*M104 S\{TARGET\}\s*$' "Final heat must set nozzle target without strict M109 wait"
-Assert-Contains $finalHeat '(?m)^\s*TEMPERATURE_WAIT SENSOR=extruder MINIMUM=\{wait_min\}\s*$' "Final heat must wait only for the lower ready temperature"
 Assert-NotContains $finalHeat '(?m)^\s*M109\b' "Final heat must not block on M109 thermal settling"
 Assert-NotContains $finalHeat '\bMAXIMUM=' "Final heat must not wait for overshoot cooldown"
 Assert-ContainsBefore $linePurge '(?m)^\s*G0 Z\{purge_height\}\s*$' '(?m)^\s*G0 X\{purge_x_center\} Y\{purge_y_origin\}\s*$' "LINE_PURGE must raise to purge height before horizontal XY move"

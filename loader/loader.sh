@@ -456,6 +456,9 @@ run_check_mode() {
   check_dir_present "printer_data" "${PI_HOME}/printer_data"
   check_dir_present "runtime config dir" "${PI_HOME}/printer_data/config"
   check_file_present "runtime printer.cfg" "${PI_HOME}/printer_data/config/printer.cfg"
+  check_file_present "sensorless CLI" "${PI_HOME}/treed/bin/treed-sensorless-calibrate"
+  check_file_present "sensorless Klipper extension" "${PI_HOME}/klipper/klippy/extras/treed_motor_sensorless.py"
+  check_file_present "sensorless runtime config" "${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1/sensorless_calibration.cfg"
 
   check_dir_present "Klipper source checkout" "${PI_HOME}/klipper"
   check_dir_present "Moonraker source checkout" "${PI_HOME}/moonraker"
