@@ -135,60 +135,133 @@ def measure_harmonics(samples, idle_samples, start, end, base_frequency,
     return results
 
 
+def baseline_summary(rows, harmonic):
+    """Повторяемость исходной таблицы для двух направлений одного режима."""
+    directions = {}
+    for row in rows:
+        entry = row['harmonics']['H%d' % harmonic]
+        directions.setdefault(row['direction'], []).append((entry, row))
+    if set(directions) != {'positive', 'negative'}:
+        return None
+    summary = {}
+    for direction, group in directions.items():
+        if len(group) < 3 or any(entry['quality'] != 'valid'
+                                 for entry, _ in group):
+            return None
+        amplitudes = [entry['amplitude_mm_s2'] for entry, _ in group]
+        mean = statistics.fmean(amplitudes)
+        stddev = statistics.stdev(amplitudes)
+        floor = statistics.fmean(entry['noise_floor_mm_s2']
+                                 for entry, _ in group)
+        if stddev > max(.15 * mean, 3. * floor):
+            return None
+        summary[direction] = {
+            'mean_mm_s2': mean, 'stddev_mm_s2': stddev,
+            'cv': stddev / mean if mean else 0.,
+            'noise_floor_mm_s2': floor,
+            'retry_count': sum(row.get('sample_gap_retries', 0)
+                               for _, row in group)}
+    return summary
+
+
 def compare_verification(baseline, corrected):
-    """Сравнить парные повторные проходы, не скрывая отдельное ухудшение."""
-    if (len(baseline) != len(corrected) or not baseline or
-            len(baseline) % 2):
+    """Парные проходы: разброс базы, отдельные регрессии и 95% граница выигрыша."""
+    if len(baseline) != len(corrected) or not baseline:
         return {'accepted': False, 'reason': 'missing_verification_rows'}
-    per_repeat = len(baseline) // 2
-    motors = ('stepper_x', 'stepper_y')
-    totals = {motor: [[0., 0.], [0., 0.], 0, 0.] for motor in motors}
-    for index, (base, candidate) in enumerate(zip(baseline, corrected)):
+    critical = {('isolated_diagonal', max(
+        (row['speed_mm_s'] for row in baseline
+         if row['trajectory'] == 'isolated_diagonal'), default=0.)): 'H2',
+                ('joint_x', min(
+                    (row['speed_mm_s'] for row in baseline
+                     if row['trajectory'] == 'joint_x'), default=0.)): 'H4'}
+    groups = {}
+    for base, candidate in zip(baseline, corrected):
         if any(base[k] != candidate[k] for k in
                ('motor', 'direction', 'speed_mm_s', 'trajectory')):
             return {'accepted': False, 'reason': 'unmatched_passes'}
+        condition = {key: base[key] for key in
+                     ('motor', 'direction', 'speed_mm_s', 'trajectory')}
         if not any(base['harmonics'][harmonic]['quality'] == 'valid'
                    for harmonic in ('H2', 'H4')):
             return {'accepted': False,
                     'reason': 'unmeasurable_verification_condition',
-                    'condition': {key: base[key] for key in
-                                  ('motor', 'direction', 'speed_mm_s',
-                                   'trajectory')}}
-        motor = base['motor']
+                    'condition': condition}
         for harmonic in ('H2', 'H4'):
             first, second = (base['harmonics'][harmonic],
                              candidate['harmonics'][harmonic])
             if first['quality'] != 'valid':
+                if critical.get((base['trajectory'], base['speed_mm_s'])) == harmonic:
+                    return {'accepted': False,
+                            'reason': 'unmeasurable_verification_condition',
+                            'condition': dict(condition, harmonic=harmonic)}
                 continue
             if second['quality'] != 'valid':
-                return {'accepted': False, 'reason': 'candidate_signal_invalid'}
+                return {'accepted': False, 'reason': 'candidate_signal_invalid',
+                        'condition': dict(condition, harmonic=harmonic)}
             start, end = (first['amplitude_mm_s2'],
                           second['amplitude_mm_s2'])
             floor = max(first['noise_floor_mm_s2'],
                         second['noise_floor_mm_s2'])
             if end - start > max(3. * floor, .15 * start):
                 return {'accepted': False,
-                        'reason': 'individual_condition_regressed'}
-            repeat = index // per_repeat
-            totals[motor][0][repeat] += start
-            totals[motor][1][repeat] += end
-            totals[motor][2] += 1
-            totals[motor][3] += floor * floor
-    if any(t[2] < 8 for t in totals.values()):
+                        'reason': 'individual_condition_regressed',
+                        'condition': dict(condition, harmonic=harmonic),
+                        'baseline_mm_s2': start, 'candidate_mm_s2': end}
+            key = (base['motor'], base['direction'], base['speed_mm_s'],
+                   base['trajectory'], harmonic)
+            groups.setdefault(key, []).append((start, end, floor,
+                                                base.get('sample_gap_retries', 0)))
+    if not groups or any(len(rows) < 3 for rows in groups.values()):
+        return {'accepted': False, 'reason': 'insufficient_verified_signal'}
+    summaries = []
+    motor_groups = {'stepper_x': [], 'stepper_y': []}
+    for key, rows in groups.items():
+        starts = [row[0] for row in rows]
+        differences = [row[1] - row[0] for row in rows]
+        base_mean = statistics.fmean(starts)
+        base_std = statistics.stdev(starts)
+        floor = statistics.fmean(row[2] for row in rows)
+        if base_std > max(.15 * base_mean, 3. * floor):
+            return {'accepted': False, 'reason': 'unstable_baseline',
+                    'condition': key}
+        diff_mean = statistics.fmean(differences)
+        # Трёх повторов достаточно только для консервативной оценки (t_0.975,2).
+        bound = 4.303 * statistics.stdev(differences) / math.sqrt(len(starts))
+        if diff_mean - bound > max(.05 * base_mean, 3. * floor):
+            return {'accepted': False, 'reason': 'condition_regressed',
+                    'condition': key}
+        motor_groups[key[0]].append(rows)
+        summaries.append({'motor': key[0], 'direction': key[1],
+                          'speed_mm_s': key[2], 'trajectory': key[3],
+                          'harmonic': key[4], 'baseline_mean_mm_s2': base_mean,
+                          'baseline_stddev_mm_s2': base_std,
+                          'baseline_cv': base_std / base_mean if base_mean else 0.,
+                          'noise_floor_mm_s2': floor,
+                          'retry_count': sum(row[3] for row in rows),
+                          'candidate_mean_mm_s2': base_mean + diff_mean,
+                          'paired_difference_ci95_half_width_mm_s2': bound})
+    if any(sum(len(group) for group in groups) < 8
+           for groups in motor_groups.values()):
         return {'accepted': False, 'reason': 'insufficient_verified_signal'}
     improved = []
-    for motor, (base, candidate, count, floor_sq) in totals.items():
-        base_sum, candidate_sum = sum(base), sum(candidate)
-        error = max(2. * (abs(base[0] - base[1]) +
-                          abs(candidate[0] - candidate[1])),
-                    3. * math.sqrt(floor_sq))
-        if candidate_sum - base_sum > max(.05 * base_sum, error):
+    for motor, groups in motor_groups.items():
+        if len({len(group) for group in groups}) != 1:
+            return {'accepted': False, 'reason': 'missing_verification_rows'}
+        starts = [sum(group[i][0] for group in groups)
+                  for i in range(len(groups[0]))]
+        differences = [sum(group[i][1] - group[i][0] for group in groups)
+                       for i in range(len(groups[0]))]
+        baseline_mean = statistics.fmean(starts)
+        floor = math.sqrt(sum(statistics.fmean(row[2] for row in group) ** 2
+                              for group in groups))
+        change = statistics.fmean(differences)
+        bound = 4.303 * statistics.stdev(differences) / math.sqrt(len(starts))
+        if change - bound > max(.05 * baseline_mean, 3. * floor):
             return {'accepted': False, 'reason': 'motor_total_regressed'}
-        if (all(a > b for a, b in zip(base, candidate)) and
-                base_sum - candidate_sum > max(.10 * base_sum, error)):
+        if -change - bound > max(.10 * baseline_mean, 3. * floor):
             improved.append(motor)
     if not improved:
         return {'accepted': False, 'reason': 'improvement_below_error_margin'}
     return {'accepted': True, 'reason': '',
-            'motor_amplitude_sums': totals,
+            'conditions': summaries,
             'improved_motors': improved}

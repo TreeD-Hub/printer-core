@@ -12,7 +12,8 @@ from . import treed_motor_wave as motor_wave
 from . import homing as klipper_homing
 
 
-ALGORITHM = 'mslut-xy-h2h4-v1'
+ALGORITHM = 'mslut-xy-phase-h4-v3'
+PHASE_MODEL = 'delta=s4*sin(4t)+c4*cos(4t);radians'
 XY_MOTORS = ('stepper_x', 'stepper_y')
 MAX_TABLE_VECTOR_DELTA = 16
 HOMING_MOVE_ORIGINAL = klipper_homing.HomingMove.homing_move
@@ -46,6 +47,8 @@ class TreedMotorCalibration:
         self.progress = 0.
         self.error = None
         self.results = []
+        self.characterization = {}
+        self.last_verdict = None
         self.cancel_requested = False
         self.timer = None
         self.old_accel = None
@@ -238,6 +241,14 @@ class TreedMotorCalibration:
                     'tmc_changed_since_startup' if self.driver_mutated else
                     self.phase_reason or 'sensor_or_runtime_config_missing'),
                 'phase_backend': 'tmc5160_mslut_step_dir',
+                'phase_backend_capabilities': {
+                    'backend': motor_wave.BACKEND_CAPABILITIES['backend'],
+                    'phase_harmonics': list(
+                        motor_wave.BACKEND_CAPABILITIES['phase_harmonics']),
+                    'measurable_harmonics': list(
+                        motor_wave.BACKEND_CAPABILITIES['measurable_harmonics']),
+                    'direction_specific':
+                        motor_wave.BACKEND_CAPABILITIES['direction_specific']},
                 'direct_mode_supported': False,
                 'state': self.state, 'stage': self.stage,
                 'motor': self.motor or '', 'progress': self.progress,
@@ -296,13 +307,16 @@ class TreedMotorCalibration:
         if (not isinstance(profile, dict) or
                 not isinstance(profile.get('tables'), dict) or
                 not isinstance(profile.get('coefficients'), dict) or
+                not isinstance(profile.get('projection'), dict) or
                 not isinstance(profile.get('verified'), dict) or
                 not isinstance(profile.get('limits'), dict)):
             raise ValueError('profile_structure_invalid')
-        if (profile.get('schema') != 1 or profile.get('algorithm') != ALGORITHM
+        if (profile.get('schema') != 3 or profile.get('algorithm') != ALGORITHM
+                or profile.get('phase_model') != PHASE_MODEL
                 or profile.get('build_id') != self.build_id
                 or profile.get('config_fingerprint') != self.config_fingerprint
                 or set(profile.get('tables', {})) != set(XY_MOTORS)
+                or set(profile.get('projection', {})) != set(XY_MOTORS)
                 or profile.get('verified', {}).get('accepted') is not True):
             raise ValueError('profile_stale_or_incomplete')
         if ('verification_failure' in profile and
@@ -314,10 +328,9 @@ class TreedMotorCalibration:
         for motor, table in profile['tables'].items():
             motor_wave.decode_table(table)
             coefficients = profile['coefficients'][motor]
-            expected = (motor_wave.make_table(**coefficients)
-                        if coefficients['a2'] or coefficients['a4'] else
-                        self.base_tables[motor])
-            if table != expected:
+            expected, metrics = motor_wave.phase_table(
+                coefficients, self.base_tables[motor])
+            if table != expected or profile['projection'][motor] != metrics:
                 raise ValueError('profile_table_mismatch')
         limits = profile.get('limits', {})
         if (not all(isinstance(limits.get(k), (int, float)) and
@@ -591,10 +604,14 @@ class TreedMotorCalibration:
 
     def _write_report(self):
         self._atomic_json(self.report_path, {
-            'schema': 1, 'state': self.state, 'stage': self.stage,
+            'schema': 3, 'algorithm': ALGORITHM,
+            'phase_model': PHASE_MODEL,
+            'state': self.state, 'stage': self.stage,
             'motor': self.motor, 'progress': self.progress, 'error': self.error,
             'config_fingerprint': self.config_fingerprint,
-            'build_id': self.build_id, 'results': self.results})
+            'build_id': self.build_id, 'results': self.results,
+            'speed_characterization': self.characterization,
+            'verification': self.last_verdict})
 
     def _joint_jobs(self, speeds):
         status = self._ready()
@@ -633,114 +650,164 @@ class TreedMotorCalibration:
         yield from self._collect(jobs, 'measure')
         return None
 
+    def _search_phase_trials(self, motor, harmonic, jobs, reference, best_score,
+                             best, trials, stage):
+        self.stage = stage
+        for magnitude, phase in trials:
+            trial = dict(best)
+            trial['s%d' % harmonic] = magnitude * math.cos(phase)
+            trial['c%d' % harmonic] = magnitude * math.sin(phase)
+            try:
+                table, _ = motor_wave.phase_table(trial, self.base_tables[motor])
+            except ValueError:
+                continue
+            yield ('table', motor, table)
+            rows = yield from self._collect(jobs, '%s_H%d_%.4f_%.3f' % (
+                stage, harmonic, magnitude, phase))
+            score = self._score(rows, harmonic)
+            if score is None or score >= .95 * best_score:
+                continue
+            if any(next(row['harmonics']['H%d' % harmonic]
+                        ['amplitude_mm_s2'] for row in rows
+                        if row['direction'] == direction) >
+                   1.05 * stats['mean_mm_s2'] +
+                   3. * stats['noise_floor_mm_s2']
+                   for direction, stats in reference.items()):
+                continue
+            best_score, best = score, trial
+        return best_score, best
+
     def _tune_flow(self):
         if len(set(self.xy_speeds)) < 3:
             raise motor_math.MeasurementError('tune_requires_three_xy_speeds')
         speeds = sorted(set(self.xy_speeds))
-        training = speeds[len(speeds) // 2]
         holdout = (speeds[0], speeds[-1])
         jobs = self._geometry(XY_MOTORS)
-        train_jobs = {motor: [j for j in jobs if j[0] == motor and
-                              j[1] == training] for motor in XY_MOTORS}
-        coeffs = {motor: {'a2': 0., 'p2': 0., 'a4': 0., 'p4': 0.}
+        coeffs = {motor: {'s4': 0., 'c4': 0.}
                   for motor in XY_MOTORS}
         tables = dict(self.base_tables)
-        zero_tables = {motor: motor_wave.make_table() for motor in XY_MOTORS}
         self.stage = 'baseline'
         yield ('tables', tables)
+        baseline = yield from self._collect(jobs * 3, 'speed_baseline')
+        self.characterization = {}
         for motor in XY_MOTORS:
-            yield ('tables', self.base_tables)
-            baseline = yield from self._collect(train_jobs[motor] * 2,
-                                                 'training_baseline')
-            yield ('table', motor, zero_tables[motor])
-            baseline = yield from self._collect(train_jobs[motor] * 2,
-                                                 'training_zero_correction')
-            for harmonic in (2, 4):
-                if harmonic == 4 and coeffs[motor]['a2']:
-                    baseline = yield from self._collect(
-                        train_jobs[motor] * 2, 'training_after_h2')
-                reference = self._score(baseline, harmonic)
-                if reference is None:
+            for harmonic in motor_wave.BACKEND_CAPABILITIES['measurable_harmonics']:
+                choices = []
+                speed_profiles = {}
+                for speed in speeds:
+                    group = [row for row in baseline if row['motor'] == motor
+                             and row['speed_mm_s'] == speed]
+                    stats = motor_math.baseline_summary(group, harmonic)
+                    speed_profiles[str(speed)] = (
+                        {'quality': 'valid', 'directions': stats} if stats else
+                        {'quality': 'unmeasurable_or_unstable'})
+                    if stats is not None:
+                        choices.append((speed, stats))
+                if not choices:
+                    self.characterization['%s:H%d' % (motor, harmonic)] = {
+                        'quality': 'unmeasurable_or_unstable',
+                        'speeds': speed_profiles}
                     continue
-                self.stage = 'phase_search'
-                best_score, best = reference, dict(coeffs[motor])
-                amplitude_key, phase_key = 'a%d' % harmonic, 'p%d' % harmonic
-                for phase in motor_wave.PHASES:
-                    trial = dict(coeffs[motor])
-                    trial[amplitude_key], trial[phase_key] = 2., phase
-                    try:
-                        table = motor_wave.make_table(**trial)
-                    except ValueError:
+                target = speeds[len(speeds) // 2] if harmonic == 2 else speeds[0]
+                speed, stats = min(choices, key=lambda item: abs(item[0] - target))
+                self.characterization['%s:H%d' % (motor, harmonic)] = {
+                    'quality': 'valid', 'training_speed_mm_s': speed,
+                    'directions': stats, 'speeds': speed_profiles}
+                if harmonic not in motor_wave.BACKEND_CAPABILITIES['phase_harmonics']:
+                    continue
+                train_jobs = [j for j in jobs if j[0] == motor and j[1] == speed]
+                reference_rows = [row for row in baseline
+                                  if row['motor'] == motor and
+                                  row['speed_mm_s'] == speed]
+                if tables[motor] != self.base_tables[motor]:
+                    yield ('table', motor, tables[motor])
+                    reference_rows = yield from self._collect(
+                        train_jobs * 3, 'training_after_previous_harmonic')
+                    stats = motor_math.baseline_summary(reference_rows, harmonic)
+                    if stats is None:
                         continue
-                    yield ('table', motor, table)
-                    rows = yield from self._collect(train_jobs[motor],
-                                                    'phase_%s_%s' % (harmonic, phase))
-                    score = self._score(rows, harmonic)
-                    if score is not None and score < best_score:
-                        best_score, best = score, trial
-                self.stage = 'amplitude_search'
-                if best[amplitude_key]:
-                    for amplitude in (4., 6.):
-                        trial = dict(best)
-                        trial[amplitude_key] = amplitude
-                        try:
-                            table = motor_wave.make_table(**trial)
-                        except ValueError:
-                            continue
-                        yield ('table', motor, table)
-                        rows = yield from self._collect(
-                            train_jobs[motor], 'amplitude_%s_%s' % (
-                                harmonic, amplitude))
-                        score = self._score(rows, harmonic)
-                        if score is not None and score < best_score:
-                            best_score, coeffs[motor] = score, trial
-                    if not coeffs[motor][amplitude_key]:
-                        coeffs[motor] = best
-                tables[motor] = (motor_wave.make_table(**coeffs[motor])
-                                 if coeffs[motor]['a2'] or coeffs[motor]['a4']
-                                 else self.base_tables[motor])
+                best_score = self._score(reference_rows, harmonic)
+                best = dict(coeffs[motor])
+                best_score, best = yield from self._search_phase_trials(
+                    motor, harmonic, train_jobs, stats, best_score, best,
+                    ((magnitude, phase) for magnitude in (.01, .02, .04)
+                     for phase in (0., math.pi)), 'approximate_magnitude')
+                magnitude = math.hypot(best['s%d' % harmonic],
+                                       best['c%d' % harmonic])
+                if magnitude:
+                    best_score, best = yield from self._search_phase_trials(
+                        motor, harmonic, train_jobs, stats, best_score, best,
+                        ((magnitude, phase) for phase in
+                         (0., math.pi / 4., math.pi / 2., 3. * math.pi / 4.,
+                          math.pi, 5. * math.pi / 4., 3. * math.pi / 2.,
+                          7. * math.pi / 4.)), 'phase_search')
+                    magnitude = math.hypot(best['s%d' % harmonic],
+                                           best['c%d' % harmonic])
+                    phase = math.atan2(best['c%d' % harmonic],
+                                       best['s%d' % harmonic])
+                    best_score, best = yield from self._search_phase_trials(
+                        motor, harmonic, train_jobs, stats, best_score, best,
+                        ((magnitude * factor, phase) for factor in (.75, 1.25)
+                         if magnitude * factor <= .06), 'magnitude_refinement')
+                coeffs[motor] = best
+                tables[motor], _ = motor_wave.phase_table(
+                    best, self.base_tables[motor])
                 yield ('table', motor, tables[motor])
+        if all(tables[motor] == self.base_tables[motor] for motor in XY_MOTORS):
+            raise motor_math.MeasurementError(
+                'no_representable_phase_correction_found')
+        self.stage = 'validation'
+        validation = []
+        selected = None
+        for attenuation in (1., .75, .5, .25):
+            scaled = {motor: {key: value * attenuation
+                              for key, value in coeffs[motor].items()}
+                      for motor in XY_MOTORS}
+            try:
+                trial_tables = {motor: motor_wave.phase_table(
+                    scaled[motor], self.base_tables[motor])[0]
+                    for motor in XY_MOTORS}
+            except ValueError:
+                continue
+            verdict = yield from self._verify_flow(trial_tables, holdout)
+            validation.append({'attenuation': attenuation, 'verdict': verdict})
+            if verdict['accepted']:
+                selected = (attenuation, scaled, trial_tables)
+                break
+        if selected is None:
+            raise motor_math.MeasurementError('validation_failed: ' +
+                                              str(validation[-1] if validation else
+                                                  'no_representable_candidate'))
+        attenuation, coeffs, tables = selected
         self.stage = 'verifying'
         verdict = yield from self._verify_flow(tables, holdout)
-        if not any(coeffs[motor][key] for motor in XY_MOTORS
-                   for key in ('a2', 'a4')):
-            raise motor_math.MeasurementError('no_individual_correction_found')
         if not verdict['accepted']:
-            raise motor_math.MeasurementError('verification_failed: ' +
-                                              verdict['reason'])
-        return {'schema': 1, 'algorithm': ALGORITHM,
+            raise motor_math.MeasurementError('final_verification_failed: ' +
+                                              str(verdict))
+        projection = {motor: motor_wave.phase_table(
+            coeffs[motor], self.base_tables[motor])[1] for motor in XY_MOTORS}
+        return {'schema': 3, 'algorithm': ALGORITHM,
+                'phase_model': PHASE_MODEL,
                 'build_id': self.build_id,
                 'mcu_builds': self.mcu_builds,
                 'config_fingerprint': self.config_fingerprint,
                 'coefficients': coeffs, 'tables': tables,
+                'projection': projection,
                 'limits': {'max_velocity': max(holdout),
                            'max_accel': min(self.xy_accel, self.old_accel),
                            'tested_speeds': list(holdout)},
-                'verified': verdict}
+                'attenuation': attenuation,
+                'validation': validation, 'verified': verdict}
 
     def _verify_flow(self, tables, speeds):
         jobs = [j for j in self._geometry(XY_MOTORS) if j[1] in speeds]
         jobs += list(self._joint_jobs(speeds))
         yield ('tables', self.base_tables)
-        baseline = yield from self._collect(jobs * 2, 'verification_baseline')
-        zero_tables = {motor: motor_wave.make_table() for motor in XY_MOTORS}
-        yield ('tables', zero_tables)
-        zero = yield from self._collect(jobs * 2, 'verification_zero_correction')
+        baseline = yield from self._collect(jobs * 3, 'verification_baseline')
         yield ('tables', tables)
-        corrected = yield from self._collect(jobs * 2, 'verification_candidate')
+        corrected = yield from self._collect(jobs * 3, 'verification_candidate')
         verdict = motor_math.compare_verification(baseline, corrected)
-        zero_verdict = motor_math.compare_verification(zero, corrected)
-        corrected_motors = {motor for motor in XY_MOTORS
-                            if tables[motor] != self.base_tables[motor]}
-        common = (set(verdict.get('improved_motors', ())) &
-                  set(zero_verdict.get('improved_motors', ())) &
-                  corrected_motors)
-        if verdict['accepted'] and (not zero_verdict['accepted'] or not common):
-            verdict = {'accepted': False, 'reason': 'no_individual_gain: ' +
-                       zero_verdict['reason'], 'stock_comparison': verdict,
-                       'zero_comparison': zero_verdict}
-        else:
-            verdict['zero_comparison'] = zero_verdict
+        self.last_verdict = verdict
         yield ('tables', self.base_tables)
         return verdict
 
@@ -900,6 +967,8 @@ class TreedMotorCalibration:
             if self.toolhead.get_max_velocity()[1] < self.xy_accel:
                 raise gcmd.error('set runtime acceleration to at least xy_accel first')
         if mode == 'tune':
+            if len(set(self.xy_speeds)) < 3:
+                raise gcmd.error('tune_requires_three_xy_speeds')
             for motor in XY_MOTORS:
                 slope = 1 if motor == 'stepper_x' else -1
                 frequency = self._stepper_frequency(
@@ -909,8 +978,17 @@ class TreedMotorCalibration:
                     raise gcmd.error(
                         'ADXL345 sensor_bandwidth: cannot verify H2 at %.0f mm/s'
                         % max(self.xy_speeds))
+                slow_frequency = self._stepper_frequency(
+                    motor, min(self.xy_speeds), (0., 0., 0.),
+                    (1., slope, 0.))
+                if 16. * slow_frequency >= self.chip.data_rate:
+                    raise gcmd.error(
+                        'ADXL345 sensor_bandwidth: cannot characterize H4 at %.0f mm/s'
+                        % min(self.xy_speeds))
         self._ready_before_home(gcmd)
         self.results = []
+        self.characterization = {}
+        self.last_verdict = None
         if mode == 'tune':
             self.candidate = None
         self.error = None

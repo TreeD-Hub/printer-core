@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "e0f82f33537b3573e9c0e718c0dab5c8c240f6d5",
-    "indexed_at": "2026-09-23T14:04:32Z",
-    "project": "C-Users-Yawllen-Documents-GitHub-printer-core",
-    "nodes": 2050,
-    "edges": 5083,
-    "original_size": 9175040,
-    "compressed_size": 1479449,
+    "commit": "68551bf2337867820b3fcecf9dd79ad8eb2ebf09",
+    "indexed_at": "2026-09-23T17:29:08Z",
+    "project": "C-Users-Yawllen-Documents-GitHub-treed-mainshellOS",
+    "nodes": 2017,
+    "edges": 4146,
+    "original_size": 7536640,
+    "compressed_size": 1092925,
     "compression_level": 3
 }

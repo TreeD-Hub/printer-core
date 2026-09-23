@@ -53,6 +53,29 @@ class MotorWaveTest(unittest.TestCase):
                 valid += 1
             self.assertGreater(valid, 0)
 
+    def test_phase_projection_preserves_zero_and_rejects_unrepresentable_terms(self):
+        self.assertEqual(wave.BACKEND_CAPABILITIES['phase_harmonics'], (4,))
+        self.assertEqual(wave.BACKEND_CAPABILITIES['measurable_harmonics'],
+                         (2, 4))
+        self.assertFalse(wave.BACKEND_CAPABILITIES['direction_specific'])
+        zero = dict.fromkeys(('s4', 'c4'), 0.)
+        table, error = wave.phase_table(zero, wave.DEFAULT_TABLE)
+        self.assertEqual(table, wave.DEFAULT_TABLE)
+        self.assertEqual(error['rms_error_lsb'], 0.)
+        correction = dict(zero, s4=.02)
+        table, error = wave.phase_table(correction, wave.DEFAULT_TABLE)
+        self.assertNotEqual(table, wave.DEFAULT_TABLE)
+        self.assertLess(error['rms_error_lsb'],
+                        .35 * error['rms_signal_lsb'])
+        for coefficient in ('s2', 'c2'):
+            with self.assertRaisesRegex(ValueError, 'phase_harmonic_unsupported'):
+                wave.phase_table(dict(zero, **{coefficient: .02}),
+                                 wave.DEFAULT_TABLE)
+        with self.assertRaises(ValueError):
+            wave.phase_table(dict(zero, c4=.02), wave.DEFAULT_TABLE)
+        with self.assertRaisesRegex(ValueError, 'phase_coefficients_invalid'):
+            wave.phase_table(None, wave.DEFAULT_TABLE)
+
 
 if __name__ == '__main__':
     unittest.main()

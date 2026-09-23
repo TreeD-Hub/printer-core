@@ -43,12 +43,15 @@ class MotorStateTest(unittest.TestCase):
 
     def _valid_profile(self):
         return {
-            'schema': 1, 'algorithm': calibration.ALGORITHM,
+            'schema': 3, 'algorithm': calibration.ALGORITHM,
+            'phase_model': calibration.PHASE_MODEL,
             'build_id': self.subject.build_id,
             'config_fingerprint': self.subject.config_fingerprint,
-            'coefficients': {motor: {'a2': 0., 'p2': 0.,
-                                    'a4': 0., 'p4': 0.}
+            'coefficients': {motor: {'s4': 0., 'c4': 0.}
                              for motor in calibration.XY_MOTORS},
+            'projection': {motor: {'rms_error_lsb': 0.,
+                                  'rms_signal_lsb': 0.}
+                           for motor in calibration.XY_MOTORS},
             'tables': self.subject.base_tables,
             'limits': {'max_velocity': 35., 'max_accel': 500.},
             'verified': {'accepted': True}}
@@ -56,12 +59,90 @@ class MotorStateTest(unittest.TestCase):
     def test_profile_invalidated_by_firmware_or_config_change(self):
         profile = self._valid_profile()
         self.subject._validate_profile(profile)
+        profile['schema'] = 1
+        with self.assertRaisesRegex(ValueError, 'stale'):
+            self.subject._validate_profile(profile)
+        profile['schema'] = 2
+        with self.assertRaisesRegex(ValueError, 'stale'):
+            self.subject._validate_profile(profile)
+        profile['schema'] = 3
         profile['build_id'] = 'older-mcu-build'
         with self.assertRaisesRegex(ValueError, 'stale'):
             self.subject._validate_profile(profile)
         profile['build_id'] = self.subject.build_id
         profile['config_fingerprint'] = 'older-config'
         with self.assertRaisesRegex(ValueError, 'stale'):
+            self.subject._validate_profile(profile)
+
+    def test_tune_uses_predeclared_attenuation_and_final_verification(self):
+        subject = self.subject
+        subject.xy_speeds = (100., 150., 200.)
+        subject.old_accel = subject.xy_accel = 15000.
+        subject.mcu_builds = {}
+        jobs = [(motor, speed, direction, None, None)
+                for motor in calibration.XY_MOTORS
+                for speed in subject.xy_speeds
+                for direction in ('positive', 'negative')]
+        subject._geometry = lambda motors: jobs
+
+        def collect(selected, label):
+            if False:
+                yield
+            return [{'motor': job[0], 'direction': job[2],
+                     'speed_mm_s': job[1],
+                     'harmonics': {name: {'quality': 'valid',
+                                          'amplitude_mm_s2': 20.,
+                                          'noise_floor_mm_s2': .1}
+                                   for name in ('H2', 'H4')}}
+                    for job in selected]
+
+        searched_harmonics = []
+
+        def search(motor, harmonic, jobs, reference, score, best, trials, stage):
+            if False:
+                yield
+            searched_harmonics.append(harmonic)
+            if motor == 'stepper_x' and harmonic == 4 and stage == 'approximate_magnitude':
+                best = dict(best, s4=.04)
+            return score, best
+
+        calls = []
+
+        def verify(tables, speeds):
+            if False:
+                yield
+            calls.append(tables)
+            return {'accepted': len(calls) > 1, 'reason': 'regressed'
+                    if len(calls) == 1 else ''}
+
+        subject._collect = collect
+        subject._search_phase_trials = search
+        subject._verify_flow = verify
+        flow = subject._tune_flow()
+        while True:
+            try:
+                next(flow)
+            except StopIteration as done:
+                profile = done.value
+                break
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(set(searched_harmonics), {4})
+        self.assertIn('stepper_x:H2', subject.characterization)
+        self.assertEqual(profile['attenuation'], .75)
+        self.assertAlmostEqual(profile['coefficients']['stepper_x']['s4'], .03)
+        subject._validate_profile(profile)
+
+    def test_profile_rejects_phase_table_mismatch(self):
+        profile = self._valid_profile()
+        profile['coefficients']['stepper_x']['s4'] = .02
+        table, metrics = wave.phase_table(
+            profile['coefficients']['stepper_x'],
+            self.subject.base_tables['stepper_x'])
+        profile['tables'] = dict(profile['tables'], stepper_x=table)
+        profile['projection']['stepper_x'] = metrics
+        self.subject._validate_profile(profile)
+        profile['coefficients']['stepper_x']['s4'] = .01
+        with self.assertRaisesRegex(ValueError, 'profile_table_mismatch'):
             self.subject._validate_profile(profile)
 
     def test_failed_saved_verification_blocks_enable_across_restart(self):
