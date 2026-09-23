@@ -411,6 +411,250 @@ class MotorStateTest(unittest.TestCase):
             self.subject.cmd_calibrate(gcmd)
         self.subject._ready_before_home.assert_not_called()
 
+    def test_circle_command_caps_defaults_and_rejects_explicit_overspeed(self):
+        subject = self.subject
+        subject.state = 'idle'
+        subject.phase_enabled = False
+        subject.profile = self._valid_profile()
+        subject.profile_state = 'saved'
+        subject.reactor = types.SimpleNamespace(
+            monotonic=lambda: 0., NOW=0., register_timer=Mock(return_value=1))
+        subject.get_status = Mock(return_value={'phase_supported': True})
+        subject._ready = Mock()
+        subject._check_base_tables = Mock()
+        subject._verify_circle_tables = Mock()
+        subject._circle_geometry = Mock(return_value=((120., 120., 25.), 30.))
+        subject.mcu_builds = {}
+        subject.xy_accel = 500.
+        steppers = [types.SimpleNamespace(get_name=lambda name=name: name)
+                    for name in calibration.XY_MOTORS]
+        toolhead = types.SimpleNamespace(
+            square_corner_velocity=5.,
+            get_max_velocity=lambda: (100., 500.),
+            set_max_velocities=Mock(),
+            get_kinematics=lambda: types.SimpleNamespace(get_steppers=lambda: steppers))
+        subject.printer = types.SimpleNamespace(
+            get_start_args=lambda: {'software_version': 'test'},
+            lookup_object=lambda name, default=None: {
+                'toolhead': toolhead,
+                'adxl345': types.SimpleNamespace(start_internal_client=Mock())
+            }.get(name, default))
+
+        def command(speed=None):
+            return types.SimpleNamespace(
+                get=lambda key, default=None: speed if key == 'SPEEDS' else default,
+                get_int=lambda key, default=None, **kwargs: default,
+                get_float=lambda key, default=None, **kwargs: default,
+                error=ValueError, respond_info=Mock())
+
+        with self.assertRaisesRegex(ValueError, 'verified profile'):
+            subject.cmd_circle_compare(command('50'))
+        with self.assertRaisesRegex(ValueError, 'step history'):
+            subject.cmd_circle_compare(command('1'))
+        toolhead.set_max_velocities.assert_not_called()
+        subject.cmd_circle_compare(command())
+        self.assertEqual(subject.circle_speeds, (35.,))
+        self.assertEqual(subject.circle_directions, ('CW', 'CCW'))
+        self.assertEqual(subject.circle_repeats, 3)
+        self.assertEqual(subject.circle_report['segments'], 128)
+        self.assertEqual(subject.circle_report['profile_source'], 'saved')
+        self.assertEqual(subject.circle_report['sector_count'], 16)
+        toolhead.set_max_velocities.assert_called_once_with(35., 500., None, None)
+        subject.reactor.register_timer.assert_called_once()
+        with tempfile.TemporaryDirectory() as directory:
+            subject.circle_report_path = str(Path(directory) / 'circle.json')
+            subject._write_circle_report()
+            report = json.loads(Path(subject.circle_report_path).read_text(
+                encoding='utf-8'))
+            self.assertEqual(report['profile_fingerprint'],
+                             subject.circle_report['profile_fingerprint'])
+            self.assertEqual(report['config_fingerprint'], 'runtime-config')
+            self.assertEqual(report['passes'], [])
+
+    def test_circle_geometry_uses_live_limits_and_never_crosses_margin(self):
+        subject = self.subject
+        subject.xy_margin = 12.
+        subject.z_low, subject.z_high = 25., 50.
+        subject._ready = Mock(return_value={
+            'axis_minimum': (10., -20., -5.),
+            'axis_maximum': (210., 160., 255.)})
+        center, radius = subject._circle_geometry(None)
+        self.assertEqual(center, (110., 70., 25.))
+        self.assertAlmostEqual(radius, .7 * 78.)
+        for direction in (True, False):
+            self.assertTrue(all(22. <= x <= 198. and -8. <= y <= 148.
+                                for x, y, _ in calibration.motor_math.circle_points(
+                                    center, radius, direction)))
+        with self.assertRaisesRegex(ValueError, 'circle_radius_out_of_bounds'):
+            subject._circle_geometry(79.)
+
+    def test_circle_off_on_uses_exact_same_queued_points(self):
+        subject = self.subject
+        subject._ready = Mock()
+        subject._verify_circle_tables = Mock()
+        subject.circle_profile = self._valid_profile()
+        subject.z_speeds = (2.,)
+        subject.circle_center = (100., 100., 25.)
+        subject.circle_radius = 30.
+        points = calibration.motor_math.circle_points(
+            subject.circle_center, subject.circle_radius, True)
+        subject.circle_paths = {'CW': points}
+        subject.cancel_requested = False
+        subject.printer = types.SimpleNamespace(is_shutdown=lambda: False)
+        section = types.SimpleNamespace(
+            getint=lambda key, default=None: 16 if key == 'microsteps' else default)
+        subject.config = types.SimpleNamespace(getsection=lambda name: section)
+        stepper_a = types.SimpleNamespace(
+            get_mcu_position=lambda: 0, get_step_dist=lambda: .01,
+            get_dir_inverted=lambda: (True,),
+            get_past_mcu_position=lambda time: 10,
+            get_rotation_distance=lambda: (40., 3200.))
+        stepper_b = types.SimpleNamespace(
+            get_mcu_position=lambda: 0, get_step_dist=lambda: .01,
+            get_dir_inverted=lambda: (False,),
+            get_past_mcu_position=lambda time: 0,
+            get_rotation_distance=lambda: (40., 3200.))
+        subject.kin_steppers = {'stepper_x': stepper_a, 'stepper_y': stepper_b}
+        subject.toolhead = types.SimpleNamespace(
+            get_position=lambda: points[0], manual_move=Mock(), wait_moves=Mock(),
+            dwell=Mock(), get_last_move_time=Mock(side_effect=(0., 1., 2., 3.)))
+        client = types.SimpleNamespace(
+            msgs=[], finish_measurements=Mock(), get_samples=Mock(side_effect=[
+                [(0.5, 0., 0., 0.)], [(2.5, 0., 0., 0.)]]))
+        subject.chip = types.SimpleNamespace(start_internal_client=lambda: client)
+        fake = {'total': {}, 'sectors': [
+            {'actual_speed_mm_s': 50.} for _ in range(16)]}
+        with patch.object(calibration.motor_math, 'circle_analysis', return_value=fake) as analysis:
+            subject._run_circle_pass(50., 'CW', 1, False)
+            subject._run_circle_pass(50., 'CW', 1, True)
+        for call in analysis.call_args_list:
+            self.assertEqual(call.args[0][0][6:8],
+                             (points[0][0] + .05, points[0][1] + .05))
+        actual = [call.args[0] for call in subject.toolhead.manual_move.call_args_list
+                  if call.args[0] in points]
+        self.assertEqual(actual, points[1:] + points[1:])
+        self.assertIs(subject.circle_paths['CW'], points)
+
+    def test_circle_flow_balances_order_and_compares_each_sector(self):
+        subject = self.subject
+        subject.circle_profile = self._valid_profile()
+        subject.circle_speeds = (50.,)
+        subject.circle_directions = ('CW', 'CCW')
+        subject.circle_repeats = 3
+
+        def measurement(value):
+            metric = {'rms_accel_mm_s2': value,
+                      'peak_accel_mm_s2': value * 2.,
+                      'vibration_energy_mm2_s4': value * value,
+                      'harmonics': {}}
+            return {'total': metric, 'sectors': [metric] * 16}
+
+        sequence = {'CW': [], 'CCW': []}
+        flow = subject._circle_flow()
+        action = next(flow)
+        while True:
+            try:
+                if action[0] == 'tables':
+                    action = flow.send(None)
+                else:
+                    _, speed, direction, repeat, enabled = action
+                    self.assertEqual(speed, 50.)
+                    sequence[direction].append(enabled)
+                    action = flow.send(measurement(15. if enabled else 20.))
+            except StopIteration as done:
+                comparisons = done.value
+                break
+        self.assertEqual(sequence['CW'], [False, True, True, False, False, True])
+        self.assertEqual(sequence['CW'], sequence['CCW'])
+        self.assertEqual(len(comparisons), 2)
+        self.assertEqual(len(comparisons[0]['sectors']), 16)
+        self.assertEqual(comparisons[0]['total']['rms_accel_mm_s2']
+                         ['relative_delta_percent'], -25.)
+
+    def test_circle_cancel_restores_stock_and_unknown_state_fails(self):
+        subject = self.subject
+        subject.mode = 'circle'
+        subject.state = 'running'
+        subject.stage = 'comparing'
+        subject.timer = None
+        subject.old_accel = 500.
+        subject.circle_old_velocity = 100.
+        subject.current_tables = {'stepper_x': {'changed': 1},
+                                  'stepper_y': self.subject.base_tables['stepper_y']}
+        subject.phase_enabled = True
+        subject.circle_report = {'comparisons': []}
+        subject._write_circle_report = Mock()
+        subject._verify_circle_tables = Mock()
+        subject._switch_tables = Mock(side_effect=lambda tables: setattr(
+            subject, 'current_tables', tables))
+        subject.toolhead = types.SimpleNamespace(set_max_velocities=Mock(),
+                                                 wait_moves=Mock())
+        shutdown = [False]
+        subject.printer = types.SimpleNamespace(
+            is_shutdown=lambda: shutdown[0],
+            invoke_shutdown=Mock(side_effect=lambda reason: shutdown.__setitem__(0, True)))
+        subject.gcode = types.SimpleNamespace(respond_info=Mock())
+        subject._finish('cancelled')
+        self.assertEqual(subject.state, 'cancelled')
+        self.assertFalse(subject.phase_enabled)
+        self.assertEqual(subject.current_tables, subject.base_tables)
+        subject.toolhead.wait_moves.assert_called_once()
+        subject.toolhead.set_max_velocities.assert_called_once_with(
+            100., 500., None, None)
+        self.assertEqual(subject.circle_report['state'], 'cancelled')
+        subject.old_accel = 500.
+        subject.circle_old_velocity = 100.
+        subject.phase_enabled = True
+        subject._verify_circle_tables.side_effect = ValueError('readback')
+        subject._finish('cancelled')
+        self.assertEqual(subject.state, 'failed')
+        self.assertEqual(subject.phase_reason, 'tmc_state_unknown')
+        subject.printer.invoke_shutdown.assert_called_once()
+
+    def test_circle_switch_never_jogs_to_find_safe_phase(self):
+        subject = self.subject
+        subject.current_tables = subject.base_tables
+        subject.drivers = {'stepper_x': types.SimpleNamespace(
+            get_register_raw=lambda name: {'spi_status': 0, 'data': 760})}
+        subject.toolhead = types.SimpleNamespace(
+            wait_moves=Mock(), manual_move=Mock())
+        with self.assertRaisesRegex(ValueError, 'requires_motion'):
+            subject._align_motor('stepper_x', wave.make_table(), allow_jog=False)
+        subject.toolhead.manual_move.assert_not_called()
+
+    def test_circle_state_machine_switches_only_without_jog(self):
+        subject = self.subject
+        subject.mode = 'circle'
+        subject.state = 'running'
+        subject.stage = 'comparing'
+        subject.phase_enabled = False
+        subject.cancel_requested = False
+        subject.circle_profile = self._valid_profile()
+        subject.flow = (action for action in [
+            ('tables', subject.circle_profile['tables'], True)])
+        subject.flow_result = None
+        subject._switch_tables = Mock()
+        subject._verify_circle_tables = Mock()
+        subject.reactor = types.SimpleNamespace(monotonic=lambda: 1.)
+        result = subject._next(1.)
+        self.assertEqual(result, 1.05)
+        subject._switch_tables.assert_called_once_with(
+            subject.circle_profile['tables'], allow_jog=False)
+        subject._verify_circle_tables.assert_called_once()
+        self.assertTrue(subject.phase_enabled)
+
+    def test_circle_retry_records_invalid_attempt(self):
+        subject = self.subject
+        subject.circle_report = {'invalid_passes': []}
+        subject.gcode = types.SimpleNamespace(respond_info=Mock())
+        subject._run_circle_pass = Mock(side_effect=[
+            calibration.motor_math.MeasurementError('dropped_samples: gap'),
+            {'total': {}, 'sectors': []}])
+        row = subject._run_circle_with_retry(50., 'CW', 1, False)
+        self.assertEqual(row['retry_count'], 1)
+        self.assertEqual(len(subject.circle_report['invalid_passes']), 1)
+        self.assertEqual(subject.circle_report['invalid_passes'][0]['attempt'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()

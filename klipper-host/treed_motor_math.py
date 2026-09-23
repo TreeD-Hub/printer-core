@@ -70,9 +70,9 @@ def _quality(samples, start, end, frequency):
         raise MeasurementError(
             'dropped_samples: estimated_missing=%d samples=%d max_gap_ms=%.3f'
             % (missing, len(window), largest_gap * 1000.))
-    if frequency * 4. >= rate:
+    if frequency and frequency * 4. >= rate:
         raise MeasurementError('sensor_bandwidth')
-    if (times[-1] - times[0]) * frequency < 12.:
+    if frequency and (times[-1] - times[0]) * frequency < 12.:
         raise MeasurementError('too_few_periods')
     # ADXL345 full-resolution +/-16g: отсечь отсчёты у предела датчика.
     if any(abs(v) >= 150000. for s in window for v in s[1:4]):
@@ -265,3 +265,152 @@ def compare_verification(baseline, corrected):
     return {'accepted': True, 'reason': '',
             'conditions': summaries,
             'improved_motors': improved}
+
+
+# Блок 1: одинаковая сегментированная окружность для парных проходов.
+def circle_points(center, radius, clockwise, segments=128):
+    if radius <= 0 or segments < 32 or segments % 16:
+        raise ValueError('invalid_circle_geometry')
+    x, y, z = center
+    direction = -1 if clockwise else 1
+    points = [(x + radius, y, z)]
+    for index in range(1, segments):
+        angle = direction * 2. * math.pi * index / segments
+        points.append((x + radius * math.cos(angle),
+                       y + radius * math.sin(angle), z))
+    points.append(points[0])
+    return points
+
+
+def circle_sector(x, y, center):
+    return min(15, int((math.atan2(y - center[1], x - center[0]) %
+                        (2. * math.pi)) * 8. / math.pi))
+
+
+def circle_motor_velocities(speed, angle, clockwise):
+    sign = -1 if clockwise else 1
+    vx = -sign * speed * math.sin(angle)
+    vy = sign * speed * math.cos(angle)
+    return {'stepper_x': vx + vy, 'stepper_y': vx - vy}
+
+
+# Блок 2: оценка вибрации по фазе командных шагов при переменной скорости.
+def circle_metrics(samples, max_frequencies, sector=False):
+    if sector:
+        window = samples
+        deltas = [b[0] - a[0] for a, b in zip(window, window[1:])]
+        period = statistics.median(deltas)
+        rate, missing = 1. / period, 0
+        adjacent = [(a, b) for a, b in zip(window, window[1:])
+                    if b[0] - a[0] <= 1.5 * period]
+        gap = max(b[0] - a[0] for a, b in adjacent)
+    else:
+        window, rate, missing, gap = _quality(
+            samples, samples[0][0], samples[-1][0], 0.)
+        adjacent = list(zip(window, window[1:]))
+    means = [statistics.fmean(row[i] for row in window) for i in (1, 2, 3)]
+    powers = [sum((row[i] - means[i - 1]) ** 2 for i in (1, 2, 3))
+              for row in window]
+    rms = math.sqrt(statistics.fmean(powers))
+    distance = sum(math.hypot(right[6] - left[6], right[7] - left[7])
+                   for left, right in adjacent)
+    duration = sum(right[0] - left[0] for left, right in adjacent)
+    harmonics = {}
+    for motor, phase_index in (('stepper_x', 4), ('stepper_y', 5)):
+        phases = [row[phase_index] for row in window]
+        cycles = (max(phases) - min(phases)) / (2. * math.pi)
+        for harmonic in (2, 4):
+            name = '%s_H%d' % (motor, harmonic)
+            if max_frequencies[motor] * harmonic * 4. >= rate or cycles * harmonic < 12.:
+                harmonics[name] = {'quality': 'unmeasurable',
+                                   'reason': ('sensor_bandwidth' if
+                                              max_frequencies[motor] * harmonic * 4. >= rate
+                                              else 'too_few_phase_cycles')}
+                continue
+            phased = [row[:4] + (row[phase_index],) for row in window]
+            harmonics[name] = {
+                'quality': 'valid',
+                'amplitude_mm_s2': _magnitude(_lockin(phased, 0., harmonic)),
+                'command_phase_cycles': cycles}
+    return {'samples': len(window), 'sample_rate_hz': rate,
+            'estimated_missing_samples': missing,
+            'largest_sample_gap_ms': gap * 1000.,
+            'duration_s': duration, 'actual_speed_mm_s': distance / duration,
+            'rms_accel_mm_s2': rms,
+            'peak_accel_mm_s2': math.sqrt(max(powers)),
+            'vibration_energy_mm2_s4': statistics.fmean(powers),
+            'harmonics': harmonics}
+
+
+def circle_analysis(samples, center, radius, max_frequencies, clockwise):
+    if not samples:
+        raise MeasurementError('too_few_samples')
+    # Один контроль качества на полный непрерывный захват; сектора его наследуют.
+    _quality(samples, samples[0][0], samples[-1][0], 0.)
+    sectors = [[] for _ in range(16)]
+    for sample in samples:
+        if abs(math.hypot(sample[6] - center[0], sample[7] - center[1]) - radius) > 2.:
+            raise MeasurementError('circle_tracking_out_of_bounds')
+        sectors[circle_sector(sample[6], sample[7], center)].append(sample)
+    total = circle_metrics(samples, max_frequencies)
+    results = []
+    for sector in sectors:
+        if len(sector) < 40:
+            raise MeasurementError('too_few_sector_samples')
+        local = {}
+        for motor in max_frequencies:
+            ratio = max(abs(circle_motor_velocities(1., math.atan2(
+                row[7] - center[1], row[6] - center[0]), clockwise)[motor])
+                for row in sector) / math.sqrt(2.)
+            local[motor] = max_frequencies[motor] * ratio
+        results.append(circle_metrics(sector, local, sector=True))
+    # Усреднение комплексной амплитуды по полному кругу скрывало бы
+    # противоположные направления вращения; агрегируем мощность секторов.
+    for name in total['harmonics']:
+        measurable = [row['harmonics'][name]['amplitude_mm_s2']
+                      for row in results
+                      if row['harmonics'][name]['quality'] == 'valid']
+        if measurable:
+            total['harmonics'][name] = {
+                'quality': 'valid', 'aggregation': 'sector_rms',
+                'amplitude_mm_s2': math.sqrt(statistics.fmean(
+                    value * value for value in measurable)),
+                'measurable_sectors': len(measurable)}
+    return {'total': total, 'sectors': results}
+
+
+# Блок 3: парная разность с консервативной границей повторяемости.
+def circle_compare(pairs):
+    if not pairs:
+        raise ValueError('missing_circle_pairs')
+    def values(row):
+        result = {key: row[key] for key in (
+            'rms_accel_mm_s2', 'peak_accel_mm_s2',
+            'vibration_energy_mm2_s4')}
+        result.update({name: entry['amplitude_mm_s2']
+                       for name, entry in row['harmonics'].items()
+                       if entry['quality'] == 'valid'})
+        return result
+
+    output = {}
+    for key in set.intersection(*(set(values(off)) & set(values(on))
+                                  for off, on in pairs)):
+        before = [values(off)[key] for off, _ in pairs]
+        after = [values(on)[key] for _, on in pairs]
+        deltas = [b - a for a, b in zip(before, after)]
+        mean = statistics.fmean(deltas)
+        base = statistics.fmean(before)
+        bound = (4.303 * statistics.stdev(deltas) / math.sqrt(len(deltas))
+                 if len(deltas) >= 3 else None)
+        repeatability = (max(statistics.stdev(before), statistics.stdev(after))
+                         if len(deltas) >= 2 else None)
+        output[key] = {
+            'off_mean': base, 'on_mean': statistics.fmean(after),
+            'absolute_delta': mean,
+            'relative_delta_percent': 100. * mean / base if base else None,
+            'paired_ci95_half_width': bound,
+            'repeatability_stddev': repeatability,
+            'verdict': ('no_statistically_meaningful_change' if bound is None or
+                        abs(mean) <= max(bound, repeatability) else
+                        'vibration_reduced' if mean < 0 else 'vibration_increased')}
+    return output

@@ -150,6 +150,68 @@ class MotorMathTest(unittest.TestCase):
             self.assertEqual(verdict['reason'], 'individual_condition_regressed')
             self.assertEqual(verdict['condition']['harmonic'], harmonic)
 
+    def test_circle_geometry_sectors_motor_velocities_and_phase_analysis(self):
+        center = (120., 100., 25.)
+        clockwise = motor.circle_points(center, 30., True)
+        counterclockwise = motor.circle_points(center, 30., False)
+        self.assertEqual(len(clockwise), 129)
+        self.assertEqual(clockwise[0], clockwise[-1])
+        self.assertEqual(counterclockwise[0], counterclockwise[-1])
+        self.assertLess(clockwise[1][1], center[1])
+        self.assertGreater(counterclockwise[1][1], center[1])
+        self.assertTrue(all(25. <= x <= 215. and 25. <= y <= 195.
+                            for x, y, _ in clockwise + counterclockwise))
+        self.assertEqual(motor.circle_sector(150., 100., center), 0)
+        self.assertEqual(motor.circle_sector(120., 130., center), 4)
+        self.assertAlmostEqual(motor.circle_motor_velocities(
+            50., 0., False)['stepper_x'], 50.)
+        self.assertAlmostEqual(motor.circle_motor_velocities(
+            50., math.pi / 4., False)['stepper_y'], -50. * math.sqrt(2.))
+
+        rate, speed, radius = 1600., 50., 30.
+        duration = 2. * math.pi * radius / speed
+        samples = []
+        for index in range(int(rate * duration)):
+            t = index / rate
+            angle = speed * t / radius
+            x, y = center[0] + radius * math.cos(angle), center[1] + radius * math.sin(angle)
+            phase_a = 2. * math.pi * 1.25 * (x + y)
+            phase_b = 2. * math.pi * 1.25 * (x - y)
+            samples.append((t, 20. * math.sin(2. * phase_a), 0., 0.,
+                            phase_a, phase_b, x, y))
+        result = motor.circle_analysis(
+            samples, center, radius,
+            {'stepper_x': 50. * math.sqrt(2.) * 1.25,
+             'stepper_y': 50. * math.sqrt(2.) * 1.25}, False)
+        self.assertEqual(len(result['sectors']), 16)
+        self.assertAlmostEqual(result['total']['actual_speed_mm_s'], speed, delta=1.)
+        self.assertGreater(result['total']['rms_accel_mm_s2'], 10.)
+        self.assertTrue(any(sector['harmonics']['stepper_x_H2']['quality'] == 'valid'
+                            for sector in result['sectors']))
+        with self.assertRaisesRegex(motor.MeasurementError, 'dropped_samples'):
+            motor.circle_analysis(samples[:100] + samples[120:], center, radius,
+                                  {'stepper_x': 90., 'stepper_y': 90.}, False)
+
+    def test_circle_paired_delta_requires_repeatability(self):
+        def row(value):
+            return {'rms_accel_mm_s2': value,
+                    'peak_accel_mm_s2': value * 2.,
+                    'vibration_energy_mm2_s4': value * value,
+                    'harmonics': {'stepper_x_H2': {
+                        'quality': 'valid', 'amplitude_mm_s2': value / 2.}}}
+
+        improved = motor.circle_compare([(row(20.), row(15.)) for _ in range(3)])
+        self.assertEqual(improved['rms_accel_mm_s2']['absolute_delta'], -5.)
+        self.assertEqual(improved['rms_accel_mm_s2']['relative_delta_percent'], -25.)
+        self.assertEqual(improved['rms_accel_mm_s2']['verdict'], 'vibration_reduced')
+        self.assertIn('stepper_x_H2', improved)
+        noisy = motor.circle_compare([(row(20.), row(v))
+                                      for v in (15., 20., 22.)])
+        self.assertEqual(noisy['rms_accel_mm_s2']['verdict'],
+                         'no_statistically_meaningful_change')
+        single = motor.circle_compare([(row(20.), row(10.))])
+        self.assertIsNone(single['rms_accel_mm_s2']['paired_ci95_half_width'])
+
 
 if __name__ == '__main__':
     unittest.main()

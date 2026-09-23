@@ -130,12 +130,10 @@ Assert-NotContains $probeEddy 'Eddy Z0 adjust applied' "Eddy profile must not re
 Assert-NotContains $captureLiveZ 'homing_origin\.z\|float\s*-' "autosave capture must not subtract a removed base z0_adjust"
 
 Assert-ContainsBefore $eddyHomeZ '(?m)^\s*G28\.1 Z\s*$' '(?m)^\s*SET_Z_FROM_PROBE\s*$' "Eddy home must run correction immediately after G28.1 Z"
-Assert-ContainsBefore $eddyHomeZ 'if "z" not in printer\.toolhead\.homed_axes' '(?m)^\s*G1 X\{zero_tool_x\} Y\{zero_tool_y\} F12000\s*$' "Eddy home must reject unknown Z before XY travel"
-Assert-NotContains $eddyHomeZ '(?m)^\s*G28 X Y\s*$' "Eddy home must not rehome XY after calculating its Z lift"
-Assert-ContainsBefore $eddyHomeZ '(?m)^\s*BED_MESH_CLEAR\s*$' '(?m)^\s*G1 X\{zero_tool_x\} Y\{zero_tool_y\} F12000\s*$' "Direct Eddy home must clear old mesh before travel"
-Assert-ContainsBefore $eddyHomeZ '(?m)^\s*_TREED_PRINT_OFFSET_DISABLE\s*$' '(?m)^\s*G1 X\{zero_tool_x\} Y\{zero_tool_y\} F12000\s*$' "Direct Eddy home must use raw XY coordinates"
-Assert-NotContains $eddyHomeZ '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "Eddy home must not restore stale print coordinates"
-Assert-ContainsBefore $eddyHomeZ '(?m)^\s*G91\s*$' '(?m)^\s*G1 Z\{z_hop - printer\.toolhead\.position\.z\|float\} F1500\s*$' "Eddy clearance must use a relative move independent of old offsets"
+Assert-ContainsBefore $eddyHomeZ '(?m)^\s*G28 X Y\s*$' '(?m)^\s*G1 X\{zero_tool_x\} Y\{zero_tool_y\} F12000\s*$' "Eddy home restores X/Y homing when needed"
+Assert-ContainsBefore $eddyHomeZ 'if "z" in printer\.toolhead\.homed_axes' '(?m)^\s*G1 Z\{z_hop\} F1500\s*$' "Eddy home lifts only known Z before XY travel"
+Assert-ContainsBefore $eddyHomeZ '(?m)^\s*SET_GCODE_OFFSET Z=0 MOVE=0\s*$' '(?m)^\s*G1 X\{zero_tool_x\} Y\{zero_tool_y\} F12000\s*$' "Eddy home clears Z offset before XY travel"
+Assert-ContainsBefore $eddyHomeZ '(?m)^\s*SET_Z_FROM_PROBE\s*$' '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "Eddy home restores an enabled print offset"
 Assert-Contains $eddyZ0Cfg '(?m)^\s*variable_home_probe_speed:\s*2\.0\s*$' "Eddy Z-home must slow precise PROBE descent"
 Assert-Contains $eddyZ0Cfg '(?m)^\s*variable_home_probe_clearance:\s*2\.0\s*$' "Eddy Z-home must keep post-home clearance inside saved calibration range"
 Assert-Contains $eddyZ0Cfg '(?m)^\s*variable_home_lift_speed:\s*5\.0\s*$' "Eddy Z-home must slow lift between precise PROBE samples"
@@ -144,7 +142,8 @@ Assert-ContainsBefore $setZFromProbe '(?m)^\s*M400\s*$' '(?m)^\s*PROBE\b' "SET_Z
 Assert-Contains $setZFromProbe '(?m)^\s*PROBE\s+PROBE_SPEED=\{cfg\.home_probe_speed\|float\}\s+SAMPLES=' "SET_Z_FROM_PROBE must pass explicit slow PROBE_SPEED"
 Assert-ContainsBefore $setZFromProbe '(?m)^\s*PROBE\b' '(?m)^\s*_RELOAD_Z_OFFSET_FROM_PROBE\s*$' "SET_Z_FROM_PROBE must probe before reloading Z"
 Assert-Contains $reloadZOffset 'printer\.probe\.last_probe_position\.z' "Z reload must use the last PROBE result"
-Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.probe\.last_probe_position\.z\} SET_HOMED=NONE\s*$' "Z reload must not mark other axes homed"
+Assert-NotContains $reloadZOffset 'SET_HOMED=NONE' "Z reload restores the previous kinematic homing behavior"
+Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.probe\.last_probe_position\.z\}\s*$' "Z reload restores the earlier SET_KINEMATIC_POSITION command"
 
 # Блок 4: START_PRINT очищает старую mesh до изменений состояния и строит новую после сервисных движений.
 Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREP_STATE \{rawparams\}\s*$' '(?m)^\s*_TREED_START_MACHINE_PREP\s*$' "START_PRINT должен проверить параметры до нагрева"

@@ -2,6 +2,7 @@
 # Copyright (C) 2026 TreeD contributors
 # SPDX-License-Identifier: GPL-3.0-only
 import hashlib
+import datetime
 import json
 import math
 import os
@@ -82,12 +83,18 @@ class TreedMotorCalibration:
                                          'active_profile.json')
         self.previous_path = os.path.join(os.path.dirname(self.report_path),
                                           'previous_profile.json')
+        self.circle_report_path = os.path.join(os.path.dirname(self.report_path),
+                                               'last_circle_compare.json')
+        self.circle_report = None
+        self.circle_profile = None
+        self.circle_old_velocity = None
         for name, callback in (
                 ('TREED_MOTOR_CALIBRATE', self.cmd_calibrate),
                 ('TREED_MOTOR_CALIBRATION_CANCEL', self.cmd_cancel),
                 ('TREED_MOTOR_CALIBRATION_STATUS', self.cmd_status),
                 ('TREED_MOTOR_PHASE', self.cmd_phase),
-                ('TREED_MOTOR_CALIBRATION_SAVE', self.cmd_save)):
+                ('TREED_MOTOR_CALIBRATION_SAVE', self.cmd_save),
+                ('TREED_MOTOR_CIRCLE_COMPARE', self.cmd_circle_compare)):
             self.gcode.register_command(name, callback)
         self._install_gcode_gate()
         self.printer.register_event_handler('klippy:shutdown', self._shutdown)
@@ -149,7 +156,8 @@ class TreedMotorCalibration:
 
             def guarded_move(newpos, speed, *args, _original=original):
                 if self.phase_enabled and not self.phase_transition:
-                    limits = self.profile['limits']
+                    limits = (self.circle_profile if getattr(self, 'mode', None) == 'circle' and
+                              self.state == 'running' else self.profile)['limits']
                     max_velocity, max_accel = toolhead.get_max_velocity()
                     if (max_velocity > limits['max_velocity'] or
                             max_accel > limits['max_accel']):
@@ -165,7 +173,8 @@ class TreedMotorCalibration:
         def guarded(max_velocity, max_accel, square_corner_velocity,
                     min_cruise_ratio):
             if self.phase_enabled:
-                limits = self.profile['limits']
+                limits = (self.circle_profile if getattr(self, 'mode', None) == 'circle' and
+                          self.state == 'running' else self.profile)['limits']
                 velocity = (toolhead.max_velocity if max_velocity is None
                             else max_velocity)
                 accel = toolhead.max_accel if max_accel is None else max_accel
@@ -256,9 +265,11 @@ class TreedMotorCalibration:
                 'profile_reason': (self.profile or {}).get(
                     'verification_failure', ''),
                 'phase_enabled': self.phase_enabled,
-                'runtime_driver_dirty': self.driver_mutated,
-                'candidate_ready': self.candidate is not None,
-                'results': self.results, 'report_path': self.report_path,
+                 'runtime_driver_dirty': self.driver_mutated,
+                 'candidate_ready': self.candidate is not None,
+                 'results': self.results, 'report_path': self.report_path,
+                 'mode': self.mode or '',
+                 'circle_report_path': self.circle_report_path,
                 'config_fingerprint': self.config_fingerprint or ''}
 
     def _shutdown(self, *args):
@@ -273,7 +284,12 @@ class TreedMotorCalibration:
             self.state = 'failed'
             self.error = 'klipper_shutdown'
             try:
-                self._write_report()
+                if self.mode == 'circle':
+                    self.phase_reason = 'tmc_state_unknown'
+                    self.circle_report.update(state='failed', error=self.error)
+                    self._write_circle_report()
+                else:
+                    self._write_report()
             except OSError:
                 pass
         # После shutdown не отправляем новые команды движения или SPI.
@@ -287,7 +303,8 @@ class TreedMotorCalibration:
                 self.base_tables[motor])
         self.current_tables = dict(self.base_tables)
         self.phase_enabled = False
-        self.profile_state = 'saved'
+        if not (self.mode == 'circle' and self.state == 'running'):
+            self.profile_state = 'saved'
 
     def _atomic_json(self, path, data):
         directory = os.path.dirname(path)
@@ -360,7 +377,7 @@ class TreedMotorCalibration:
         self.profile_state = ('rejected' if 'verification_failure' in profile
                               else 'saved')
 
-    def _align_motor(self, motor, table):
+    def _align_motor(self, motor, table, allow_jog=True):
         self.toolhead.wait_moves()
         driver = self.drivers[motor]
         def phase_now():
@@ -377,6 +394,8 @@ class TreedMotorCalibration:
             raise motor_math.MeasurementError('tmc_table_transition_too_large')
         if phase % 256 and scores[phase % 256] <= MAX_TABLE_VECTOR_DELTA:
             return phase
+        if not allow_jog:
+            raise motor_math.MeasurementError('tmc_phase_alignment_requires_motion')
         status = self._ready()
         center = tuple((status['axis_minimum'][i] +
                         status['axis_maximum'][i]) / 2. for i in (0, 1))
@@ -416,11 +435,11 @@ class TreedMotorCalibration:
         self.toolhead.manual_move((dest[0], dest[1], None), 5.)
         self.toolhead.wait_moves()
 
-    def _switch_table(self, motor, table):
+    def _switch_table(self, motor, table, allow_jog=True):
         if self.current_tables[motor] == table:
             return
         motor_wave.decode_table(table)
-        aligned_phase = self._align_motor(motor, table)
+        aligned_phase = self._align_motor(motor, table, allow_jog)
         driver = self.drivers[motor]
         current_before = driver.get_register('MSCURACT')
         def vector(value):
@@ -444,11 +463,11 @@ class TreedMotorCalibration:
         driver.get_fields().registers.update(table)
         self.current_tables[motor] = dict(table)
 
-    def _switch_tables(self, tables):
+    def _switch_tables(self, tables, allow_jog=True):
         changes = [motor for motor in XY_MOTORS
                    if self.current_tables[motor] != tables[motor]]
         for motor in changes:
-            self._switch_table(motor, tables[motor])
+            self._switch_table(motor, tables[motor], allow_jog)
 
     def _check_base_tables(self):
         if self.driver_mutated:
@@ -612,6 +631,160 @@ class TreedMotorCalibration:
             'build_id': self.build_id, 'results': self.results,
             'speed_characterization': self.characterization,
             'verification': self.last_verdict})
+
+    # Блок 1: отдельный read-only отчёт кругового сравнения.
+    def _write_circle_report(self):
+        if self.circle_report is not None:
+            self._atomic_json(self.circle_report_path, self.circle_report)
+
+    def _verify_circle_tables(self, expected):
+        for motor in XY_MOTORS:
+            driver = self.drivers[motor]
+            for register in motor_wave.REGISTER_NAMES:
+                raw = driver.get_register_raw(register)
+                if raw['spi_status'] & 0x3 or raw['data'] != expected[motor][register]:
+                    raise motor_math.MeasurementError('tmc_table_state_unknown')
+
+    def _circle_geometry(self, requested_radius):
+        status = self._ready()
+        lo, hi = status['axis_minimum'], status['axis_maximum']
+        xlo, xhi = lo[0] + self.xy_margin, hi[0] - self.xy_margin
+        ylo, yhi = lo[1] + self.xy_margin, hi[1] - self.xy_margin
+        zlo = max(lo[2] + 5., self.z_low)
+        if xlo >= xhi or ylo >= yhi or zlo > min(hi[2] - 5., self.z_high):
+            raise motor_math.MeasurementError('unsafe_bounded_area')
+        center = ((xlo + xhi) / 2., (ylo + yhi) / 2., zlo)
+        maximum = min((xhi - xlo) / 2., (yhi - ylo) / 2.)
+        radius = requested_radius if requested_radius is not None else .7 * maximum
+        if not math.isfinite(radius) or radius < 10. or radius > maximum:
+            raise motor_math.MeasurementError('circle_radius_out_of_bounds')
+        for clockwise in (True, False):
+            for point in motor_math.circle_points(center, radius, clockwise):
+                if not xlo <= point[0] <= xhi or not ylo <= point[1] <= yhi:
+                    raise motor_math.MeasurementError('circle_out_of_safe_area')
+        return center, radius
+
+    # Блок 2: захват ADXL и командной фазы двух двигателей на одном круге.
+    def _run_circle_pass(self, speed, direction, repeat, enabled):
+        self._ready()
+        points = self.circle_paths[direction]
+        start = points[0]
+        position = self.toolhead.get_position()
+        if position[2] < start[2]:
+            self.toolhead.manual_move((None, None, start[2]),
+                                      min(3., self.z_speeds[0]))
+            self.toolhead.wait_moves()
+        self.toolhead.manual_move((start[0], start[1], None), min(30., speed))
+        self.toolhead.wait_moves()
+        self.toolhead.manual_move((None, None, start[2]),
+                                  min(3., self.z_speeds[0]))
+        self.toolhead.wait_moves()
+        expected = (self.circle_profile['tables'] if enabled else self.base_tables)
+        self._verify_circle_tables(expected)
+        self.toolhead.dwell(1.5)
+        steppers = [self.kin_steppers[motor] for motor in XY_MOTORS]
+        initial = [stepper.get_mcu_position() for stepper in steppers]
+        # История stepcompress уже хранит командный знак; инверсия DIR
+        # нужна для электрической фазы TMC, но не для координат CoreXY.
+        distances = [stepper.get_step_dist() for stepper in steppers]
+        phases = [(-1 if stepper.get_dir_inverted()[0] else 1) *
+                  2. * math.pi / (4. * self.config.getsection(motor).getint('microsteps'))
+                  for motor, stepper in zip(XY_MOTORS, steppers)]
+        frequencies = {}
+        for motor, stepper in zip(XY_MOTORS, steppers):
+            rotation, steps_per_rotation = stepper.get_rotation_distance()
+            section = self.config.getsection(motor)
+            full_steps = section.getint('full_steps_per_rotation', 200)
+            gearing = steps_per_rotation / (full_steps * section.getint('microsteps'))
+            frequencies[motor] = motor_math.electrical_frequency(
+                math.sqrt(2.) * speed, rotation, full_steps, gearing)
+        client = self.chip.start_internal_client()
+        try:
+            move_start = self.toolhead.get_last_move_time()
+            for point in points[1:]:
+                if self.cancel_requested or self.printer.is_shutdown():
+                    raise motor_math.MeasurementError('circle_interrupted')
+                self.toolhead.manual_move(point, speed)
+            move_end = self.toolhead.get_last_move_time()
+        finally:
+            client.finish_measurements()
+        if move_end <= move_start:
+            raise motor_math.MeasurementError('circle_print_time_invalid')
+        if move_end - move_start >= 25.:
+            raise motor_math.MeasurementError('circle_exceeds_step_history')
+        if any(m.get('errors', 0) or m.get('overflows', 0)
+               for m in client.msgs):
+            raise motor_math.MeasurementError('sensor_data_loss')
+        samples = []
+        for sample in client.get_samples():
+            if not move_start <= sample[0] <= move_end:
+                continue
+            steps = [stepper.get_past_mcu_position(sample[0])
+                     for stepper in steppers]
+            a, b = [(now - start_steps) * distance
+                    for now, start_steps, distance in zip(steps, initial, distances)]
+            samples.append(tuple(sample[:4]) +
+                           (steps[0] * phases[0], steps[1] * phases[1],
+                            start[0] + (a + b) / 2.,
+                            start[1] + (a - b) / 2.))
+        result = motor_math.circle_analysis(
+            samples, self.circle_center, self.circle_radius, frequencies,
+            direction == 'CW')
+        result['total']['actual_speed_mm_s'] = sum(
+            math.dist(left, right) for left, right in zip(points, points[1:])) / (
+                move_end - move_start)
+        result['total']['speed_source'] = 'commanded_path_over_print_time'
+        for index, sector in enumerate(result['sectors']):
+            angle = (index + .5) * 2. * math.pi / 16.
+            sector['angle_degrees'] = (index + .5) * 22.5
+            sector['commanded_motor_velocities_mm_s'] = (
+                motor_math.circle_motor_velocities(
+                    sector['actual_speed_mm_s'], angle, direction == 'CW'))
+        return dict(result, timestamp=datetime.datetime.now(
+            datetime.timezone.utc).isoformat(), speed_mm_s=speed,
+            direction=direction, repeat=repeat,
+            compensation='on' if enabled else 'off',
+            move_start_print_time=move_start, move_end_print_time=move_end)
+
+    def _run_circle_with_retry(self, speed, direction, repeat, enabled):
+        for retry in range(3):
+            try:
+                result = self._run_circle_pass(speed, direction, repeat, enabled)
+                result['retry_count'] = retry
+                return result
+            except motor_math.MeasurementError as exc:
+                self.circle_report['invalid_passes'].append({
+                    'speed_mm_s': speed, 'direction': direction,
+                    'repeat': repeat, 'compensation': 'on' if enabled else 'off',
+                    'attempt': retry + 1, 'reason': str(exc)})
+                if not str(exc).startswith('dropped_samples:') or retry == 2:
+                    raise
+                self.gcode.respond_info('TreeD circle sample gap; repeat pass %d/2'
+                                        % (retry + 1))
+
+    # Блок 3: чередование OFF/ON и парная секторная статистика.
+    def _circle_flow(self):
+        comparisons = []
+        for speed in self.circle_speeds:
+            for direction in self.circle_directions:
+                pairs = []
+                for repeat in range(1, self.circle_repeats + 1):
+                    rows = {}
+                    for enabled in ((False, True) if repeat % 2 else (True, False)):
+                        yield ('tables', self.circle_profile['tables']
+                               if enabled else self.base_tables, enabled)
+                        rows[enabled] = yield ('circle_pass', speed, direction,
+                                               repeat, enabled)
+                    pairs.append((rows[False], rows[True]))
+                total = motor_math.circle_compare(
+                    [(off['total'], on['total']) for off, on in pairs])
+                sectors = [motor_math.circle_compare([
+                    (off['sectors'][i], on['sectors'][i]) for off, on in pairs])
+                    for i in range(16)]
+                comparisons.append({'speed_mm_s': speed, 'direction': direction,
+                                    'total': total, 'sectors': sectors})
+        yield ('tables', self.base_tables, False)
+        return comparisons
 
     def _joint_jobs(self, speeds):
         status = self._ready()
@@ -817,13 +990,30 @@ class TreedMotorCalibration:
             self.timer = None
         if self.printer.is_shutdown():
             state, error = 'failed', 'klipper_shutdown'
-        if (not self.printer.is_shutdown() and self.mode in ('tune', 'verify')
+        if self.mode == 'circle' and not self.printer.is_shutdown():
+            try:
+                self.toolhead.wait_moves()
+            except Exception as exc:
+                self.printer.invoke_shutdown('TreeD circle motion stop unknown')
+                state, error = 'failed', 'motion_stop_unverified: %s' % exc
+        if (not self.printer.is_shutdown() and self.mode in ('tune', 'verify', 'circle')
                 and self.current_tables != self.base_tables):
             try:
                 self._switch_tables(self.base_tables)
             except Exception as exc:
                 self.printer.invoke_shutdown('TreeD motor calibration recovery failed')
                 state, error = 'failed', 'table_restore_failed: %s' % exc
+        if self.mode == 'circle':
+            if not self.printer.is_shutdown():
+                try:
+                    self._verify_circle_tables(self.base_tables)
+                    self.phase_enabled = False
+                except Exception as exc:
+                    self.printer.invoke_shutdown('TreeD circle stock state unknown')
+                    state, error = 'failed', 'table_restore_unverified: %s' % exc
+            if self.printer.is_shutdown():
+                self.phase_reason = 'tmc_state_unknown'
+                state, error = 'failed', error or 'tmc_state_unknown'
         self.state = state
         self.stage = state
         self.error = error
@@ -856,8 +1046,54 @@ class TreedMotorCalibration:
         if state in ('measured', 'candidate', 'verified', 'cancelled'):
             self.motor = None
         if self.old_accel is not None:
-            self.toolhead.set_max_velocities(None, self.old_accel, None, None)
+            if self.mode != 'circle' or not self.printer.is_shutdown():
+                try:
+                    self.toolhead.set_max_velocities(
+                        self.circle_old_velocity if self.mode == 'circle' else None,
+                        self.old_accel, None, None)
+                except Exception as exc:
+                    if self.mode != 'circle':
+                        raise
+                    self.printer.invoke_shutdown('TreeD circle limit restore failed')
+                    self.state = self.stage = 'failed'
+                    self.error = 'limit_restore_failed: %s' % exc
             self.old_accel = None
+            if self.mode == 'circle':
+                self.circle_old_velocity = None
+        if self.mode == 'circle':
+            self.circle_report.update(state=self.state, stage=self.stage,
+                                      error=self.error,
+                                      ended_at=datetime.datetime.now(
+                                          datetime.timezone.utc).isoformat())
+            try:
+                self._write_circle_report()
+            except OSError as exc:
+                self.state = self.stage = 'failed'
+                self.error = '%s; report_write_failed: %s' % (self.error or '', exc)
+            self.gcode.respond_info('TreeD Motor Compensation Circle Compare: %s%s'
+                                    % (self.state, ' (%s)' % self.error
+                                       if self.error else ''))
+            if self.state == 'compared':
+                for row in self.circle_report['comparisons']:
+                    metric = row['total'].get('rms_accel_mm_s2', {})
+                    delta = metric.get('relative_delta_percent')
+                    self.gcode.respond_info('%g mm/s %s: %s (%s)' % (
+                        row['speed_mm_s'], row['direction'],
+                        '%+.1f%%' % delta if delta is not None else 'n/a',
+                        metric.get('verdict')))
+                worst = max((
+                    (sector['rms_accel_mm_s2']['relative_delta_percent'],
+                     row['speed_mm_s'], row['direction'], index,
+                     sector['rms_accel_mm_s2']['verdict'])
+                    for row in self.circle_report['comparisons']
+                    for index, sector in enumerate(row['sectors'])
+                    if sector['rms_accel_mm_s2']['relative_delta_percent'] is not None),
+                    default=None)
+                if worst:
+                    self.gcode.respond_info(
+                        'Worst sector: %g mm/s / %s / sector %d: %+.1f%% (%s)'
+                        % (worst[1], worst[2], worst[3], worst[0], worst[4]))
+            return
         try:
             self._write_report()
         except OSError as exc:
@@ -903,13 +1139,27 @@ class TreedMotorCalibration:
                     self.flow_result = result
                     self.passes_done += 1
                     self.progress = min(.95, self.passes_done / 120.)
+                elif action[0] == 'circle_pass':
+                    result = self._run_circle_with_retry(*action[1:])
+                    self.circle_report['passes'].append(result)
+                    self.flow_result = result
+                    self.passes_done += 1
+                    self.progress = min(.95, self.passes_done /
+                                        self.circle_total_passes)
                 elif action[0] == 'table':
                     self._switch_table(action[1], action[2])
                 elif action[0] == 'tables':
-                    self._switch_tables(action[1])
+                    self._switch_tables(action[1],
+                                        allow_jog=self.mode != 'circle')
+                    if self.mode == 'circle':
+                        self._verify_circle_tables(action[1])
+                        self.phase_enabled = action[2]
         except StopIteration as done:
             self.progress = 1.
-            if self.mode == 'measure':
+            if self.mode == 'circle':
+                self.circle_report['comparisons'] = done.value
+                state = 'compared'
+            elif self.mode == 'measure':
                 state = ('unmeasurable' if any(
                     r['quality'] == 'unmeasurable' for r in self.results)
                          else 'insufficient_signal' if any(
@@ -1006,6 +1256,117 @@ class TreedMotorCalibration:
         self.stage = 'homing'
         self.timer = self.reactor.register_timer(self._next, self.reactor.NOW)
         gcmd.respond_info('TreeD motor %s started; use STATUS or CANCEL' % mode)
+
+    def cmd_circle_compare(self, gcmd):
+        if self.state == 'running' or self.phase_enabled:
+            raise gcmd.error('disable TreeD phase and finish calibration first')
+        status = self.get_status(self.reactor.monotonic())
+        if not status['phase_supported']:
+            raise gcmd.error(status['phase_reason'])
+        profile = self.candidate or self.profile
+        if profile is None or profile is self.profile and self.profile_state != 'saved':
+            raise gcmd.error('no compatible accepted XY profile')
+        try:
+            self._validate_profile(profile)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise gcmd.error('profile stale or rejected: %s' % exc)
+        if 'verification_failure' in profile:
+            raise gcmd.error('profile verification failed')
+        self.toolhead = self.printer.lookup_object('toolhead')
+        self.chip = self.printer.lookup_object('adxl345', None)
+        if self.chip is None or not hasattr(self.chip, 'start_internal_client'):
+            raise gcmd.error('ADXL345 unavailable')
+        self.kin_steppers = {s.get_name(): s for s in
+                             self.toolhead.get_kinematics().get_steppers()}
+        if any(motor not in self.kin_steppers for motor in XY_MOTORS):
+            raise gcmd.error('XY motors missing from active kinematics')
+        self._ready()
+        self._check_base_tables()
+        self._verify_circle_tables(self.base_tables)
+        maximum = min(profile['limits']['max_velocity'],
+                      self.toolhead.get_max_velocity()[0])
+        supplied = gcmd.get('SPEEDS', None)
+        try:
+            speeds = ([float(value) for value in supplied.split(',')]
+                      if supplied is not None else
+                      [speed for speed in (50., 100., 150., 200.)
+                       if speed <= maximum])
+        except ValueError:
+            raise gcmd.error('SPEEDS must be comma-separated positive numbers')
+        if not speeds and supplied is None:
+            speeds = [maximum]
+        if (not speeds or len(speeds) > 12 or
+                any(not math.isfinite(speed) or speed <= 0 or speed > maximum
+                    for speed in speeds)):
+            raise gcmd.error('circle speed exceeds verified profile or runtime limit')
+        speeds = tuple(dict.fromkeys(speeds))
+        direction = gcmd.get('DIRECTION', 'BOTH').upper()
+        if direction not in ('CW', 'CCW', 'BOTH'):
+            raise gcmd.error('DIRECTION=BOTH|CW|CCW')
+        repeats = gcmd.get_int('REPEATS', 3, minval=1, maxval=10)
+        radius = gcmd.get_float('RADIUS', None, above=0.)
+        try:
+            center, radius = self._circle_geometry(radius)
+        except motor_math.MeasurementError as exc:
+            raise gcmd.error(str(exc))
+        paths = {name: motor_math.circle_points(center, radius, name == 'CW')
+                 for name in ('CW', 'CCW')}
+        self.circle_profile = profile
+        self.circle_center, self.circle_radius = center, radius
+        self.circle_paths = paths
+        self.circle_speeds = speeds
+        self.circle_directions = (('CW', 'CCW') if direction == 'BOTH'
+                                  else (direction,))
+        self.circle_repeats = repeats
+        self.circle_total_passes = (len(speeds) * len(self.circle_directions) *
+                                    repeats * 2)
+        original_speed, original_accel = self.toolhead.get_max_velocity()
+        accel = min(original_accel, profile['limits']['max_accel'], self.xy_accel)
+        # ponytail: предел 20 с оставляет запас до 30-секундного step history;
+        # длинные круги потребуют потокового чтения командных шагов.
+        if any(2. * math.pi * radius / speed + 2. * speed / accel >= 20.
+               for speed in speeds):
+            raise gcmd.error('circle duration exceeds command step history')
+        fingerprint = hashlib.sha256(json.dumps(
+            profile, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+        self.circle_report = {
+            'schema': 1, 'state': 'running', 'error': None,
+            'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            'profile_id': fingerprint[:16], 'profile_fingerprint': fingerprint,
+            'profile_source': 'candidate' if profile is self.candidate else 'saved',
+            'klipper_version': self.printer.get_start_args().get('software_version'),
+            'mcu_versions': self.mcu_builds,
+            'config_fingerprint': self.config_fingerprint,
+            'build_id': self.build_id, 'center_mm': center, 'radius_mm': radius,
+            'segments': len(paths['CW']) - 1, 'sector_count': 16,
+            'speeds_mm_s': speeds, 'directions': self.circle_directions,
+            'repeats': repeats, 'accel_mm_s2': accel,
+            'max_velocity_mm_s': maximum,
+            'square_corner_velocity_mm_s': self.toolhead.square_corner_velocity,
+            'passes': [], 'invalid_passes': [], 'comparisons': []}
+        self.old_accel = original_accel
+        self.circle_old_velocity = original_speed
+        try:
+            self.toolhead.set_max_velocities(maximum, accel, None, None)
+        except Exception:
+            try:
+                self.toolhead.set_max_velocities(original_speed, original_accel,
+                                                 None, None)
+            except Exception:
+                self.printer.invoke_shutdown('TreeD circle limit restore failed')
+            self.old_accel = self.circle_old_velocity = None
+            raise
+        self.mode = 'circle'
+        self.state = 'running'
+        self.stage = 'comparing'
+        self.error = None
+        self.progress = 0.
+        self.cancel_requested = False
+        self.passes_done = 0
+        self.flow = self._circle_flow()
+        self.flow_result = None
+        self.timer = self.reactor.register_timer(self._next, self.reactor.NOW)
+        gcmd.respond_info('TreeD circle compare started; use STATUS or CANCEL')
 
     def _ready_before_home(self, gcmd):
         stats = self.printer.lookup_object('print_stats', None)

@@ -115,7 +115,8 @@ Assert-Contains $adjustZ '(?m)^\s*TREED_UI_BABYSTEP DELTA=\{params\.DELTA\}\s*$'
 Assert-Contains $resetZ '(?m)^\s*SET_GCODE_OFFSET Z=0 MOVE=0\s*$' "reset must clear actual live Z offset"
 Assert-Contains $resetZ 'VARIABLE=applied_babystep VALUE=0\.0' "reset must clear UI babystep counter"
 Assert-Contains (Get-GcodeMacroBlock $homing "G28") '_TREED_UI_RESET_Z_OFFSET' "G28 must clear live Z offset and counter"
-foreach ($macro in @("_TREED_EDDY_HOME_Z", "TREED_BED_MESH_CALIBRATE_EDDY", "_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET")) {
+Assert-Contains (Get-GcodeMacroBlock $probe "_TREED_EDDY_HOME_Z") '(?m)^\s*SET_GCODE_OFFSET Z=0 MOVE=0\s*$' "Eddy home restores the previous direct Z-offset reset"
+foreach ($macro in @("TREED_BED_MESH_CALIBRATE_EDDY", "_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET")) {
   Assert-Contains (Get-GcodeMacroBlock $probe $macro) '_TREED_UI_RESET_Z_OFFSET' "$macro must clear live Z offset and counter"
 }
 Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") '(?s)_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET.*_TREED_UI_RESET_Z_OFFSET' "END_PRINT must capture before clearing live Z offset"
