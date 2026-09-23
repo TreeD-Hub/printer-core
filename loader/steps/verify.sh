@@ -1443,14 +1443,6 @@ else
 fi
 
 # Блок 13: Итоговая таблица runtime и verify counters.
-if [ -x "${PI_HOME}/treed/bin/treed-sensorless-calibrate" ] &&
-   [ -s "${PI_HOME}/klipper/klippy/extras/treed_motor_sensorless.py" ] &&
-   [ -s "${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1/sensorless_calibration.cfg" ]; then
-  pass "sensorless calibration runtime present"
-else
-  failf "sensorless calibration runtime present"
-fi
-
 print_runtime_summary
 
 if [ "${fail}" -eq 0 ]; then

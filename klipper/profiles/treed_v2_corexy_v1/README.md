@@ -16,15 +16,14 @@
 7. `profiles/treed_v2_corexy_v1/steppers.cfg`
 8. `profiles/treed_v2_corexy_v1/motion_guard.cfg`
 9. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
-10. `profiles/treed_v2_corexy_v1/sensorless_calibration.cfg`
-11. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
-12. `filament_motion_runtime.cfg`
-13. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-14. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-15. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-16. `profiles/treed_v2_corexy_v1/macros.cfg`
-17. `profiles/treed_v2_corexy_v1/ui.cfg`
-18. `local_overrides.cfg`
+10. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
+11. `filament_motion_runtime.cfg`
+12. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+13. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+14. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+15. `profiles/treed_v2_corexy_v1/macros.cfg`
+16. `profiles/treed_v2_corexy_v1/ui.cfg`
+17. `local_overrides.cfg`
 
 `macros.cfg` дополнительно подключает:
 - `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
@@ -52,7 +51,6 @@
 ## X/Y sensorless (TMC5160 SPI) и Z через активный endstop профиля
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
-Сервисный supervised подбор `speed × SGT` описан в `docs/sensorless-calibration.md`; он не меняет штатный `G28`.
 Профиль подключает override `G28`, который:
 - перед каждым `G28.1 X/Y` ждёт завершения движений и не менее 2 секунд без движения для сброса stall-флага TMC5160, затем делает отход на 10 мм от X-min/Y-max; ток и SGT при homing не меняет;
 - до первого движения очищает активную mesh и G-code offsets, оставляя сервисные raw-координаты; старый print-offset не восстанавливается после homing;
@@ -128,16 +126,10 @@ LIGHT_OFF
 Это сохраняет направление Y и переводит `X0` в левый край.
 
 Стартовые параметры X/Y:
-- `homing_speed: 20`, `homing_retract_dist: 0` (второй проход отключен);
-- `run_current: 0.90`, `sense_resistor: 0.075`, `stealthchop_threshold: 0`, `driver_SGT: -64`;
+- X: `homing_speed: 65`, `driver_SGT: 1`; Y: `homing_speed: 55`, `driver_SGT: -1`;
+- `homing_retract_dist: 0`, `run_current: 1.1`, `sense_resistor: 0.075`, `stealthchop_threshold: 0`;
 - `hold_current` для X/Y не используется.
 
-## Тюн `driver_SGT` (обязательный после внедрения)
-
-1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
-2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
-3. Зафиксировать финальный `driver_SGT` в рабочем диапазоне без ложных срабатываний.
-4. Критерий приемки при достоверной Z-позиции: `G28 X` и `G28 Y` после Z-hop ждут завершения движений и не менее 2 секунд, затем делают single touch и отход на 10 мм; полный `G28` повторяет подготовку перед Y и перед `G28 Z` переводит голову в `X122.5 Y122.5`, затем `G28 Z` делает `G28.1 Z` и `PROBE`-коррекцию Eddy; отдельный `G28 Z` без готовых X/Y дает явную ошибку.
 ## Первичная калибровка Eddy
 
 До сохраненной калибровки `PROBE_EDDY_CURRENT_CALIBRATE` любые `PROBE`, `BED_MESH_CALIBRATE` и `TREED_Z_PARK_ZERO_EDDY` будут падать с `Must calibrate probe_eddy_current first`.

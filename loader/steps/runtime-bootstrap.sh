@@ -592,29 +592,20 @@ fi
 
 # Блок 6: Klipper env/service (репозиторий ожидается локально, clone fallback включен).
 ensure_repo_present "${KLIPPER_DIR}" "${KLIPPER_REPO}" "${KLIPPER_REF}" "${KLIPPER_BRANCH}" "Klipper"
-# Компенсация шума временно отключена; удаляем ранее установленный runtime-код.
+# Экспериментальные моторные контуры отключены; удаляем старый runtime-код.
 rm -f \
   "${KLIPPER_DIR}/klippy/extras/treed_motor_calibration.py" \
   "${KLIPPER_DIR}/klippy/extras/treed_motor_math.py" \
   "${KLIPPER_DIR}/klippy/extras/treed_motor_wave.py" \
   "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_calibration."*.pyc \
   "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_math."*.pyc \
-  "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_wave."*.pyc
-for extension in "${REPO_DIR}/klipper-host/"treed_motor_*.py; do
-  [ -f "${extension}" ] || { log_error "runtime-bootstrap: missing motor extension"; exit 1; }
-  install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${extension}" "${KLIPPER_DIR}/klippy/extras/$(basename "${extension}")"
-done
-sensorless_cli="${REPO_DIR}/tools/treed_sensorless_calibrate.py"
-[ -s "${sensorless_cli}" ] || { log_error "runtime-bootstrap: missing sensorless CLI"; exit 1; }
-[ -s "${KLIPPER_DIR}/klippy/extras/treed_motor_sensorless.py" ] || {
-  log_error "runtime-bootstrap: missing sensorless Klipper extension"; exit 1;
-}
-python3 -c 'import ast,sys; [ast.parse(open(p, encoding="utf-8").read(), filename=p) for p in sys.argv[1:]]' \
-  "${sensorless_cli}" "${KLIPPER_DIR}/klippy/extras/treed_motor_sensorless.py" || {
-  log_error "runtime-bootstrap: invalid sensorless Python source"; exit 1;
-}
-ensure_dir "${PI_HOME}/treed/bin"
-install -m 0755 -o "${PI_USER}" -g "${PI_GROUP}" "${sensorless_cli}" "${PI_HOME}/treed/bin/treed-sensorless-calibrate"
+  "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_wave."*.pyc \
+  "${KLIPPER_DIR}/klippy/extras/treed_motor_sensorless.py" \
+  "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_sensorless."*.pyc \
+  "${PI_HOME}/treed/bin/treed-sensorless-calibrate"
+motor_guard="${REPO_DIR}/klipper-host/treed_motor_guard.py"
+[ -f "${motor_guard}" ] || { log_error "runtime-bootstrap: missing motor guard"; exit 1; }
+install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${motor_guard}" "${KLIPPER_DIR}/klippy/extras/treed_motor_guard.py"
 
 KLIPPER_REQ_FILE="${KLIPPER_DIR}/scripts/klippy-requirements.txt"
 if [ ! -f "${KLIPPER_REQ_FILE}" ]; then

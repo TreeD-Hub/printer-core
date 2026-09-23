@@ -1,8 +1,6 @@
 > Root project map: `README.md`
 > Canonical config ownership model: `docs/config-ownership.md`
 
-Калибровка X/Y sensorless: [Sensorless Calibration](sensorless-calibration.md).
-
 ## Быстрый install path (V2)
 
 ```bash
