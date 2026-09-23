@@ -10,7 +10,7 @@
 Пример для консоли:
 
 ```gcode
-START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive
+START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220
 ```
 
 Пример для Moonraker:
@@ -36,11 +36,7 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive
 START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220
 ```
 
-Рекомендуемый вызов для обычной печати:
-
-```gcode
-START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive
-```
+Этот минимальный вызов перед каждой печатью строит новую адаптивную Eddy mesh.
 
 Параметры:
 
@@ -48,26 +44,23 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive
 | --- | --- | --- |
 | `BED_TEMP` | нет | Целевая температура стола. Обязательна, должна быть `> 0`. |
 | `EXTRUDER_TEMP` | нет | Целевая температура сопла. Обязательна, должна быть выше `min_extrude_temp`. |
-| `MESH` | `load` | `load`, `adaptive`, `calibrate` или `none`. |
-| `MESH_PROFILE` | `default` | Имя профиля mesh для `load`/`calibrate`. |
-| `MESH_METHOD` | `scan` для `adaptive`, иначе `automatic` | Метод построения mesh: `rapid_scan`, `scan`, `automatic`, `manual`. |
-| `MESH_MIN`, `MESH_MAX` | границы Eddy safe scan area | Необязательная более узкая область для `adaptive`/`calibrate`, в координатах датчика. |
+| `MESH` | `adaptive` | Необязательное legacy-значение `adaptive`; остальные режимы отклоняются. |
+| `MESH_METHOD` | `rapid_scan` | Необязательное legacy-значение `rapid_scan`; остальные методы отклоняются. |
 | `ADAPTIVE_MARGIN` | `5` | Отступ adaptive mesh от объектов. |
 | `HOTEND_READY_MARGIN` | `3` | Сколько градусов можно не дождаться до цели сопла перед purge. |
 | `SHAPER` | `none` | `none`, `light` или `full` перед печатью. |
 | `SHAPER_ACCEL` | `auto` | Ускорение для shaper-прогона. |
 
 Что делает `START_PRINT`:
-1. До нагрева и движения валидирует параметры, наличие выбранного mesh-профиля при `MESH=load` и object-метаданные для KAMP.
-2. Включает нагрев стола и preheat сопла.
-3. Очищает старую mesh и G-code offsets, затем выполняет полный `G28` через sensorless X/Y и Eddy Z-home.
-4. При необходимости запускает light/full input shaper.
-5. Загружает или строит bed mesh через Eddy в сервисных raw-координатах.
-6. Один раз включает print-offset рабочей зоны.
-7. Паркуется на Z=10 мм у объекта для финального нагрева, затем выполняет скрытый `_TREED_KAMP_LINE_PURGE`.
-8. Запускает runtime-сессию камеры.
+1. До изменения состояния валидирует параметры и object-метаданные для KAMP и нативной adaptive mesh.
+2. Первой state-changing командой выполняет `BED_MESH_CLEAR`, затем сбрасывает G-code offsets.
+3. Включает нагрев стола и preheat сопла, дожидается температуры стола.
+4. Выполняет полный `G28` через sensorless X/Y и Eddy Z-home; при необходимости запускает light/full input shaper.
+5. Строит новую mesh через Eddy в сервисных raw-координатах: `METHOD=rapid_scan ADAPTIVE=1` с отступом `ADAPTIVE_MARGIN`. Klipper сразу активирует результат.
+6. Включает print-offset рабочей зоны и паркуется на Z=10 мм у объекта после всех калибровочных движений.
+7. Догревает сопло, выполняет скрытый `_TREED_KAMP_LINE_PURGE` и запускает runtime-сессию камеры.
 
-Object labels в G-code и `enable_object_processing` в Moonraker нужны для всех режимов `MESH`, включая `none`: без polygon-метаданных `START_PRINT` завершится до прогрева. Высота ожидания сопла `smart_park_height` задаётся отдельно от рабочего Z0.
+Object labels в G-code и `enable_object_processing` в Moonraker обязательны: без polygon-метаданных `START_PRINT` завершится до очистки mesh и прогрева. `MESH=load|none|calibrate`, `MESH_METHOD=scan|automatic|manual`, `MESH_PROFILE` и `MESH_MIN`/`MESH_MAX` здесь отклоняются; для сервисного сканирования используйте `TREED_BED_MESH_CALIBRATE_EDDY`. Высота ожидания сопла `smart_park_height` задаётся отдельно от рабочего Z0.
 
 ### `END_PRINT`
 
@@ -356,12 +349,12 @@ TREED_SHAPER_CALIBRATE MODE=full ACCEL=25000 SAVE=1 HOME=1
 В `START_PRINT` можно включить легкий прогон так:
 
 ```gcode
-START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 MESH=adaptive SHAPER=light SHAPER_ACCEL=12000
+START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 SHAPER=light SHAPER_ACCEL=12000
 ```
 
 ## 9. KAMP park/purge
 
-Эти helper-ы скрыты от Fluidd префиксом `_` и вручную обычно не вызываются: `START_PRINT` вызывает их сам после homing, print-offset и mesh.
+Эти helper-ы скрыты от Fluidd префиксом `_` и вручную обычно не вызываются: `START_PRINT` вызывает их сам после homing и mesh, при включённом print-offset.
 
 ### `_TREED_KAMP_SMART_PARK`
 
@@ -473,7 +466,7 @@ _TREED_SERVICE_COMMANDS
 ### Обычная печать из слайсера
 
 ```gcode
-START_PRINT BED_TEMP=[first_layer_bed_temperature] EXTRUDER_TEMP=[first_layer_temperature] MESH=adaptive
+START_PRINT BED_TEMP=[first_layer_bed_temperature] EXTRUDER_TEMP=[first_layer_temperature]
 ; печатный G-code
 END_PRINT
 ```
@@ -523,5 +516,5 @@ TREED_XY_MOTION_TEST SPEED=200 ACCEL=5000 ITER=2 Z=20 END_Z=100
 - Не слать из TreeD Shell raw live-tune команды вместо `TREED_UI_*`.
 - Не запускать `TREED_SAVE_CONFIG`, shaper-калибровку или XY stress-test во время печати/паузы.
 - Не запускать `G28 Z`, пока X/Y не homed.
-- Не использовать `MESH=adaptive`, если в G-code нет object labels.
+- Не запускать `START_PRINT`, если в G-code нет object labels с polygon-координатами.
 - Не включать Eddy autosave без понимания, что `END_PRINT` может изменить сохраненный probe offset.

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 )
 
@@ -111,7 +111,8 @@ $eddyMeshCfg = Get-GcodeMacroBlock $probeEddy "_TREED_EDDY_MESH_CFG"
 $eddyMesh = Get-GcodeMacroBlock $probeEddy "TREED_BED_MESH_CALIBRATE_EDDY"
 $eddyUiMesh = Get-GcodeMacroBlock $probeEddy "TREED_EDDY_BED_MESH_CALIBRATE"
 $bedMeshAlias = Get-GcodeMacroBlock $probeEddy "CALIBRATE_BED_MESH"
-$startKampMesh = Get-GcodeMacroBlock $macrosFlow "_TREED_START_KAMP_PREP"
+$startAdaptiveMesh = Get-GcodeMacroBlock $macrosFlow "_TREED_START_ADAPTIVE_MESH"
+$startSmartPark = Get-GcodeMacroBlock $macrosFlow "_TREED_START_SMART_PARK"
 $startPrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_PREP_STATE"
 $startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
@@ -145,27 +146,24 @@ Assert-ContainsBefore $setZFromProbe '(?m)^\s*PROBE\b' '(?m)^\s*_RELOAD_Z_OFFSET
 Assert-Contains $reloadZOffset 'printer\.probe\.last_probe_position\.z' "Z reload must use the last PROBE result"
 Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.probe\.last_probe_position\.z\} SET_HOMED=NONE\s*$' "Z reload must not mark other axes homed"
 
-# Блок 4: START_PRINT должен строить Z0, mesh и park только на прогретом столе.
-Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREP_STATE\b' '(?m)^\s*_TREED_START_MACHINE_PREP\s*$' "START_PRINT must validate parameters before heating"
-Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_KAMP_REQUIRE_READY\s*$' '(?m)^\s*_TREED_START_MACHINE_PREP\s*$' "START_PRINT must validate object metadata before heating or moving"
-Assert-Contains $startPrep 'MESH_PROFILE not in printer\.bed_mesh\.profiles' "START_PRINT must reject a missing requested mesh profile before heating"
-Assert-Contains $startPrep 'MESH in \["adaptive", "calibrate"\] and \(params\.MESH_MIN is defined or params\.MESH_MAX is defined\)' "START_PRINT must validate explicit mesh bounds before heating"
-Assert-Contains $startPrint 'SHAPER_ACCEL=\{SHAPER_ACCEL\}\{mesh_bounds\}' "START_PRINT must pass mesh bounds to early validation"
-Assert-NotContains $startMachinePrep '(?m)^\s*_TREED_HOME_ALL\s*$' "START machine prep must not home before bed preheat"
-Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREHEAT\s*$' '(?m)^\s*_TREED_HOME_ALL\s*$' "START_PRINT must wait for bed preheat before Eddy homing"
-Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_HOME_ALL\s*$' '(?m)^\s*_TREED_START_KAMP_PREP\{mesh_bounds\}\s*$' "START_PRINT must select mesh after hot Eddy homing"
-Assert-NotContains $startPrint '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "START_PRINT must not enable print offsets before mesh selection"
-Assert-NotContains $startKampMesh '(?m)^\s*BED_MESH_CLEAR\s*$' "KAMP prep must not defer old mesh cleanup until after homing"
-Assert-ContainsBefore $startKampMesh '(?m)^\s*_TREED_KAMP_REQUIRE_READY\s*$' '(?m)^\s*BED_MESH_PROFILE LOAD=\{MESH_PROFILE\}\s*$' "KAMP requirements must be checked before mesh work"
-Assert-ContainsBefore $startKampMesh '(?m)^\s*BED_MESH_PROFILE LOAD=\{MESH_PROFILE\}\s*$' '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "Print offsets must return only after mesh selection"
-Assert-ContainsBefore $startKampMesh '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)^\s*_TREED_KAMP_SMART_PARK\s*$' "KAMP park must run in print coordinates"
-Assert-ContainsBefore $eddyMesh '(?m)^\s*_TREED_PRINT_OFFSET_DISABLE\s*$' '(?m)^\s*BED_MESH_CLEAR\s*$' "Direct Eddy mesh must enter raw coordinates before clearing the old mesh"
-Assert-NotContains $eddyMesh '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "Direct Eddy mesh must not restore stale print coordinates"
-Assert-Contains $macrosFlow 'DEFAULT_MESH_METHOD = "scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must prefer scan over rapid_scan for precision"
-Assert-NotContains $macrosFlow 'mesh_method\|default\("rapid_scan"\)' "Adaptive mesh fallback must not silently return to rapid_scan"
-Assert-NotContains $macrosFlow 'DEFAULT_MESH_METHOD = "rapid_scan" if MESH == "adaptive" else "automatic"' "Adaptive mesh default must not use rapid_scan in precision profile"
-Assert-NotContains $macrosFlow 'full bed mesh calibration' "START_PRINT must not name Eddy service mesh as full bed mesh"
-Assert-Contains $macrosFlow 'Eddy service mesh calibration' "START_PRINT must name the fixed scan-area mesh honestly"
+# Блок 4: START_PRINT очищает старую mesh до изменений состояния и строит новую после сервисных движений.
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREP_STATE \{rawparams\}\s*$' '(?m)^\s*_TREED_START_MACHINE_PREP\s*$' "START_PRINT должен проверить параметры до нагрева"
+Assert-Contains $startPrep 'params\.MESH is defined and params\.MESH\|lower != "adaptive"' "START_PRINT должен отклонить старые mesh-режимы"
+Assert-Contains $startPrep 'params\.MESH_METHOD is defined and params\.MESH_METHOD\|lower != "rapid_scan"' "START_PRINT должен разрешать только rapid_scan"
+Assert-Contains $startPrep 'params\.MESH_PROFILE is defined or params\.MESH_MIN is defined or params\.MESH_MAX is defined' "Сервисные mesh-параметры запрещены в START_PRINT"
+Assert-ContainsBefore $startPrep '(?m)^\s*_TREED_KAMP_REQUIRE_READY\s*$' '(?m)^\s*BED_MESH_CLEAR\s*$' "Object metadata нужно проверить до очистки mesh"
+Assert-ContainsBefore $startPrep '(?m)^\s*BED_MESH_CLEAR\s*$' '(?m)^\s*SET_GCODE_VARIABLE MACRO=_TREED_START_STATE\b' "Очистка mesh должна предшествовать изменению state"
+Assert-ContainsBefore $startPrep '(?m)^\s*BED_MESH_CLEAR\s*$' '(?m)^\s*_TREED_PRINT_OFFSET_DISABLE\s*$' "Сначала сбрасывается старая mesh"
+Assert-NotContains $startMachinePrep '(?m)^\s*_TREED_HOME_ALL\s*$' "Подготовка машины не должна делать homing до прогрева"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREHEAT\s*$' '(?m)^\s*_TREED_HOME_ALL\s*$' "Homing выполняется после прогрева стола"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_HOME_ALL\s*$' '(?m)^\s*_TREED_START_INPUT_SHAPER\s*$' "Shaper выполняется после homing"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_INPUT_SHAPER\s*$' '(?m)^\s*_TREED_START_ADAPTIVE_MESH\s*$' "Mesh строится после сервисной калибровки"
+Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_ADAPTIVE_MESH\s*$' '(?m)^\s*_TREED_START_SMART_PARK\s*$' "Smart park выполняется после mesh"
+Assert-Contains $startAdaptiveMesh 'TREED_BED_MESH_CALIBRATE_EDDY PROFILE=treed_adaptive METHOD=rapid_scan ADAPTIVE=1 ADAPTIVE_MARGIN=\{st\.adaptive_margin\}' "Обычная печать всегда строит rapid adaptive mesh"
+Assert-NotContains $startPrint 'BED_MESH_PROFILE LOAD' "START_PRINT не должен загружать старую mesh"
+Assert-ContainsBefore $startSmartPark '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)^\s*_TREED_KAMP_SMART_PARK\s*$' "Smart park должен работать в print coords"
+Assert-ContainsBefore $eddyMesh '(?m)^\s*_TREED_PRINT_OFFSET_DISABLE\s*$' '(?m)^\s*BED_MESH_CLEAR\s*$' "Сервисный Eddy mesh переходит в raw coords перед очисткой"
+Assert-NotContains $eddyMesh '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "Сервисный Eddy mesh не восстанавливает старые print coords"
 
 # Блок 5: Eddy mesh использует отдельную scan area без изменения механики.
 Assert-Contains $geometry '(?m)^variable_print_size_y:\s*245\.0\s*$' "Print area Y must stay 245"
@@ -202,12 +200,7 @@ Assert-ContainsBefore $eddyUiMesh '(?m)^\s*TREED_BED_MESH_CALIBRATE_EDDY PROFILE
 Assert-Contains $eddyUiMesh 'MESH_MIN=" ~ params\.MESH_MIN if params\.MESH_MIN is defined' "UI mesh must forward an explicit min only when supplied"
 Assert-Contains $eddyUiMesh 'MESH_MAX=" ~ params\.MESH_MAX if params\.MESH_MAX is defined' "UI mesh must forward an explicit max only when supplied"
 Assert-Contains $bedMeshAlias 'TREED_EDDY_BED_MESH_CALIBRATE \{rawparams\}' "CALIBRATE_BED_MESH must forward explicit bounds"
-Assert-Contains $startPrint 'MESH_MIN=" ~ params\.MESH_MIN if params\.MESH_MIN is defined' "START_PRINT must forward an explicit min only when supplied"
-Assert-Contains $startPrint 'MESH_MAX=" ~ params\.MESH_MAX if params\.MESH_MAX is defined' "START_PRINT must forward an explicit max only when supplied"
-Assert-Contains $startKampMesh 'MESH_MIN=" ~ params\.MESH_MIN if params\.MESH_MIN is defined' "START_PRINT KAMP phase must keep an explicit min"
-Assert-Contains $startKampMesh 'MESH_MAX=" ~ params\.MESH_MAX if params\.MESH_MAX is defined' "START_PRINT KAMP phase must keep an explicit max"
-Assert-Contains $startKampMesh 'TREED_BED_MESH_CALIBRATE_EDDY PROFILE=treed_adaptive.*?\{mesh_bounds\}' "Adaptive mesh must forward explicit bounds"
-Assert-Contains $startKampMesh 'TREED_BED_MESH_CALIBRATE_EDDY PROFILE=\{MESH_PROFILE\}.*?\{mesh_bounds\}' "Calibration mesh must forward explicit bounds"
+Assert-NotContains $startAdaptiveMesh 'MESH_MIN|MESH_MAX|MESH_PROFILE' "Production mesh не должен передавать сервисные границы или профиль"
 
 $safeMinX = Get-ConfigNumber $eddyMeshCfg 'variable_scan_min_x'
 $safeMinY = Get-ConfigNumber $eddyMeshCfg 'variable_scan_min_y'

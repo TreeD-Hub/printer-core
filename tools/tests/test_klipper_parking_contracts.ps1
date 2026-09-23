@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 )
 
@@ -115,7 +115,7 @@ $sensorlessPrepare = Get-GcodeMacroBlock $macrosHoming "_TREED_SENSORLESS_PREPAR
 $zHopBeforeXy = Get-GcodeMacroBlock $macrosCore "_TREED_Z_HOP_BEFORE_XY"
 $endPrint = Get-GcodeMacroBlock $macrosFlow "END_PRINT"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
-$startKampPrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_KAMP_PREP"
+$startSmartPark = Get-GcodeMacroBlock $macrosFlow "_TREED_START_SMART_PARK"
 $startKampPurge = Get-GcodeMacroBlock $macrosFlow "_TREED_START_KAMP_PURGE"
 $finalHeat = Get-GcodeMacroBlock $macrosFlow "_TREED_START_FINAL_HEAT"
 $pauseCfg = Get-GcodeMacroBlock $macrosCore "_TREED_PAUSE_PARK_CFG"
@@ -207,7 +207,7 @@ Assert-NotContains $cancelPrint '(?m)^\s*G28\b' "CANCEL_PRINT must not home axes
 
 # Блок 4: Проверка KAMP-порядка перед purge.
 Assert-Contains $kampSettings 'variable_smart_park_height:\s*10\.0' "SMART_PARK must wait above the bed for final heating"
-Assert-Contains $startKampPrep '(?m)^\s*_TREED_KAMP_SMART_PARK\s*$' "START_PRINT KAMP prep must call hidden smart park helper"
+Assert-Contains $startSmartPark '(?m)^\s*_TREED_KAMP_SMART_PARK\s*$' "START_PRINT должен вызвать скрытый smart park helper после mesh"
 Assert-Contains $startKampPurge '(?m)^\s*_TREED_KAMP_LINE_PURGE\s*$' "START_PRINT KAMP purge must call hidden line purge helper"
 Assert-ContainsBefore $smartPark '(?m)^\s*G0 X\{park_x\} Y\{park_y\} F\{travel_speed\}\s*$' '(?m)^\s*G0 Z\{z_height\} F\{travel_speed\}\s*$' "SMART_PARK must move XY before lowering to heat Z"
 Assert-NotContains $smartPark '(?m)^\s*G28\s*$' "SMART_PARK must not rehome after mesh selection"

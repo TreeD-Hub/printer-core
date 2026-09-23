@@ -72,7 +72,7 @@ Eddy scan area меньше области печати: текущий штат
 - `[force_move] enable_force_move: True` входит в штатный профиль, потому что `SET_KINEMATIC_POSITION` нужен для Eddy Z-home correction;
 - `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`, который строит Eddy service mesh внутри safe scan area, а не скан всей области печати.
 
-`START_PRINT` сначала проверяет параметры, наличие выбранного mesh-профиля и KAMP object-метаданные. Затем прогревает стол до `BED_TEMP`, делает preheat сопла и выполняет рабочий Eddy Z-home и опциональный input shaper без старой mesh и смещений. После загрузки/построения новой mesh он один раз включает print-offset и только затем вызывает KAMP park helper.
+`START_PRINT` сначала проверяет параметры и KAMP object-метаданные. Затем первым изменением состояния очищает старую mesh и offsets, прогревает стол до `BED_TEMP`, делает preheat сопла и выполняет рабочий Eddy Z-home и опциональный input shaper. Перед каждой печатью строит новую mesh через `METHOD=rapid_scan ADAPTIVE=1 ADAPTIVE_MARGIN=5` (отступ можно задать параметром), после чего один раз включает print-offset и вызывает KAMP park helper. Сохранённые mesh-профили в обычной печати не загружаются; сервисные методы доступны через `TREED_BED_MESH_CALIBRATE_EDDY`.
 Так Z0, mesh и парковка фиксируются в тепловом состоянии печати.
 `_TREED_KAMP_SMART_PARK` паркует голову на Z=10 мм перед финальным нагревом сопла; эта высота ожидания не определяет рабочий Z0.
 Финальный нагрев задает `EXTRUDER_TEMP`, но ждет только нижнюю готовность `EXTRUDER_TEMP - HOTEND_READY_MARGIN` (`3C` по умолчанию), поэтому штатный overshoot выше цели не блокирует старт purge/первого слоя.
@@ -173,7 +173,7 @@ TREED_SHAPER_CALIBRATE_FULL ACCEL=25000
 Легкий прогон перед печатью:
 
 ```gcode
-START_PRINT BED_TEMP=... EXTRUDER_TEMP=... MESH=adaptive SHAPER=light SHAPER_ACCEL=12000
+START_PRINT BED_TEMP=... EXTRUDER_TEMP=... SHAPER=light SHAPER_ACCEL=12000
 ```
 
 `SHAPER=light` измеряет узкие диапазоны вокруг сохраненных `shaper_freq_x/y`, применяет новые значения на текущую сессию и не вызывает `SAVE_CONFIG`.
