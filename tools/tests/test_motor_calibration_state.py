@@ -5,6 +5,7 @@
 # Контур: локальный, без принтера и внешних сервисов.
 import importlib.util
 import json
+import math
 from contextlib import nullcontext
 from pathlib import Path
 import sys
@@ -39,6 +40,8 @@ class MotorStateTest(unittest.TestCase):
         self.subject.xy_accel = 500.
         self.subject.base_tables = {
             motor: dict(wave.DEFAULT_TABLE) for motor in calibration.XY_MOTORS}
+        self.subject.current_coefficients = {
+            motor: {'s4': 0., 'c4': 0.} for motor in calibration.XY_MOTORS}
         self.subject.candidate = None
         self.subject.verifying_saved_profile = False
 
@@ -129,7 +132,7 @@ class MotorStateTest(unittest.TestCase):
 
         calls = []
 
-        def verify(tables, speeds):
+        def verify(tables, speeds, coefficients):
             if False:
                 yield
             calls.append(tables)
@@ -313,7 +316,7 @@ class MotorStateTest(unittest.TestCase):
         changed['MSLUT0'] ^= 1
         self.subject.current_tables = {'stepper_x': changed,
                                        'stepper_y': self.subject.base_tables['stepper_y']}
-        self.subject._switch_tables = Mock(side_effect=lambda tables: setattr(
+        self.subject._switch_tables = Mock(side_effect=lambda tables, **kwargs: setattr(
             self.subject, 'current_tables', tables))
         self.subject._finish('cancelled')
         self.assertEqual(self.subject.state, 'cancelled')
@@ -442,6 +445,76 @@ class MotorStateTest(unittest.TestCase):
             calibration.MAX_TABLE_VECTOR_DELTA)
         self.subject.toolhead.manual_move.assert_called_once_with(
             (122.5, 122.5, None), 50.)
+
+    def test_table_transition_uses_waypoints_for_live_phase_gap(self):
+        motor = 'stepper_y'
+        before_coefficients = {'s4': -.02, 'c4': 0.}
+        after_coefficients = {'s4': .04, 'c4': 0.}
+        before, _ = wave.phase_table(
+            before_coefficients, self.subject.base_tables[motor])
+        after, _ = wave.phase_table(
+            after_coefficients, self.subject.base_tables[motor])
+        self.subject.current_tables = dict(self.subject.base_tables,
+                                           **{motor: before})
+        self.subject.current_coefficients[motor] = before_coefficients
+        self.subject._phase_now = Mock(return_value=648)
+        self.subject._phase_step = Mock(return_value=(4, 16))
+
+        path = self.subject._plan_table_transition(
+            motor, after, after_coefficients, True)
+
+        self.assertGreater(len(path), 1)
+        self.assertEqual(path[-1], (after, after_coefficients))
+        previous = before
+        for table, _ in path:
+            scores = wave.transition_scores(previous, table)
+            self.assertTrue(any(
+                phase % 256 and
+                scores[phase % 256] <= calibration.MAX_TABLE_VECTOR_DELTA
+                for phase in range(648 % 16, 1024, 16)))
+            previous = table
+
+    def test_table_transition_ignores_trigonometric_zero_residue(self):
+        motor = 'stepper_x'
+        before_coefficients = {'s4': .04, 'c4': 0.}
+        after_coefficients = {
+            's4': .04 * math.cos(math.pi),
+            'c4': .04 * math.sin(math.pi)}
+        before, _ = wave.phase_table(
+            before_coefficients, self.subject.base_tables[motor])
+        after, _ = wave.phase_table(
+            after_coefficients, self.subject.base_tables[motor])
+        self.subject.current_tables = dict(self.subject.base_tables,
+                                           **{motor: before})
+        self.subject.current_coefficients[motor] = before_coefficients
+        self.subject._phase_now = Mock(return_value=648)
+        self.subject._phase_step = Mock(return_value=(4, 16))
+
+        path = self.subject._plan_table_transition(
+            motor, after, after_coefficients, True)
+
+        self.assertGreater(len(path), 1)
+        self.assertEqual(path[-1], (after, {'s4': -.04, 'c4': 0.}))
+
+    def test_table_transitions_are_fully_planned_before_first_write(self):
+        targets = {}
+        coefficients = {}
+        self.subject.current_tables = dict(self.subject.base_tables)
+        for index, motor in enumerate(calibration.XY_MOTORS):
+            targets[motor] = dict(self.subject.base_tables[motor])
+            targets[motor]['MSLUT0'] ^= index + 1
+            coefficients[motor] = {'s4': .02 * (index + 1), 'c4': 0.}
+        self.subject._plan_table_transition = Mock(side_effect=
+            [[(targets['stepper_x'], coefficients['stepper_x'])],
+             calibration.motor_math.MeasurementError(
+                 'tmc_table_transition_path_unavailable')])
+        self.subject._apply_table = Mock()
+
+        with self.assertRaisesRegex(
+                ValueError, 'tmc_table_transition_path_unavailable'):
+            self.subject._switch_tables(targets, coefficients=coefficients)
+
+        self.subject._apply_table.assert_not_called()
 
     def test_isolated_sensor_gap_repeats_only_the_affected_pass(self):
         self.subject.gcode = types.SimpleNamespace(respond_info=Mock())
@@ -704,7 +777,7 @@ class MotorStateTest(unittest.TestCase):
         subject.circle_report = {'comparisons': []}
         subject._write_circle_report = Mock()
         subject._verify_circle_tables = Mock()
-        subject._switch_tables = Mock(side_effect=lambda tables: setattr(
+        subject._switch_tables = Mock(side_effect=lambda tables, **kwargs: setattr(
             subject, 'current_tables', tables))
         subject.toolhead = types.SimpleNamespace(set_max_velocities=Mock(),
                                                  wait_moves=Mock())
@@ -752,7 +825,8 @@ class MotorStateTest(unittest.TestCase):
         subject.cancel_requested = False
         subject.circle_profile = self._valid_profile()
         subject.flow = (action for action in [
-            ('tables', subject.circle_profile['tables'], True)])
+            ('tables', subject.circle_profile['tables'],
+             subject.circle_profile['coefficients'], True)])
         subject.flow_result = None
         subject._switch_tables = Mock()
         subject._verify_circle_tables = Mock()
@@ -760,7 +834,8 @@ class MotorStateTest(unittest.TestCase):
         result = subject._next(1.)
         self.assertEqual(result, 1.05)
         subject._switch_tables.assert_called_once_with(
-            subject.circle_profile['tables'], allow_jog=False)
+            subject.circle_profile['tables'], allow_jog=False,
+            coefficients=subject.circle_profile['coefficients'])
         subject._verify_circle_tables.assert_called_once()
         self.assertTrue(subject.phase_enabled)
 

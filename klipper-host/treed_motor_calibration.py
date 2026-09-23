@@ -21,6 +21,15 @@ MAX_TABLE_VECTOR_DELTA = 16
 HOMING_MOVE_ORIGINAL = klipper_homing.HomingMove.homing_move
 
 
+def _zero_coefficients():
+    return {motor: {'s4': 0., 'c4': 0.} for motor in XY_MOTORS}
+
+
+def _canonical_coefficients(coefficients):
+    return {key: 0. if abs(coefficients[key]) < 1e-12 else coefficients[key]
+            for key in ('s4', 'c4')}
+
+
 class TreedMotorCalibration:
     def __init__(self, config):
         self.config = config
@@ -65,6 +74,7 @@ class TreedMotorCalibration:
         self.phase_reason = 'required_hardware_or_config_missing'
         self.base_tables = {}
         self.current_tables = {}
+        self.current_coefficients = _zero_coefficients()
         self.profile = None
         self.profile_state = 'missing'
         self.candidate = None
@@ -147,6 +157,7 @@ class TreedMotorCalibration:
             except ValueError:
                 self.phase_reason = 'tmc_base_wave_incompatible'
         self.current_tables = dict(self.base_tables)
+        self.current_coefficients = _zero_coefficients()
         if (len(self.drivers) == 2 and self.phase_reason ==
                 'required_hardware_or_config_missing'):
             self.phase_reason = ''
@@ -478,6 +489,57 @@ class TreedMotorCalibration:
             raise motor_math.MeasurementError('table_alignment_failed')
         return target
 
+    def _transition_is_safe(self, motor, before, after, allow_jog):
+        phase = self._phase_now(motor)
+        _, phase_step = self._phase_step(motor)
+        scores = motor_wave.transition_scores(before, after)
+        if not allow_jog:
+            return (phase % 256 and
+                    scores[phase % 256] <= MAX_TABLE_VECTOR_DELTA)
+        return any(p % 256 and scores[p % 256] <= MAX_TABLE_VECTOR_DELTA
+                   for p in range(phase % phase_step, 1024, phase_step))
+
+    def _table_for_coefficients(self, motor, coefficients):
+        if set(coefficients) != {'s4', 'c4'}:
+            raise motor_math.MeasurementError('phase_coefficients_invalid')
+        coefficients = _canonical_coefficients(coefficients)
+        if not any(coefficients.values()):
+            return dict(self.base_tables[motor])
+        try:
+            return motor_wave.phase_table(
+                coefficients, self.base_tables[motor])[0]
+        except ValueError as exc:
+            raise motor_math.MeasurementError(
+                'tmc_table_transition_path_unavailable: %s' % exc)
+
+    def _plan_table_transition(self, motor, table, coefficients, allow_jog):
+        current = self.current_coefficients.get(motor)
+        if current is None:
+            raise motor_math.MeasurementError(
+                'tmc_table_coefficients_unknown')
+        current = _canonical_coefficients(current)
+        coefficients = _canonical_coefficients(coefficients)
+        if self._table_for_coefficients(motor, coefficients) != table:
+            raise motor_math.MeasurementError('tmc_table_coefficients_mismatch')
+
+        def split(before, before_coeffs, after, after_coeffs, depth):
+            if self._transition_is_safe(motor, before, after, allow_jog):
+                return [(after, after_coeffs)]
+            if not depth:
+                raise motor_math.MeasurementError(
+                    'tmc_table_transition_path_unavailable')
+            midpoint = {key: (before_coeffs[key] + after_coeffs[key]) / 2.
+                        for key in ('s4', 'c4')}
+            middle = self._table_for_coefficients(motor, midpoint)
+            if middle == before or middle == after:
+                raise motor_math.MeasurementError(
+                    'tmc_table_transition_path_unavailable')
+            return (split(before, before_coeffs, middle, midpoint, depth - 1) +
+                    split(middle, midpoint, after, after_coeffs, depth - 1))
+
+        return split(self.current_tables[motor], current, table,
+                     dict(coefficients), 8)
+
     def _phase_jog(self, motor, steps):
         stepper = self.kin_steppers[motor]
         sign = -1 if stepper.get_dir_inverted()[0] else 1
@@ -493,7 +555,7 @@ class TreedMotorCalibration:
         self.toolhead.manual_move((dest[0], dest[1], None), 5.)
         self.toolhead.wait_moves()
 
-    def _switch_table(self, motor, table, allow_jog=True):
+    def _apply_table(self, motor, table, allow_jog=True):
         if self.current_tables[motor] == table:
             return
         motor_wave.decode_table(table)
@@ -521,11 +583,31 @@ class TreedMotorCalibration:
         driver.get_fields().registers.update(table)
         self.current_tables[motor] = dict(table)
 
-    def _switch_tables(self, tables, allow_jog=True):
-        changes = [motor for motor in XY_MOTORS
-                   if self.current_tables[motor] != tables[motor]]
-        for motor in changes:
-            self._switch_table(motor, tables[motor], allow_jog)
+    def _switch_table(self, motor, table, coefficients, allow_jog=True):
+        if self.current_tables[motor] == table:
+            if coefficients is not None:
+                self.current_coefficients[motor] = dict(coefficients)
+            return
+        path = self._plan_table_transition(
+            motor, table, coefficients, allow_jog)
+        for waypoint, waypoint_coefficients in path:
+            self._apply_table(motor, waypoint, allow_jog)
+            self.current_coefficients[motor] = dict(waypoint_coefficients)
+
+    def _switch_tables(self, tables, coefficients, allow_jog=True):
+        plans = {}
+        for motor in XY_MOTORS:
+            target = coefficients[motor]
+            if self.current_tables[motor] != tables[motor]:
+                plans[motor] = self._plan_table_transition(
+                    motor, tables[motor], target, allow_jog)
+        for motor in XY_MOTORS:
+            target = coefficients[motor]
+            for waypoint, waypoint_coefficients in plans.get(motor, ()):
+                self._apply_table(motor, waypoint, allow_jog)
+                self.current_coefficients[motor] = dict(waypoint_coefficients)
+            if motor not in plans:
+                self.current_coefficients[motor] = dict(target)
 
     def _check_base_tables(self):
         if self.driver_mutated:
@@ -830,7 +912,9 @@ class TreedMotorCalibration:
                     rows = {}
                     for enabled in ((False, True) if repeat % 2 else (True, False)):
                         yield ('tables', self.circle_profile['tables']
-                               if enabled else self.base_tables, enabled)
+                               if enabled else self.base_tables,
+                               self.circle_profile['coefficients'] if enabled else
+                               _zero_coefficients(), enabled)
                         rows[enabled] = yield ('circle_pass', speed, direction,
                                                repeat, enabled)
                     pairs.append((rows[False], rows[True]))
@@ -841,7 +925,8 @@ class TreedMotorCalibration:
                     for i in range(16)]
                 comparisons.append({'speed_mm_s': speed, 'direction': direction,
                                     'total': total, 'sectors': sectors})
-        yield ('tables', self.base_tables, False)
+        yield ('tables', self.base_tables,
+               _zero_coefficients(), False)
         return comparisons
 
     def _joint_jobs(self, speeds):
@@ -892,7 +977,7 @@ class TreedMotorCalibration:
                 table, _ = motor_wave.phase_table(trial, self.base_tables[motor])
             except ValueError:
                 continue
-            yield ('table', motor, table)
+            yield ('table', motor, table, trial)
             rows = yield from self._collect(jobs, '%s_H%d_%.4f_%.3f' % (
                 stage, harmonic, magnitude, phase))
             score = self._score(rows, harmonic)
@@ -914,11 +999,10 @@ class TreedMotorCalibration:
         speeds = sorted(set(self.xy_speeds))
         holdout = (speeds[0], speeds[-1])
         jobs = self._geometry(XY_MOTORS)
-        coeffs = {motor: {'s4': 0., 'c4': 0.}
-                  for motor in XY_MOTORS}
+        coeffs = _zero_coefficients()
         tables = dict(self.base_tables)
         self.stage = 'baseline'
-        yield ('tables', tables)
+        yield ('tables', tables, coeffs)
         baseline = yield from self._collect(jobs * 3, 'speed_baseline')
         self.characterization = {}
         for motor in XY_MOTORS:
@@ -951,7 +1035,7 @@ class TreedMotorCalibration:
                                   if row['motor'] == motor and
                                   row['speed_mm_s'] == speed]
                 if tables[motor] != self.base_tables[motor]:
-                    yield ('table', motor, tables[motor])
+                    yield ('table', motor, tables[motor], coeffs[motor])
                     reference_rows = yield from self._collect(
                         train_jobs * 3, 'training_after_previous_harmonic')
                     stats = motor_math.baseline_summary(reference_rows, harmonic)
@@ -983,7 +1067,7 @@ class TreedMotorCalibration:
                 coeffs[motor] = best
                 tables[motor], _ = motor_wave.phase_table(
                     best, self.base_tables[motor])
-                yield ('table', motor, tables[motor])
+                yield ('table', motor, tables[motor], best)
         if all(tables[motor] == self.base_tables[motor] for motor in XY_MOTORS):
             raise motor_math.MeasurementError(
                 'no_representable_phase_correction_found')
@@ -1000,7 +1084,8 @@ class TreedMotorCalibration:
                     for motor in XY_MOTORS}
             except ValueError:
                 continue
-            verdict = yield from self._verify_flow(trial_tables, holdout)
+            verdict = yield from self._verify_flow(
+                trial_tables, holdout, scaled)
             validation.append({'attenuation': attenuation, 'verdict': verdict})
             if verdict['accepted']:
                 selected = (attenuation, scaled, trial_tables)
@@ -1011,7 +1096,7 @@ class TreedMotorCalibration:
                                                   'no_representable_candidate'))
         attenuation, coeffs, tables = selected
         self.stage = 'verifying'
-        verdict = yield from self._verify_flow(tables, holdout)
+        verdict = yield from self._verify_flow(tables, holdout, coeffs)
         if not verdict['accepted']:
             raise motor_math.MeasurementError('final_verification_failed: ' +
                                               str(verdict))
@@ -1030,16 +1115,17 @@ class TreedMotorCalibration:
                 'attenuation': attenuation,
                 'validation': validation, 'verified': verdict}
 
-    def _verify_flow(self, tables, speeds):
+    def _verify_flow(self, tables, speeds, coefficients):
         jobs = [j for j in self._geometry(XY_MOTORS) if j[1] in speeds]
         jobs += list(self._joint_jobs(speeds))
-        yield ('tables', self.base_tables)
+        base_coefficients = _zero_coefficients()
+        yield ('tables', self.base_tables, base_coefficients)
         baseline = yield from self._collect(jobs * 3, 'verification_baseline')
-        yield ('tables', tables)
+        yield ('tables', tables, coefficients)
         corrected = yield from self._collect(jobs * 3, 'verification_candidate')
         verdict = motor_math.compare_verification(baseline, corrected)
         self.last_verdict = verdict
-        yield ('tables', self.base_tables)
+        yield ('tables', self.base_tables, base_coefficients)
         return verdict
 
     def _finish(self, state, error=None):
@@ -1057,7 +1143,8 @@ class TreedMotorCalibration:
         if (not self.printer.is_shutdown() and self.mode in ('tune', 'verify', 'circle')
                 and self.current_tables != self.base_tables):
             try:
-                self._switch_tables(self.base_tables)
+                self._switch_tables(
+                    self.base_tables, coefficients=_zero_coefficients())
             except Exception as exc:
                 self.printer.invoke_shutdown('TreeD motor calibration recovery failed')
                 restore_error = 'table_restore_failed=%s' % exc
@@ -1192,7 +1279,9 @@ class TreedMotorCalibration:
                         self.stage = 'verifying'
                         profile = self.candidate or self.profile
                         self.flow = self._verify_flow(
-                            profile['tables'], tuple(profile['limits']['tested_speeds']))
+                            profile['tables'],
+                            tuple(profile['limits']['tested_speeds']),
+                            profile['coefficients'])
             else:
                 action = self.flow.send(self.flow_result)
                 self.flow_result = None
@@ -1211,13 +1300,15 @@ class TreedMotorCalibration:
                     self.progress = min(.95, self.passes_done /
                                         self.circle_total_passes)
                 elif action[0] == 'table':
-                    self._switch_table(action[1], action[2])
+                    self._switch_table(
+                        action[1], action[2], coefficients=action[3])
                 elif action[0] == 'tables':
                     self._switch_tables(action[1],
-                                        allow_jog=self.mode != 'circle')
+                                        allow_jog=self.mode != 'circle',
+                                        coefficients=action[2])
                     if self.mode == 'circle':
                         self._verify_circle_tables(action[1])
-                        self.phase_enabled = action[2]
+                        self.phase_enabled = action[3]
         except StopIteration as done:
             self.progress = 1.
             if self.mode == 'circle':
@@ -1487,13 +1578,15 @@ class TreedMotorCalibration:
             speed, accel = self.toolhead.get_max_velocity()
             if speed > limits['max_velocity'] or accel > limits['max_accel']:
                 raise gcmd.error('set velocity and acceleration within profile limits first')
-            self._switch_tables(self.profile['tables'])
+            self._switch_tables(
+                self.profile['tables'], coefficients=self.profile['coefficients'])
             self.phase_enabled = True
             self.profile_state = 'enabled'
         else:
             self.phase_transition = True
             try:
-                self._switch_tables(self.base_tables)
+                self._switch_tables(
+                    self.base_tables, coefficients=_zero_coefficients())
             finally:
                 self.phase_transition = False
             self.phase_enabled = False
