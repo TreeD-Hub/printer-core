@@ -61,6 +61,14 @@ class SensorlessAnalysisTest(unittest.TestCase):
         wide[4]['telemetry']['valid'] = False
         self.assertIsNone(MODULE.choose_candidate(wide))
 
+    def test_report_keeps_machine_and_operator_results(self):
+        contact = trial(64, 4)
+        contact['confirmed'] = 'hard_contact'
+        text = MODULE.report('X', [contact])
+        self.assertIn('Hard contacts: 1', text)
+        self.assertIn('64 H', text)
+        self.assertIn('pass / hard_contact', text)
+
 
 class SensorlessProbeTest(unittest.TestCase):
     # Блок 2: Ограничение диагностического хода и возврат TMC/кинематики.
@@ -78,6 +86,11 @@ class SensorlessProbeTest(unittest.TestCase):
                 self.rails = [Rail(), Rail()]
                 self.limits = [(0, 245), (0, 245), (0, 255)]
 
+            def clear_homing_state(self, axes):
+                for index, axis in enumerate('xyz'):
+                    if axis in axes:
+                        self.limits[index] = (1., -1.)
+
         class Toolhead:
             def __init__(self):
                 self.kin = CoreXYKinematics()
@@ -91,7 +104,9 @@ class SensorlessProbeTest(unittest.TestCase):
                 return self.kin
 
             def get_status(self, now):
-                return {'homed_axes': 'xyz'}
+                return {'homed_axes': ''.join(
+                    axis for index, axis in enumerate('xyz')
+                    if self.kin.limits[index][0] <= self.kin.limits[index][1])}
 
             def get_position(self):
                 return list(self.pos)
@@ -138,7 +153,7 @@ class SensorlessProbeTest(unittest.TestCase):
                 self.value = value
 
             def get_register_raw(self, name):
-                return {'data': self.value}
+                raise AssertionError('COOLCONF is write-only')
 
         class Homing:
             def manual_home(self, head, endstops, target, speed, *args):
@@ -198,9 +213,14 @@ class SensorlessProbeTest(unittest.TestCase):
         config = type('Config', (), {'get_printer': lambda self: printer})()
         obj = PLUGIN.load_config(config)
         obj.cmd_probe(Gcmd())
-        self.assertEqual(printer.head.kin.limits[0], (0, 245))
+        self.assertEqual(printer.head.kin.limits[0],
+                         (1., -1.) if missed else (0, 245))
         self.assertEqual(printer.driver.value, 1)
         self.assertEqual(printer.head.max_accel, 3000.)
+        if missed:
+            with self.assertRaisesRegex(RuntimeError,
+                                        'verified_xyz_home_required'):
+                obj.cmd_probe(Gcmd())
         return obj.last_result
 
     def test_pass_restores_limits_and_sgt(self):

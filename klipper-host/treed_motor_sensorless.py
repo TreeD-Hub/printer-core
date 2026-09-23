@@ -68,6 +68,7 @@ class TreedMotorSensorless:
         self.busy = True
         self.last_result = None
         changed = False
+        motion_started = False
         try:
             self.gcode.run_script_from_command('_TREED_SENSORLESS_PREPARE')
             toolhead.set_max_velocities(None, 700., None, None)
@@ -76,9 +77,7 @@ class TreedMotorSensorless:
             driver.mcu_tmc.set_register(reg, fields.set_field('sgt', sgt),
                                         toolhead.get_last_move_time())
             toolhead.wait_moves()
-            readback = driver.mcu_tmc.get_register_raw(reg)
-            if fields.get_field('sgt', readback['data']) != sgt:
-                raise gcmd.error('SGT readback mismatch')
+            # COOLCONF доступен только на запись; set_register проверяет SPI-ответ.
 
             start = toolhead.get_position()
             target = list(start)
@@ -93,6 +92,7 @@ class TreedMotorSensorless:
                     (boundary - 3., old_range[1]) if axis == 'X'
                     else (old_range[0], boundary + 3.))
                 try:
+                    motion_started = True
                     self.printer.lookup_object('homing').manual_home(
                         toolhead, rail.get_endstops(), target,
                         speed, True, True, True)
@@ -125,6 +125,8 @@ class TreedMotorSensorless:
                 'boundary': boundary, 'move_start': move_start,
                 'move_end': move_end,
             }
+            if outcome in ('pass', 'false_trigger'):
+                motion_started = False
             gcmd.respond_info('TREED_SENSORLESS_PROBE ' + outcome)
         finally:
             try:
@@ -133,10 +135,9 @@ class TreedMotorSensorless:
                         reg, fields.set_field('sgt', previous_sgt),
                         toolhead.get_last_move_time())
                     toolhead.wait_moves()
-                    restored = driver.mcu_tmc.get_register_raw(reg)
-                    if fields.get_field('sgt', restored['data']) != previous_sgt:
-                        raise gcmd.error('SGT restore readback mismatch')
             finally:
+                if motion_started:
+                    kin.clear_homing_state(axis.lower())
                 toolhead.set_max_velocities(*old_limits)
                 self.busy = False
 

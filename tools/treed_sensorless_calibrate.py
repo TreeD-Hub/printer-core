@@ -251,8 +251,10 @@ def run_trial(client, axis, speed, sgt, phase, stage, attempts, started):
         axis, speed, sgt, result['outcome'], stats['samples'],
         stats.get('margin', 'unknown')))
     answer = client.prompt('Физически: [p] упор, [f] остановка в воздухе, '
-                           '[m] пропуск stall, [c] остановить: ').lower()
-    labels = {'p': 'pass', 'f': 'false_trigger', 'm': 'missed_stall'}
+                           '[m] пропуск stall, [h] давит в упор, '
+                           '[c] остановить: ').lower()
+    labels = {'p': 'pass', 'f': 'false_trigger',
+              'm': 'missed_stall', 'h': 'hard_contact'}
     if answer not in labels:
         raise KeyboardInterrupt('оператор остановил калибровку')
     trial = {'phase': phase, 'stage': stage, 'axis': axis, 'speed': speed,
@@ -288,13 +290,15 @@ def report(axis, trials, run_current=None):
              'Trials: %s' % len(trials), 'Candidate SGT: %s' % sgt,
              'Tested speeds: ' + ', '.join(str(speed) for speed in
                                            sorted({t['speed'] for t in trials})),
-             'False triggers: %s' % sum(t['outcome'] == 'false_trigger'
+             'False triggers: %s' % sum(t['confirmed'] == 'false_trigger'
                                         for t in trials),
-             'Missed stalls: %s' % sum(t['outcome'] == 'missed_stall'
+             'Missed stalls: %s' % sum(t['confirmed'] == 'missed_stall'
+                                      for t in trials),
+             'Hard contacts: %s' % sum(t['confirmed'] == 'hard_contact'
                                       for t in trials),
              'Recommendation: ' + (json.dumps(rec, ensure_ascii=False)
                                     if rec else 'none; more verified data needed'),
-             '', 'Cold sweep matrix: P=pass, F=false, M=missed, ?=invalid']
+             '', 'Cold sweep matrix: P=pass, F=false, M=missed, H=hard, ?=invalid']
     selected = [t['telemetry'] for t in trials
                 if t['stage'] == 'validation' and t['sgt'] == sgt
                 and t['telemetry']['valid']]
@@ -316,13 +320,14 @@ def report(axis, trials, run_current=None):
         for sgt in sgts:
             t = sweep.get((speed, sgt))
             marks.append({'pass': 'P', 'false_trigger': 'F',
-                          'missed_stall': 'M'}.get(t['outcome'], '?')
+                          'missed_stall': 'M', 'hard_contact': 'H'}.get(
+                              t['confirmed'], '?')
                          if t else '?')
         lines.append('%s %s' % (speed, ' '.join(marks)))
-    lines.extend(('', 'speed / SGT / phase / result / margin'))
+    lines.extend(('', 'speed / SGT / phase / machine / operator / margin'))
     for t in trials:
-        lines.append('%s / %s / %s / %s / %s' % (
-            t['speed'], t['sgt'], t['phase'], t['outcome'],
+        lines.append('%s / %s / %s / %s / %s / %s' % (
+            t['speed'], t['sgt'], t['phase'], t['outcome'], t['confirmed'],
             t['telemetry'].get('margin', 'unknown')))
     return '\n'.join(lines) + '\n'
 
@@ -337,9 +342,21 @@ def save_raw(path, trials):
 def main():
     parser = argparse.ArgumentParser(description='Supervised TMC5160 X/Y calibration')
     parser.add_argument('--axis', required=True, choices=('X', 'Y'))
+    parser.add_argument('--speed', type=int)
+    parser.add_argument('--sgt', type=int)
+    parser.add_argument('--repeat', type=int, default=1)
+    parser.add_argument('--phase', choices=('cold', 'warm'), default='cold')
     parser.add_argument('--socket', type=Path, default=SOCKET)
     parser.add_argument('--output-dir', type=Path, default=LOGS)
     args = parser.parse_args()
+    if (args.speed is None) != (args.sgt is None):
+        parser.error('--speed and --sgt must be used together')
+    if args.speed is not None and not 40 <= args.speed <= 100:
+        parser.error('--speed must be 40..100')
+    if args.sgt is not None and not -64 <= args.sgt <= 63:
+        parser.error('--sgt must be -64..63')
+    if not 1 <= args.repeat <= 10 or (args.repeat != 1 and args.speed is None):
+        parser.error('--repeat must be 1..10 and requires --speed/--sgt')
     axis = args.axis
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime('%Y%m%d-%H%M%S')
@@ -374,6 +391,17 @@ def main():
         base_sgt = int(client.status()['treed_motor_sensorless'][
             'sgt_' + axis.lower()])
         run_current = driver_config['run_current']
+        if args.speed is not None:
+            for _ in range(args.repeat):
+                trials.append(run_trial(client, axis, args.speed, args.sgt,
+                                        args.phase, 'validation',
+                                        len(trials), started))
+                save_raw(raw, trials)
+                if (trials[-1]['outcome'] != 'pass' or
+                        trials[-1]['confirmed'] != 'pass' or
+                        not trials[-1]['telemetry']['valid']):
+                    return 2
+            return 0
         sgts = range(max(-64, base_sgt - 4), min(63, base_sgt + 4) + 1, 2)
         print('Sweep:', SPEEDS, list(sgts), 'current SGT:', base_sgt)
         for speed in SPEEDS:
