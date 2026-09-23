@@ -4,6 +4,7 @@
 # Назначение: профиль, отмена и атомарная запись.
 # Контур: локальный, без принтера и внешних сервисов.
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -36,10 +37,12 @@ class MotorStateTest(unittest.TestCase):
         self.subject.xy_speeds = (15., 25., 35.)
         self.subject.xy_accel = 500.
         self.subject.base_tables = {
-            motor: wave.make_table() for motor in calibration.XY_MOTORS}
+            motor: dict(wave.DEFAULT_TABLE) for motor in calibration.XY_MOTORS}
+        self.subject.candidate = None
+        self.subject.verifying_saved_profile = False
 
-    def test_profile_invalidated_by_firmware_or_config_change(self):
-        profile = {
+    def _valid_profile(self):
+        return {
             'schema': 1, 'algorithm': calibration.ALGORITHM,
             'build_id': self.subject.build_id,
             'config_fingerprint': self.subject.config_fingerprint,
@@ -49,6 +52,9 @@ class MotorStateTest(unittest.TestCase):
             'tables': self.subject.base_tables,
             'limits': {'max_velocity': 35., 'max_accel': 500.},
             'verified': {'accepted': True}}
+
+    def test_profile_invalidated_by_firmware_or_config_change(self):
+        profile = self._valid_profile()
         self.subject._validate_profile(profile)
         profile['build_id'] = 'older-mcu-build'
         with self.assertRaisesRegex(ValueError, 'stale'):
@@ -57,6 +63,133 @@ class MotorStateTest(unittest.TestCase):
         profile['config_fingerprint'] = 'older-config'
         with self.assertRaisesRegex(ValueError, 'stale'):
             self.subject._validate_profile(profile)
+
+    def test_failed_saved_verification_blocks_enable_across_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.subject.profile_path = str(Path(directory) / 'active_profile.json')
+            self.subject.profile = self._valid_profile()
+            self.subject.profile_state = 'saved'
+            self.subject.mode = 'verify'
+            self.subject.verifying_saved_profile = True
+            self.subject.timer = self.subject.old_accel = None
+            self.subject.current_tables = self.subject.base_tables
+            self.subject.printer = types.SimpleNamespace(
+                is_shutdown=lambda: False, invoke_shutdown=Mock(),
+                lookup_object=Mock())
+            self.subject.gcode = types.SimpleNamespace(respond_info=Mock())
+            self.subject._write_report = Mock()
+
+            self.subject._finish('failed', 'individual_condition_regressed')
+            self.assertEqual(self.subject.profile_state, 'rejected')
+            self.assertEqual(self.subject.profile['verification_failure'],
+                             'individual_condition_regressed')
+            with open(self.subject.profile_path, encoding='utf-8') as saved:
+                self.assertEqual(json.load(saved)['verification_failure'],
+                                 'individual_condition_regressed')
+
+            self.subject._load_profile()
+            self.assertEqual(self.subject.profile_state, 'rejected')
+            gcmd = types.SimpleNamespace(get_int=lambda *args, **kwargs: 1,
+                                         error=ValueError)
+            with self.assertRaisesRegex(ValueError, 'individual_condition_regressed'):
+                self.subject.cmd_phase(gcmd)
+            self.subject.printer.lookup_object.assert_not_called()
+
+            self.subject._finish('verified')
+            self.subject._load_profile()
+            self.assertEqual(self.subject.profile_state, 'saved')
+            self.assertNotIn('verification_failure', self.subject.profile)
+
+    def test_new_calibration_replaces_rejected_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.subject.profile_path = str(Path(directory) / 'active_profile.json')
+            self.subject.previous_path = str(Path(directory) / 'previous_profile.json')
+            self.subject.profile = self._valid_profile()
+            self.subject.profile['verification_failure'] = 'regressed'
+            self.subject.profile_state = 'rejected'
+            self.subject.candidate = self._valid_profile()
+            self.subject.state = 'candidate'
+            self.subject.phase_enabled = False
+            gcmd = types.SimpleNamespace(error=ValueError, respond_info=Mock())
+
+            self.subject.cmd_save(gcmd)
+            self.subject._load_profile()
+            self.assertEqual(self.subject.profile_state, 'saved')
+            self.assertNotIn('verification_failure', self.subject.profile)
+            self.assertIsNone(self.subject.candidate)
+
+    def test_verify_tracks_saved_profile_even_with_candidate_alias(self):
+        self.subject.profile = self._valid_profile()
+        self.subject.candidate = self.subject.profile
+        self.subject.state = 'idle'
+        self.subject.phase_enabled = False
+        self.subject.reactor = types.SimpleNamespace(
+            monotonic=lambda: 0., NOW=0., register_timer=Mock())
+        self.subject.get_status = Mock(return_value={'phase_supported': True})
+        self.subject._check_base_tables = Mock()
+        self.subject._ready_before_home = Mock()
+        steppers = [types.SimpleNamespace(get_name=lambda name=name: name)
+                    for name in calibration.XY_MOTORS]
+        toolhead = types.SimpleNamespace(
+            get_max_velocity=lambda: (35., 500.),
+            get_kinematics=lambda: types.SimpleNamespace(
+                get_steppers=lambda: steppers))
+        chip = types.SimpleNamespace(start_internal_client=lambda: None)
+        self.subject.printer = types.SimpleNamespace(
+            lookup_object=lambda name, default=None: {
+                'toolhead': toolhead, 'adxl345': chip}.get(name, default))
+        gcmd = types.SimpleNamespace(
+            get=lambda key, default=None: {'MODE': 'verify'}.get(key, default),
+            error=ValueError, respond_info=Mock())
+
+        self.subject.cmd_calibrate(gcmd)
+        self.assertTrue(self.subject.verifying_saved_profile)
+
+    def test_quiet_mode_rejects_limit_changes_before_application(self):
+        applied = []
+        toolhead = types.SimpleNamespace(max_velocity=180., max_accel=400.)
+
+        def apply(velocity, accel, scv, ratio):
+            applied.append((velocity, accel, scv, ratio))
+            if velocity is not None:
+                toolhead.max_velocity = velocity
+            if accel is not None:
+                toolhead.max_accel = accel
+
+        toolhead.set_max_velocities = apply
+        self.subject.printer = types.SimpleNamespace(command_error=ValueError)
+        self.subject.profile = {'limits': {'max_velocity': 200.,
+                                           'max_accel': 500.}}
+        self.subject.phase_enabled = True
+        self.subject._install_limit_guard(toolhead)
+
+        with self.assertRaisesRegex(ValueError, 'TREED_MOTOR_PHASE ENABLE=0'):
+            toolhead.set_max_velocities(600., 450., None, None)
+        with self.assertRaisesRegex(ValueError, '500'):
+            toolhead.set_max_velocities(None, 25000., None, None)
+        self.assertEqual(applied, [])
+        self.assertEqual((toolhead.max_velocity, toolhead.max_accel),
+                         (180., 400.))
+
+        toolhead.set_max_velocities(None, 450., None, None)
+        self.assertEqual(toolhead.max_accel, 450.)
+        self.subject.phase_enabled = False
+        toolhead.set_max_velocities(600., 25000., None, None)
+        self.assertEqual((toolhead.max_velocity, toolhead.max_accel),
+                         (600., 25000.))
+
+    def test_quiet_mode_keeps_cancel_and_end_commands_available(self):
+        original = Mock()
+        self.subject.gcode = types.SimpleNamespace(_process_commands=original)
+        self.subject.phase_enabled = True
+        self.subject.state = 'idle'
+        self.subject._internal_dispatch = False
+        self.subject._install_gcode_gate()
+
+        commands = ['CANCEL_PRINT', 'END_PRINT',
+                    'TREED_MOTOR_PHASE ENABLE=0']
+        self.subject.gcode._process_commands(commands, False)
+        original.assert_called_once_with(commands, False)
 
     def test_cancel_restores_table_and_temporary_acceleration(self):
         self.subject.printer = types.SimpleNamespace(
@@ -86,6 +219,39 @@ class MotorStateTest(unittest.TestCase):
         self.assertEqual(self.subject.current_tables, self.subject.base_tables)
         self.subject.toolhead.set_max_velocities.assert_called_once_with(
             None, 500., None, None)
+
+    def test_table_alignment_uses_reachable_phase_after_homing(self):
+        phase = [760]
+        self.subject.current_tables = self.subject.base_tables
+        self.subject.drivers = {'stepper_x': types.SimpleNamespace(
+            get_register_raw=lambda name: {'spi_status': 0, 'data': phase[0]})}
+        self.subject.toolhead = types.SimpleNamespace(
+            wait_moves=Mock(), manual_move=Mock())
+        self.subject._ready = Mock(return_value={
+            'axis_minimum': (0., 0., -5.),
+            'axis_maximum': (245., 245., 255.)})
+
+        def jog(motor, steps):
+            phase[0] = (phase[0] + steps * 16) & 1023
+
+        self.subject._phase_jog = Mock(side_effect=jog)
+        target = self.subject._align_motor('stepper_x', wave.make_table())
+        self.assertEqual(target, phase[0])
+        self.assertLessEqual(wave.transition_scores(
+            wave.DEFAULT_TABLE, wave.make_table())[target % 256],
+            calibration.MAX_TABLE_VECTOR_DELTA)
+        self.subject.toolhead.manual_move.assert_called_once_with(
+            (122.5, 122.5, None), 50.)
+
+    def test_isolated_sensor_gap_repeats_only_the_affected_pass(self):
+        self.subject.gcode = types.SimpleNamespace(respond_info=Mock())
+        self.subject._run_pass = Mock(side_effect=[
+            calibration.motor_math.MeasurementError('dropped_samples: gap'),
+            {'quality': 'valid'}])
+        result = self.subject._run_pass_with_retry('same_job')
+        self.assertEqual(result['sample_gap_retries'], 1)
+        self.assertEqual(self.subject._run_pass.call_count, 2)
+        self.subject._run_pass.assert_called_with('same_job')
 
     def test_failed_atomic_replace_keeps_previous_profile(self):
         with tempfile.TemporaryDirectory() as directory:

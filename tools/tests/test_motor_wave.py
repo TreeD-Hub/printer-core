@@ -15,6 +15,20 @@ SPEC.loader.exec_module(wave)
 
 
 class MotorWaveTest(unittest.TestCase):
+    def test_klipper_default_wave_is_accepted_without_relaxing_other_tables(self):
+        points = wave.decode_table(wave.DEFAULT_TABLE)
+        self.assertEqual((points[0], points[-1]), (0, 248))
+        self.assertEqual((wave.DEFAULT_TABLE['MSLUTSTART'] >> 16) & 255, 247)
+        invalid = dict(wave.DEFAULT_TABLE)
+        invalid['MSLUT7'] ^= 1 << 31
+        with self.assertRaisesRegex(ValueError, 'wave_shape_limit'):
+            wave.decode_table(invalid)
+
+    def test_stock_to_generated_table_has_reachable_bounded_switch_phase(self):
+        scores = wave.transition_scores(wave.DEFAULT_TABLE, wave.make_table())
+        self.assertEqual(scores[120], 8)
+        self.assertGreater(scores[248], 16)
+
     def test_encoded_wave_is_bounded_and_continuous(self):
         for a2, p2, a4, p4 in ((0., 0., 0., 0.), (2., 0., 0., 0.),
                                (0., 0., 2., 0.)):

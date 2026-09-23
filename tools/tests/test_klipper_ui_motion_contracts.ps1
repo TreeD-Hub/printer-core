@@ -29,6 +29,7 @@ function Assert-Contains {
 # Блок 2: Загрузка и проверка подключения public macro.
 $macros = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros.cfg") -Raw
 $motion = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_ui_motion.cfg") -Raw
+$core = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_core.cfg") -Raw
 
 Assert-Contains $macros '(?m)^\[include macros_ui_motion\.cfg\]\s*$' "macros.cfg must include UI motion macros"
 Assert-Contains $motion '(?m)^\[gcode_macro TREED_UI_MOVE_AXIS\]\s*$' "TREED_UI_MOVE_AXIS must exist"
@@ -38,7 +39,8 @@ Assert-Contains $motion 'params\.AXIS is not defined' "motion macro must require
 Assert-Contains $motion 'params\.DISTANCE is not defined' "motion macro must require DISTANCE"
 Assert-Contains $motion 'AXIS not in \["X", "Y", "Z"\]' "motion macro must restrict axis values"
 Assert-Contains $motion 'DISTANCE < -MAX_DISTANCE or DISTANCE > MAX_DISTANCE' "motion macro must bound one move"
-Assert-Contains $motion 'PRINT_STATE in \["printing", "paused"\]' "motion macro must reject active print states"
+Assert-Contains $motion '(?m)^\s*_TREED_OPERATION_REQUIRE OP=ui_move\s*$' "motion macro must use shared operation guard"
+Assert-Contains $core 'op == "ui_move".*' "shared operation guard must cover UI motion"
 Assert-Contains $motion 'AXIS\|lower not in HOMED' "motion macro must require selected axis homing"
 Assert-Contains $motion 'printer\.configfile\.settings\.stepper_[xyz]\.position_(min|max)' "motion macro must use profile axis bounds"
 Assert-Contains $motion 'TARGET < POSITION_MIN or TARGET > POSITION_MAX' "motion macro must reject out-of-bounds targets"

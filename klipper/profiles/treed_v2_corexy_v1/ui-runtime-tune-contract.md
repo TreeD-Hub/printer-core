@@ -27,6 +27,11 @@ UI не должен слать raw `M220`, `M221`, `SET_VELOCITY_LIMIT`, `SET_P
 | `TREED_UI_BABYSTEP` | `DELTA` | `-0.05..0.05` мм за команду, `-1.0..1.0` мм суммарно | да | да | `gcode_move.homing_origin.z`, `gcode_macro _TREED_UI_TUNE_STATE.applied_babystep` |
 | `TREED_UI_ADJUST_Z_OFFSET` | `DELTA` | alias для `TREED_UI_BABYSTEP` | да | да | те же поля, что для `TREED_UI_BABYSTEP` |
 
+При включённом `TREED_MOTOR_PHASE ENABLE=1` для `TREED_UI_SET_ACCEL` действует
+дополнительный максимум из проверенного моторного профиля. Значение выше него
+возвращает ошибку до изменения `toolhead.max_accel`; в обычном режиме доступен
+диапазон базового `[printer]`.
+
 Примеры:
 
 ```gcode
@@ -67,8 +72,15 @@ UI должен читать состояние через Moonraker `printer.ob
 - `extruder.pressure_advance` — секунды;
 - `firmware_retraction.retract_length` — мм;
 - `gcode_move.homing_origin.z` — текущий live Z-offset;
-- `gcode_macro _TREED_UI_TUNE_STATE.applied_babystep` — накопленный Z-delta, примененный именно через `TREED_UI_BABYSTEP` / `TREED_UI_ADJUST_Z_OFFSET`;
+- `gcode_macro _TREED_UI_TUNE_STATE.applied_babystep` — зеркало действующего live Z-offset после команд профиля; для отображения и ограничения использовать `gcode_move.homing_origin.z` как источник истины;
 - `extruder.target` и `heater_bed.target` — target температуры сопла и стола.
+
+Повторный `G28` и самостоятельный Eddy Z-home обнуляют live Z-offset и счётчик.
+`START_PRINT` делает это через штатный `G28`. `END_PRINT` сначала захватывает
+смещение для опционального сохранения в Eddy probe, затем обнуляет временное
+смещение и счётчик независимо от `SAVE_Z_OFFSET`. `CANCEL_PRINT` обнуляет их
+без сохранения в probe. Оба пути очищают ожидающее значение Eddy autosave.
+Сохранённая калибровка probe не является live babystep.
 
 ## Не входит в MVP
 

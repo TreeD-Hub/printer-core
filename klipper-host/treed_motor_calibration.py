@@ -14,6 +14,7 @@ from . import homing as klipper_homing
 
 ALGORITHM = 'mslut-xy-h2h4-v1'
 XY_MOTORS = ('stepper_x', 'stepper_y')
+MAX_TABLE_VECTOR_DELTA = 16
 HOMING_MOVE_ORIGINAL = klipper_homing.HomingMove.homing_move
 
 
@@ -62,6 +63,7 @@ class TreedMotorCalibration:
         self.profile = None
         self.profile_state = 'missing'
         self.candidate = None
+        self.verifying_saved_profile = False
         self.phase_enabled = False
         self.phase_transition = False
         self.flow = None
@@ -138,6 +140,7 @@ class TreedMotorCalibration:
             self.phase_reason = ''
         self._load_profile()
         toolhead = self.printer.lookup_object('toolhead')
+        self._install_limit_guard(toolhead)
         for method in ('move', 'drip_move'):
             original = getattr(toolhead, method)
 
@@ -152,6 +155,31 @@ class TreedMotorCalibration:
                 return _original(newpos, speed, *args)
 
             setattr(toolhead, method, guarded_move)
+
+    def _install_limit_guard(self, toolhead):
+        original = toolhead.set_max_velocities
+
+        def guarded(max_velocity, max_accel, square_corner_velocity,
+                    min_cruise_ratio):
+            if self.phase_enabled:
+                limits = self.profile['limits']
+                velocity = (toolhead.max_velocity if max_velocity is None
+                            else max_velocity)
+                accel = toolhead.max_accel if max_accel is None else max_accel
+                if (not math.isfinite(velocity) or not math.isfinite(accel) or
+                        velocity > limits['max_velocity'] or
+                        accel > limits['max_accel']):
+                    raise self.printer.command_error(
+                        'TreeD тихий режим: VELOCITY=%.1f ACCEL=%.0f '
+                        'выше проверенных лимитов %.1f мм/с и %.0f мм/с²; '
+                        'для штатных лимитов сначала выполните '
+                        'TREED_MOTOR_PHASE ENABLE=0' % (
+                            velocity, accel, limits['max_velocity'],
+                            limits['max_accel']))
+            return original(max_velocity, max_accel, square_corner_velocity,
+                            min_cruise_ratio)
+
+        toolhead.set_max_velocities = guarded
 
     def _install_homing_guard(self):
         def guarded(hmove, *args, **kwargs):
@@ -214,6 +242,8 @@ class TreedMotorCalibration:
                 'state': self.state, 'stage': self.stage,
                 'motor': self.motor or '', 'progress': self.progress,
                 'error': self.error or '', 'profile_state': self.profile_state,
+                'profile_reason': (self.profile or {}).get(
+                    'verification_failure', ''),
                 'phase_enabled': self.phase_enabled,
                 'runtime_driver_dirty': self.driver_mutated,
                 'candidate_ready': self.candidate is not None,
@@ -275,6 +305,10 @@ class TreedMotorCalibration:
                 or set(profile.get('tables', {})) != set(XY_MOTORS)
                 or profile.get('verified', {}).get('accepted') is not True):
             raise ValueError('profile_stale_or_incomplete')
+        if ('verification_failure' in profile and
+                (not isinstance(profile['verification_failure'], str) or
+                 not profile['verification_failure'])):
+            raise ValueError('profile_verification_state_invalid')
         if set(profile.get('coefficients', {})) != set(XY_MOTORS):
             raise ValueError('profile_coefficients_missing')
         for motor, table in profile['tables'].items():
@@ -310,33 +344,49 @@ class TreedMotorCalibration:
             self.profile_state = 'stale'
             return
         self.profile = profile
-        self.profile_state = 'saved'
+        self.profile_state = ('rejected' if 'verification_failure' in profile
+                              else 'saved')
 
-    def _align_motor(self, motor):
+    def _align_motor(self, motor, table):
         self.toolhead.wait_moves()
         driver = self.drivers[motor]
-        raw = driver.get_register_raw('MSCNT')
-        if raw['spi_status'] & 0x3:
-            raise motor_math.MeasurementError('tmc_fault_before_table_switch')
-        phase = raw['data'] & 1023
-        if phase % 16:
-            raise motor_math.MeasurementError('tmc_phase_not_on_step_boundary')
-        steps = -(phase // 16)
-        if steps < -32:
-            steps += 64
+        def phase_now():
+            raw = driver.get_register_raw('MSCNT')
+            if raw['spi_status'] & 0x3:
+                raise motor_math.MeasurementError('tmc_fault_before_table_switch')
+            return raw['data'] & 1023
+
+        scores = motor_wave.transition_scores(self.current_tables[motor], table)
+        phase = phase_now()
+        targets = [p for p in range(phase % 16, 1024, 16)
+                   if p % 256 and scores[p % 256] <= MAX_TABLE_VECTOR_DELTA]
+        if not targets:
+            raise motor_math.MeasurementError('tmc_table_transition_too_large')
+        if phase % 256 and scores[phase % 256] <= MAX_TABLE_VECTOR_DELTA:
+            return phase
+        status = self._ready()
+        center = tuple((status['axis_minimum'][i] +
+                        status['axis_maximum'][i]) / 2. for i in (0, 1))
+        self.toolhead.manual_move((center[0], center[1], None), 50.)
+        self.toolhead.wait_moves()
+        phase = phase_now()
+        if phase % 256 and scores[phase % 256] <= MAX_TABLE_VECTOR_DELTA:
+            return phase
+        self._phase_jog(motor, 1)
+        observed = phase_now()
+        delta = (observed - phase) & 1023
+        if delta not in (16, 1008):
+            raise motor_math.MeasurementError('tmc_phase_direction_unknown')
+        direction = 1 if delta == 16 else -1
+        steps, target = min((
+            (((target - observed) * direction // 16 + 32) % 64 - 32,
+             target) for target in targets),
+            key=lambda item: (abs(item[0]), scores[item[1] % 256]))
         if steps:
             self._phase_jog(motor, steps)
-            observed = driver.get_register('MSCNT') & 1023
-            if observed:
-                delta = (observed - phase) & 1023
-                if delta != (-steps * 16) & 1023:
-                    raise motor_math.MeasurementError('tmc_phase_direction_unknown')
-                correction = -(observed // 16)
-                if correction < -32:
-                    correction += 64
-                self._phase_jog(motor, -correction)
-        if driver.get_register('MSCNT') & 1023:
+        if phase_now() != target:
             raise motor_math.MeasurementError('table_alignment_failed')
+        return target
 
     def _phase_jog(self, motor, steps):
         stepper = self.kin_steppers[motor]
@@ -354,16 +404,26 @@ class TreedMotorCalibration:
         self.toolhead.wait_moves()
 
     def _switch_table(self, motor, table):
+        if self.current_tables[motor] == table:
+            return
         motor_wave.decode_table(table)
-        self._align_motor(motor)
+        aligned_phase = self._align_motor(motor, table)
         driver = self.drivers[motor]
         current_before = driver.get_register('MSCURACT')
+        def vector(value):
+            fields = (value & 511, (value >> 16) & 511)
+            return tuple(v - 512 if v & 256 else v for v in fields)
+        baseline = vector(current_before)
         try:
             for reg in motor_wave.REGISTER_NAMES:
                 driver.set_register(reg, table[reg])
+                if any(abs(a - b) > MAX_TABLE_VECTOR_DELTA
+                       for a, b in zip(vector(driver.get_register('MSCURACT')),
+                                       baseline)):
+                    raise motor_math.MeasurementError('tmc_current_vector_changed')
             after = driver.get_register_raw('MSCNT')
-            if (after['spi_status'] & 0x3 or after['data'] & 1023 or
-                    driver.get_register('MSCURACT') != current_before):
+            if (after['spi_status'] & 0x3 or
+                    after['data'] & 1023 != aligned_phase):
                 raise motor_math.MeasurementError('tmc_current_vector_changed')
         except Exception:
             self.printer.invoke_shutdown('TreeD motor table switch failed')
@@ -374,8 +434,6 @@ class TreedMotorCalibration:
     def _switch_tables(self, tables):
         changes = [motor for motor in XY_MOTORS
                    if self.current_tables[motor] != tables[motor]]
-        for motor in changes:
-            self._align_motor(motor)
         for motor in changes:
             self._switch_table(motor, tables[motor])
 
@@ -518,6 +576,18 @@ class TreedMotorCalibration:
                 'move_end_print_time': move_end,
                 'command_start_steps': command_start_steps,
                 'harmonics': harmonics}
+
+    def _run_pass_with_retry(self, job):
+        for retry in range(3):
+            try:
+                result = self._run_pass(job)
+                result['sample_gap_retries'] = retry
+                return result
+            except motor_math.MeasurementError as exc:
+                if not str(exc).startswith('dropped_samples:') or retry == 2:
+                    raise
+                self.gcode.respond_info('TreeD motor sample gap; repeat pass %d/2'
+                                        % (retry + 1))
 
     def _write_report(self):
         self._atomic_json(self.report_path, {
@@ -690,6 +760,30 @@ class TreedMotorCalibration:
         self.state = state
         self.stage = state
         self.error = error
+        if (self.mode == 'verify' and self.verifying_saved_profile and
+                state in ('verified', 'failed')):
+            if self.candidate is self.profile:
+                self.candidate = None
+            profile = dict(self.profile)
+            if state == 'verified':
+                profile.pop('verification_failure', None)
+            else:
+                profile['verification_failure'] = str(error or 'verification_failed')
+            try:
+                self._atomic_json(self.profile_path, profile)
+            except OSError as exc:
+                if state == 'failed':
+                    self.profile = profile
+                    self.profile_state = 'rejected'
+                    self.printer.invoke_shutdown(
+                        'TreeD motor profile rejection could not be saved')
+                self.state = self.stage = 'failed'
+                self.error = '%s; profile_state_write_failed: %s' % (
+                    self.error or '', exc)
+            else:
+                self.profile = profile
+                self.profile_state = ('saved' if state == 'verified'
+                                      else 'rejected')
         if self.mode == 'tune' and state != 'candidate':
             self.candidate = None
         if state in ('measured', 'candidate', 'verified', 'cancelled'):
@@ -736,7 +830,7 @@ class TreedMotorCalibration:
                 action = self.flow.send(self.flow_result)
                 self.flow_result = None
                 if action[0] == 'pass':
-                    result = self._run_pass(action[1])
+                    result = self._run_pass_with_retry(action[1])
                     result['trial'] = action[2]
                     self.results.append(result)
                     self.flow_result = result
@@ -823,6 +917,9 @@ class TreedMotorCalibration:
         self.progress = 0.
         self.cancel_requested = False
         self.mode = mode
+        self.verifying_saved_profile = (mode == 'verify' and
+                                        (self.candidate is None or
+                                         self.candidate is self.profile))
         self.flow = None
         self.flow_result = None
         self.passes_done = 0
@@ -854,9 +951,18 @@ class TreedMotorCalibration:
                                      ensure_ascii=False))
 
     def cmd_phase(self, gcmd):
+        # TODO(N-04): пока это ручной экспериментальный режим вне печати.
+        # START_PRINT выполняет homing, запрещённый при phase_enabled.
+        # Интеграция с печатью требует отдельного порядка включения/выключения
+        # после исправления homing, отзыва непрошедшего профиля, восстановления
+        # состояния и стендовой проверки измерения и применения.
         enabled = gcmd.get_int('ENABLE', minval=0, maxval=1)
         if self.state == 'running':
             raise gcmd.error('motor calibration running')
+        if (enabled and self.profile is not None and
+                'verification_failure' in self.profile):
+            raise gcmd.error('profile verification failed: %s' %
+                             self.profile['verification_failure'])
         self.toolhead = self.printer.lookup_object('toolhead')
         self.kin_steppers = {s.get_name(): s for s in
                              self.toolhead.get_kinematics().get_steppers()}
@@ -909,6 +1015,7 @@ class TreedMotorCalibration:
                 self._atomic_json(self.previous_path, previous)
         self._atomic_json(self.profile_path, self.candidate)
         self.profile = self.candidate
+        self.candidate = None
         self.profile_state = 'saved'
         gcmd.respond_info('TreeD motor profile saved; ENABLE=1 applies it')
 

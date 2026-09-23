@@ -14,15 +14,17 @@
 5. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
 6. `profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg`
 7. `profiles/treed_v2_corexy_v1/steppers.cfg`
-8. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
-9. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
-10. `filament_motion_runtime.cfg`
-11. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-12. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-13. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-14. `profiles/treed_v2_corexy_v1/macros.cfg`
-15. `profiles/treed_v2_corexy_v1/ui.cfg`
-16. `local_overrides.cfg`
+8. `profiles/treed_v2_corexy_v1/motion_guard.cfg`
+9. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
+10. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
+11. `filament_motion_runtime.cfg`
+12. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+13. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+14. `profiles/treed_v2_corexy_v1/motor_calibration.cfg`
+15. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+16. `profiles/treed_v2_corexy_v1/macros.cfg`
+17. `profiles/treed_v2_corexy_v1/ui.cfg`
+18. `local_overrides.cfg`
 
 `macros.cfg` дополнительно подключает:
 - `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
@@ -51,9 +53,14 @@
 
 Для профиля `treed_v2_corexy_v1` X/Y работают в режиме sensorless homing через `tmc5160_*:virtual_endstop`.
 Профиль подключает override `G28`, который:
-- для `G28 X`, `G28 Y` и `G28 X Y` вызывает штатный `G28.1`, затем делает отход на 10 мм от X-min/Y-max и паузу 1 секунду для сброса stall-флага TMC5160;
+- перед каждым `G28.1 X/Y` ждёт завершения движений и не менее 2 секунд без движения для сброса stall-флага TMC5160, затем делает отход на 10 мм от X-min/Y-max; ток и SGT при homing не меняет;
+- до первого движения очищает активную mesh и G-code offsets, оставляя сервисные raw-координаты; старый print-offset не восстанавливается после homing;
+- перед X/Y поднимает известную Z не выше `z_max - 1`; если Z уже у верхней границы, не двигает её вниз;
+- при неизвестной Z прерывает `G28` до любых движений: доступный ход и зазор не подтверждены;
 - для `G28 Z` переводит голову в центр пластины из `_TREED_GEOMETRY_CFG`, вызывает базовый `G28.1 Z` с `probe:z_virtual_endstop`, затем уточняет Z через `PROBE` и `SET_KINEMATIC_POSITION`;
-- если `G28 Z` вызван без готовых X/Y, макрос завершится с явной ошибкой и подсказкой сначала выполнить `G28` или `G28 X Y`.
+- если `G28 Z` вызван без достоверной Z-позиции, макрос завершится с явной ошибкой до переезда X/Y; для его выполнения также нужны готовые X/Y.
+
+После перезапуска, отключения моторов или прерванного homing неизвестную Z нельзя безопасно поднять автоматически. Перед восстановлением печати или автосъёмом требуется независимое определение положения стола и безопасного зазора; все варианты `G28` до восстановления достоверной Z-позиции блокируются. Одна лишь визуальная оценка зазора не делает Z привязанной в Klipper; штатного автоматического восстановления из этого состояния профиль пока не имеет.
 
 Raw-координаты профиля и область печати остаются `X0..245 / Y0..245`.
 Стол и print area имеют размер `245x245`, без расширения механики за `Y245`.
@@ -65,9 +72,9 @@ Eddy scan area меньше области печати: текущий штат
 - `[force_move] enable_force_move: True` входит в штатный профиль, потому что `SET_KINEMATIC_POSITION` нужен для Eddy Z-home correction;
 - `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`, который строит Eddy service mesh внутри safe scan area, а не скан всей области печати.
 
-`START_PRINT` сначала прогревает стол до `BED_TEMP` и делает preheat сопла, затем выполняет рабочий Eddy Z-home, включает print-offset, строит/загружает mesh и только после этого делает скрытый KAMP park helper.
+`START_PRINT` сначала проверяет параметры, наличие выбранного mesh-профиля и KAMP object-метаданные. Затем прогревает стол до `BED_TEMP`, делает preheat сопла и выполняет рабочий Eddy Z-home и опциональный input shaper без старой mesh и смещений. После загрузки/построения новой mesh он один раз включает print-offset и только затем вызывает KAMP park helper.
 Так Z0, mesh и парковка фиксируются в тепловом состоянии печати.
-`_TREED_KAMP_SMART_PARK` паркует голову у стола на Z0 перед финальным нагревом сопла.
+`_TREED_KAMP_SMART_PARK` паркует голову на Z=10 мм перед финальным нагревом сопла; эта высота ожидания не определяет рабочий Z0.
 Финальный нагрев задает `EXTRUDER_TEMP`, но ждет только нижнюю готовность `EXTRUDER_TEMP - HOTEND_READY_MARGIN` (`3C` по умолчанию), поэтому штатный overshoot выше цели не блокирует старт purge/первого слоя.
 `_TREED_KAMP_LINE_PURGE` после готовности сопла сначала поднимается на `purge_height`, затем едет к старту purge-линии.
 
@@ -129,7 +136,8 @@ LIGHT_OFF
 1. Проверить связь с драйверами: `DUMP_TMC STEPPER=stepper_x`, `DUMP_TMC STEPPER=stepper_y`, `DUMP_TMC STEPPER=stepper_z`.
 2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
 3. Зафиксировать финальный `driver_SGT` в рабочем диапазоне без ложных срабатываний.
-4. Критерий приемки: `G28 X` и `G28 Y` делают single touch, отход на 10 мм и паузу 1 секунду; полный `G28` перед `G28 Z` переводит голову в `X122.5 Y122.5`, затем `G28 Z` делает `G28.1 Z` и `PROBE`-коррекцию Eddy; отдельный `G28 Z` без предварительного/встроенного XY homing дает явную ошибку.
+4. Критерий приемки при достоверной Z-позиции: `G28 X` и `G28 Y` после Z-hop ждут завершения движений и не менее 2 секунд, затем делают single touch и отход на 10 мм; полный `G28` повторяет подготовку перед Y и перед `G28 Z` переводит голову в `X122.5 Y122.5`, затем `G28 Z` делает `G28.1 Z` и `PROBE`-коррекцию Eddy; отдельный `G28 Z` без готовых X/Y дает явную ошибку.
+5. После штатного homing без ручных `SET_TMC_*` проверить `TREED_MOTOR_CALIBRATION_STATUS`: `runtime_driver_dirty` должен остаться `false`.
 
 ## Первичная калибровка Eddy
 
@@ -138,9 +146,9 @@ LIGHT_OFF
 Базовый порядок:
 1. Навести датчик примерно в центр стола и около 20 мм над поверхностью.
 2. Выполнить `LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy`, затем `TREED_SAVE_CONFIG`.
-3. После рестарта выполнить `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy`, пройти paper test и `ACCEPT`. Макрос ставит Eddy в центр безопасной scan area, а не в заднюю недостижимую зону стола.
+3. После рестарта `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy` допускается только при уже достоверной Z-позиции. Макрос ставит Eddy в центр безопасной scan area, а не в заднюю недостижимую зону стола. Для первого запуска из неизвестной Z этому профилю нужен отдельный аппаратно проверенный или ручной сервисный порядок; автоматический запуск заблокирован.
 4. Снова выполнить `TREED_SAVE_CONFIG`.
-5. После рестарта выполнить `G28`, затем для компенсации thermal drift выполнить `SET_IDLE_TIMEOUT TIMEOUT=36000`, `TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4`, пройти запрошенные paper test шаги и сохранить через `TREED_SAVE_CONFIG`.
+5. После рестарта сначала независимо восстановить достоверную Z-позицию; штатный профиль не делает этого автоматически. Затем выполнить `G28`, а для компенсации thermal drift — `SET_IDLE_TIMEOUT TIMEOUT=36000`, `TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4`, пройти запрошенные paper test шаги и сохранить через `TREED_SAVE_CONFIG`.
    Если камера/датчик стабильно выходят выше 56C, `TARGET` подбирать по фактической максимальной температуре Eddy.
 
 `eddy_force_move_calibration.cfg` больше не нужен для первичной калибровки: runtime `[force_move]` живет в `probe_eddy_duo.cfg`. Старый include оставлен пустым только для совместимости с локальными конфигами.

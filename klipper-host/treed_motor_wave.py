@@ -7,6 +7,11 @@ import math
 REGISTER_NAMES = tuple('MSLUT%d' % i for i in range(8)) + (
     'MSLUTSEL', 'MSLUTSTART')
 PHASES = (0., math.pi / 2., math.pi, 3. * math.pi / 2.)
+# Штатная таблица TMC5160 из закреплённого Klipper и datasheet, раздел 18.
+DEFAULT_TABLE = dict(zip(REGISTER_NAMES, (
+    0xAAAAB554, 0x4A9554AA, 0x24492929, 0x10104222,
+    0xFBFFFFFF, 0xB5BB777D, 0x49295556, 0x00404222,
+    0xFFFF8056, 0x00F70000)))
 
 
 def make_table(a2=0., p2=0., a4=0., p4=0.):
@@ -63,8 +68,7 @@ def make_table(a2=0., p2=0., a4=0., p4=0.):
     return registers
 
 
-def decode_table(registers):
-    """Декодирование для проверки сохранённого профиля до записи в TMC."""
+def _decode_points(registers):
     if set(registers) != set(REGISTER_NAMES):
         raise ValueError('wave_register_set')
     if any(not isinstance(v, int) or v < 0 or v > 0xffffffff
@@ -84,6 +88,30 @@ def decode_table(registers):
         segment = max(i for i in range(4) if borders[i] <= index)
         bit = (registers['MSLUT%d' % (index // 32)] >> (index % 32)) & 1
         points.append(points[-1] + widths[segment] - 1 + bit)
-    if points[-1] != 247 or min(points) < 0 or max(points) > 247:
+    return points
+
+
+def decode_table(registers):
+    """Декодирование для проверки сохранённого профиля до записи в TMC."""
+    points = _decode_points(registers)
+    # У штатной таблицы сумма последнего дифференциального бита даёт 248;
+    # на позиции 256 драйвер берёт START_SIN90=247, а не эту сумму.
+    stock = registers == DEFAULT_TABLE
+    if (points[-1] != (248 if stock else 247) or min(points) < 0 or
+            max(points) > (248 if stock else 247)):
         raise ValueError('wave_shape_limit')
     return points
+
+
+def transition_scores(before, after):
+    """Максимальное изменение тока на остановленной фазе при записи MSLUT."""
+    current = dict(before)
+    snapshots = [_decode_points(current)]
+    for register in REGISTER_NAMES:
+        current[register] = after[register]
+        snapshots.append(_decode_points(current))
+    baseline = snapshots[0]
+    return tuple(max(max(abs(points[q] - baseline[q]),
+                         abs(points[256 - q] - baseline[256 - q]))
+                     for points in snapshots)
+                 for q in range(256))

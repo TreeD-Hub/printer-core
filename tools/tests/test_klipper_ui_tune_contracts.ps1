@@ -54,6 +54,10 @@ function Get-GcodeMacroBlock {
 # Блок 2: Загрузка UI tune контракта.
 $macros = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros.cfg"
 $uiTune = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_ui_tune.cfg"
+$homing = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_homing.cfg"
+$probe = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
+$printFlow = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_print_flow.cfg"
+$pause = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg"
 $contractDoc = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/ui-runtime-tune-contract.md"
 $profileReadme = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/README.md"
 
@@ -61,6 +65,7 @@ Assert-Contains $macros '(?m)^\[include macros_ui_tune\.cfg\]\s*$' "macros.cfg m
 Assert-Contains $profileReadme 'ui-runtime-tune-contract\.md' "profile README must link the UI runtime tune contract"
 
 $state = Get-GcodeMacroBlock $uiTune "_TREED_UI_TUNE_STATE"
+$resetZ = Get-GcodeMacroBlock $uiTune "_TREED_UI_RESET_Z_OFFSET"
 $speed = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_SPEED_FACTOR"
 $flow = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_FLOW_FACTOR"
 $accel = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_ACCEL"
@@ -103,9 +108,21 @@ Assert-Contains $babystep 'params\.DELTA is not defined' "babystep command must 
 Assert-Contains $babystep 'MIN_DELTA = -0\.05' "babystep command must define min delta"
 Assert-Contains $babystep 'MAX_DELTA = 0\.05' "babystep command must define max delta"
 Assert-Contains $babystep '"z" not in printer\.toolhead\.homed_axes' "babystep command must require homed Z"
+Assert-Contains $babystep 'printer\.gcode_move\.homing_origin\.z\|float \+ delta' "babystep limit must use actual live Z offset"
 Assert-Contains $babystep '(?m)^\s*SET_GCODE_OFFSET Z_ADJUST=\{delta\} MOVE=1 MOVE_SPEED=5\s*$' "babystep command must map to SET_GCODE_OFFSET Z_ADJUST"
 Assert-Contains $babystep 'VARIABLE=applied_babystep VALUE=\{next_applied\}' "babystep command must update applied_babystep state"
 Assert-Contains $adjustZ '(?m)^\s*TREED_UI_BABYSTEP DELTA=\{params\.DELTA\}\s*$' "adjust z-offset command must be an alias to babystep"
+Assert-Contains $resetZ '(?m)^\s*SET_GCODE_OFFSET Z=0 MOVE=0\s*$' "reset must clear actual live Z offset"
+Assert-Contains $resetZ 'VARIABLE=applied_babystep VALUE=0\.0' "reset must clear UI babystep counter"
+Assert-Contains (Get-GcodeMacroBlock $homing "G28") '_TREED_UI_RESET_Z_OFFSET' "G28 must clear live Z offset and counter"
+foreach ($macro in @("_TREED_EDDY_HOME_Z", "TREED_BED_MESH_CALIBRATE_EDDY", "_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET")) {
+  Assert-Contains (Get-GcodeMacroBlock $probe $macro) '_TREED_UI_RESET_Z_OFFSET' "$macro must clear live Z offset and counter"
+}
+Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") '(?s)_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET.*_TREED_UI_RESET_Z_OFFSET' "END_PRINT must capture before clearing live Z offset"
+Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") '_TREED_UI_RESET_Z_OFFSET' "CANCEL_PRINT must discard live babystep"
+Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") 'VARIABLE=has_pending VALUE=0' "END_PRINT must clear stale autosave state"
+Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") 'VARIABLE=has_pending VALUE=0' "CANCEL_PRINT must clear pending Eddy autosave"
+Assert-Contains (Get-GcodeMacroBlock $probe "_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET") '(?s)if enabled == 0.*VARIABLE=has_pending VALUE=0' "disabled Eddy autosave must discard pending offset"
 
 # Блок 5: Документация команды, state surface и MVP-исключений.
 foreach ($command in @(
