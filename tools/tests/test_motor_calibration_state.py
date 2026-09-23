@@ -5,12 +5,13 @@
 # Контур: локальный, без принтера и внешних сервисов.
 import importlib.util
 import json
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 
 HOST = Path(__file__).resolve().parents[2] / 'klipper-host'
@@ -55,6 +56,26 @@ class MotorStateTest(unittest.TestCase):
             'tables': self.subject.base_tables,
             'limits': {'max_velocity': 35., 'max_accel': 500.},
             'verified': {'accepted': True}}
+
+    def _phase_jog_result(self, phase_before, phase_after,
+                          mcu_before, mcu_after, mres=4):
+        phase = [phase_before]
+        mcu_position = [mcu_before]
+        fields = types.SimpleNamespace(
+            get_field=lambda name, value=None: mres)
+        self.subject.drivers = {'stepper_x': types.SimpleNamespace(
+            get_register_raw=lambda name: {
+                'spi_status': 0, 'data': phase[0]},
+            get_register=lambda name: 0,
+            get_fields=lambda: fields)}
+        self.subject.kin_steppers = {'stepper_x': types.SimpleNamespace(
+            get_mcu_position=lambda: mcu_position[0])}
+
+        def jog(motor, steps):
+            phase[0] = phase_after
+            mcu_position[0] = mcu_after
+
+        self.subject._phase_jog = Mock(side_effect=jog)
 
     def test_profile_invalidated_by_firmware_or_config_change(self):
         profile = self._valid_profile()
@@ -301,11 +322,109 @@ class MotorStateTest(unittest.TestCase):
         self.subject.toolhead.set_max_velocities.assert_called_once_with(
             None, 500., None, None)
 
+    def test_cleanup_error_preserves_primary_error(self):
+        self.subject.printer = types.SimpleNamespace(
+            is_shutdown=lambda: False, invoke_shutdown=Mock())
+        self.subject.reactor = types.SimpleNamespace(unregister_timer=Mock())
+        self.subject.gcode = types.SimpleNamespace(respond_info=Mock())
+        self.subject._write_report = Mock()
+        self.subject.timer = None
+        self.subject.mode = 'tune'
+        self.subject.old_accel = None
+        self.subject.current_tables = {'stepper_x': {'changed': 1}}
+        self.subject._switch_tables = Mock(side_effect=ValueError('restore'))
+
+        self.subject._finish('failed', 'calibration')
+
+        self.assertEqual(
+            self.subject.error,
+            'primary_error=calibration; table_restore_failed=restore')
+        self.subject.printer.invoke_shutdown.assert_called_once()
+
+    def test_phase_jog_detects_positive_mscnt_direction(self):
+        self._phase_jog_result(100, 116, 20, 21)
+        self.assertEqual(
+            self.subject._phase_jog_direction('stepper_x'), (1, 16))
+
+    def test_phase_jog_detects_negative_mscnt_direction(self):
+        self._phase_jog_result(100, 84, 20, 21)
+        self.assertEqual(
+            self.subject._phase_jog_direction('stepper_x'), (-1, 16))
+
+    def test_phase_jog_handles_mscnt_wrap(self):
+        self._phase_jog_result(1023, 0, 20, 21, mres=0)
+        self.assertEqual(
+            self.subject._phase_jog_direction('stepper_x'), (1, 1))
+
+    def test_phase_jog_accepts_multiple_actual_microsteps(self):
+        self._phase_jog_result(100, 148, 20, 23)
+        self.assertEqual(
+            self.subject._phase_jog_direction('stepper_x'), (1, 16))
+
+    def test_phase_jog_rejects_missing_actual_steps(self):
+        self._phase_jog_result(100, 100, 20, 20)
+        with self.assertLogs(level='ERROR'):
+            with self.assertRaisesRegex(ValueError, 'tmc_phase_jog_no_steps'):
+                self.subject._phase_jog_direction('stepper_x')
+
+    def test_phase_jog_rejects_mscnt_step_mismatch_with_diagnostics(self):
+        self._phase_jog_result(100, 116, 20, 22)
+        with self.assertLogs(level='ERROR') as logs:
+            with self.assertRaisesRegex(ValueError,
+                                        'tmc_phase_direction_unknown'):
+                self.subject._phase_jog_direction('stepper_x')
+        message = logs.output[0]
+        for value in ('motor=stepper_x', 'MSCNT_before=100',
+                      'MSCNT_after=116', 'MSCNT_delta=16',
+                      'MCU_step_position_before=20',
+                      'MCU_step_position_after=22',
+                      'MCU_step_position_delta=2', 'MRES=4',
+                      'expected_MSCNT_delta=+/-32'):
+            self.assertIn(value, message)
+
+    def test_tune_preflight_failure_stops_before_table_write(self):
+        self.subject.cancel_requested = False
+        self.subject.stage = 'homing'
+        self.subject.mode = 'tune'
+        self.subject.timer = object()
+        self.subject.reactor = types.SimpleNamespace(NEVER=99, monotonic=lambda: 1.)
+        self.subject.gcode = types.SimpleNamespace(
+            get_mutex=lambda: nullcontext(), run_script_from_command=Mock())
+        self.subject._preflight_phase_tracking = Mock(
+            side_effect=ValueError('phase_link'))
+        self.subject._switch_table = Mock()
+        self.subject._finish = Mock()
+
+        self.assertEqual(self.subject._next(0.), 99)
+        self.subject._finish.assert_called_once_with('failed', 'phase_link')
+        self.subject._switch_table.assert_not_called()
+
+    def test_phase_preflight_requires_both_xy_motors(self):
+        self.subject.phase_directions = {'stale': (1, 16)}
+        self.subject.toolhead = types.SimpleNamespace(
+            wait_moves=Mock(), manual_move=Mock())
+        self.subject._ready = Mock(return_value={
+            'axis_minimum': (0., 0., -5.),
+            'axis_maximum': (245., 245., 255.)})
+        self.subject._phase_jog_direction = Mock(side_effect=[
+            (1, 16), ValueError('step_y_link')])
+
+        with self.assertRaisesRegex(ValueError, 'step_y_link'):
+            self.subject._preflight_phase_tracking()
+
+        self.assertEqual(
+            self.subject._phase_jog_direction.call_args_list,
+            [call('stepper_x'), call('stepper_y')])
+        self.assertEqual(self.subject.phase_directions, {})
+
     def test_table_alignment_uses_reachable_phase_after_homing(self):
         phase = [760]
         self.subject.current_tables = self.subject.base_tables
+        fields = types.SimpleNamespace(get_field=lambda name, value=None: 4)
         self.subject.drivers = {'stepper_x': types.SimpleNamespace(
-            get_register_raw=lambda name: {'spi_status': 0, 'data': phase[0]})}
+            get_register_raw=lambda name: {'spi_status': 0, 'data': phase[0]},
+            get_register=lambda name: 0, get_fields=lambda: fields)}
+        self.subject.phase_directions = {'stepper_x': (1, 16)}
         self.subject.toolhead = types.SimpleNamespace(
             wait_moves=Mock(), manual_move=Mock())
         self.subject._ready = Mock(return_value={
@@ -614,8 +733,10 @@ class MotorStateTest(unittest.TestCase):
     def test_circle_switch_never_jogs_to_find_safe_phase(self):
         subject = self.subject
         subject.current_tables = subject.base_tables
+        fields = types.SimpleNamespace(get_field=lambda name, value=None: 4)
         subject.drivers = {'stepper_x': types.SimpleNamespace(
-            get_register_raw=lambda name: {'spi_status': 0, 'data': 760})}
+            get_register_raw=lambda name: {'spi_status': 0, 'data': 760},
+            get_register=lambda name: 0, get_fields=lambda: fields)}
         subject.toolhead = types.SimpleNamespace(
             wait_moves=Mock(), manual_move=Mock())
         with self.assertRaisesRegex(ValueError, 'requires_motion'):

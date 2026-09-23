@@ -4,6 +4,7 @@
 import hashlib
 import datetime
 import json
+import logging
 import math
 import os
 import tempfile
@@ -74,6 +75,7 @@ class TreedMotorCalibration:
         self.flow_result = None
         self.mode = None
         self.passes_done = 0
+        self.phase_directions = {}
         self._internal_dispatch = False
         self.report_path = os.path.join(
             os.path.dirname(os.path.dirname(
@@ -377,46 +379,102 @@ class TreedMotorCalibration:
         self.profile_state = ('rejected' if 'verification_failure' in profile
                               else 'saved')
 
+    def _phase_now(self, motor):
+        driver = self.drivers[motor]
+        raw = driver.get_register_raw('MSCNT')
+        if raw['spi_status'] & 0x3:
+            raise motor_math.MeasurementError('tmc_fault_before_table_switch')
+        return raw['data'] & 1023
+
+    def _phase_step(self, motor):
+        driver = self.drivers[motor]
+        mres = driver.get_fields().get_field(
+            'mres', driver.get_register('CHOPCONF'))
+        if not isinstance(mres, int) or not 0 <= mres <= 8:
+            raise motor_math.MeasurementError('tmc_mres_invalid')
+        return mres, 1 << mres
+
+    def _phase_jog_direction(self, motor):
+        stepper = self.kin_steppers[motor]
+        mres, phase_step = self._phase_step(motor)
+        phase_before = self._phase_now(motor)
+        mcu_before = stepper.get_mcu_position()
+        self._phase_jog(motor, 1)
+        phase_after = self._phase_now(motor)
+        mcu_after = stepper.get_mcu_position()
+        phase_delta = (phase_after - phase_before + 512) % 1024 - 512
+        mcu_delta = mcu_after - mcu_before
+        expected = abs(mcu_delta) * phase_step
+        if (not mcu_delta or expected >= 512 or
+                abs(phase_delta) != expected):
+            logging.error(
+                'TreeD motor phase tracking mismatch: motor=%s '
+                'MSCNT_before=%d MSCNT_after=%d MSCNT_delta=%d '
+                'MCU_step_position_before=%d MCU_step_position_after=%d '
+                'MCU_step_position_delta=%d MRES=%d '
+                'expected_MSCNT_delta=+/-%d',
+                motor, phase_before, phase_after, phase_delta,
+                mcu_before, mcu_after, mcu_delta, mres, expected)
+            reason = ('tmc_phase_jog_no_steps' if not mcu_delta else
+                      'tmc_phase_direction_unknown')
+            raise motor_math.MeasurementError(reason)
+        return (1 if phase_delta > 0 else -1), phase_step
+
+    def _move_to_phase_center(self):
+        status = self._ready()
+        center = tuple((status['axis_minimum'][i] +
+                        status['axis_maximum'][i]) / 2. for i in (0, 1))
+        self.toolhead.manual_move((center[0], center[1], None), 50.)
+        self.toolhead.wait_moves()
+
+    def _preflight_phase_tracking(self):
+        self.toolhead.wait_moves()
+        self._move_to_phase_center()
+        self.phase_directions = {}
+        directions = {}
+        for motor in XY_MOTORS:
+            directions[motor] = self._phase_jog_direction(motor)
+        self.phase_directions = directions
+
     def _align_motor(self, motor, table, allow_jog=True):
         self.toolhead.wait_moves()
-        driver = self.drivers[motor]
-        def phase_now():
-            raw = driver.get_register_raw('MSCNT')
-            if raw['spi_status'] & 0x3:
-                raise motor_math.MeasurementError('tmc_fault_before_table_switch')
-            return raw['data'] & 1023
+        _, phase_step = self._phase_step(motor)
+
+        def reachable(phase):
+            return [p for p in range(phase % phase_step, 1024, phase_step)
+                    if p % 256 and
+                    scores[p % 256] <= MAX_TABLE_VECTOR_DELTA]
 
         scores = motor_wave.transition_scores(self.current_tables[motor], table)
-        phase = phase_now()
-        targets = [p for p in range(phase % 16, 1024, 16)
-                   if p % 256 and scores[p % 256] <= MAX_TABLE_VECTOR_DELTA]
+        phase = self._phase_now(motor)
+        targets = reachable(phase)
         if not targets:
             raise motor_math.MeasurementError('tmc_table_transition_too_large')
         if phase % 256 and scores[phase % 256] <= MAX_TABLE_VECTOR_DELTA:
             return phase
         if not allow_jog:
             raise motor_math.MeasurementError('tmc_phase_alignment_requires_motion')
-        status = self._ready()
-        center = tuple((status['axis_minimum'][i] +
-                        status['axis_maximum'][i]) / 2. for i in (0, 1))
-        self.toolhead.manual_move((center[0], center[1], None), 50.)
-        self.toolhead.wait_moves()
-        phase = phase_now()
+        self._move_to_phase_center()
+        phase = self._phase_now(motor)
         if phase % 256 and scores[phase % 256] <= MAX_TABLE_VECTOR_DELTA:
             return phase
-        self._phase_jog(motor, 1)
-        observed = phase_now()
-        delta = (observed - phase) & 1023
-        if delta not in (16, 1008):
-            raise motor_math.MeasurementError('tmc_phase_direction_unknown')
-        direction = 1 if delta == 16 else -1
+        tracking = getattr(self, 'phase_directions', {}).pop(motor, None)
+        if tracking is None or tracking[1] != phase_step:
+            tracking = self._phase_jog_direction(motor)
+        direction, phase_step = tracking
+        observed = self._phase_now(motor)
+        targets = reachable(observed)
+        if not targets:
+            raise motor_math.MeasurementError('tmc_table_transition_too_large')
+        phase_count = 1024 // phase_step
         steps, target = min((
-            (((target - observed) * direction // 16 + 32) % 64 - 32,
+            (((target - observed) * direction // phase_step +
+              phase_count // 2) % phase_count - phase_count // 2,
              target) for target in targets),
             key=lambda item: (abs(item[0]), scores[item[1] % 256]))
         if steps:
             self._phase_jog(motor, steps)
-        if phase_now() != target:
+        if self._phase_now(motor) != target:
             raise motor_math.MeasurementError('table_alignment_failed')
         return target
 
@@ -1002,7 +1060,10 @@ class TreedMotorCalibration:
                 self._switch_tables(self.base_tables)
             except Exception as exc:
                 self.printer.invoke_shutdown('TreeD motor calibration recovery failed')
-                state, error = 'failed', 'table_restore_failed: %s' % exc
+                restore_error = 'table_restore_failed=%s' % exc
+                error = ('primary_error=%s; %s' % (error, restore_error)
+                         if error else restore_error)
+                state = 'failed'
         if self.mode == 'circle':
             if not self.printer.is_shutdown():
                 try:
@@ -1094,6 +1155,7 @@ class TreedMotorCalibration:
                         'Worst sector: %g mm/s / %s / sector %d: %+.1f%% (%s)'
                         % (worst[1], worst[2], worst[3], worst[0], worst[4]))
             return
+        self.phase_directions = {}
         try:
             self._write_report()
         except OSError as exc:
@@ -1122,6 +1184,8 @@ class TreedMotorCalibration:
                         self.flow = self._measure_flow(self.requested_motors)
                         self.stage = 'measuring'
                     elif self.mode == 'tune':
+                        self.stage = 'phase_preflight'
+                        self._preflight_phase_tracking()
                         self.flow = self._tune_flow()
                         self.stage = 'baseline'
                     else:
@@ -1251,6 +1315,7 @@ class TreedMotorCalibration:
         self.flow = None
         self.flow_result = None
         self.passes_done = 0
+        self.phase_directions = {}
         self.old_accel = self.toolhead.get_max_velocity()[1]
         self.state = 'running'
         self.stage = 'homing'
