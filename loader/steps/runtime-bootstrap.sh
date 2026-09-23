@@ -592,6 +592,14 @@ fi
 
 # Блок 6: Klipper env/service (репозиторий ожидается локально, clone fallback включен).
 ensure_repo_present "${KLIPPER_DIR}" "${KLIPPER_REPO}" "${KLIPPER_REF}" "${KLIPPER_BRANCH}" "Klipper"
+# Компенсация шума временно отключена; удаляем ранее установленный runtime-код.
+rm -f \
+  "${KLIPPER_DIR}/klippy/extras/treed_motor_calibration.py" \
+  "${KLIPPER_DIR}/klippy/extras/treed_motor_math.py" \
+  "${KLIPPER_DIR}/klippy/extras/treed_motor_wave.py" \
+  "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_calibration."*.pyc \
+  "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_math."*.pyc \
+  "${KLIPPER_DIR}/klippy/extras/__pycache__/treed_motor_wave."*.pyc
 for extension in "${REPO_DIR}/klipper-host/"treed_motor_*.py; do
   [ -f "${extension}" ] || { log_error "runtime-bootstrap: missing motor extension"; exit 1; }
   install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${extension}" "${KLIPPER_DIR}/klippy/extras/$(basename "${extension}")"

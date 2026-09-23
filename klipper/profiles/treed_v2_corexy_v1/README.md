@@ -21,11 +21,10 @@
 12. `filament_motion_runtime.cfg`
 13. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
 14. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-15. `profiles/treed_v2_corexy_v1/motor_calibration.cfg`
-16. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-17. `profiles/treed_v2_corexy_v1/macros.cfg`
-18. `profiles/treed_v2_corexy_v1/ui.cfg`
-19. `local_overrides.cfg`
+15. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+16. `profiles/treed_v2_corexy_v1/macros.cfg`
+17. `profiles/treed_v2_corexy_v1/ui.cfg`
+18. `local_overrides.cfg`
 
 `macros.cfg` дополнительно подключает:
 - `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
@@ -139,8 +138,6 @@ LIGHT_OFF
 2. По одной оси подобрать диапазон чувствительности через `SET_TMC_FIELD STEPPER=stepper_x FIELD=SGT VALUE=...` и аналогично для Y/Z.
 3. Зафиксировать финальный `driver_SGT` в рабочем диапазоне без ложных срабатываний.
 4. Критерий приемки при достоверной Z-позиции: `G28 X` и `G28 Y` после Z-hop ждут завершения движений и не менее 2 секунд, затем делают single touch и отход на 10 мм; полный `G28` повторяет подготовку перед Y и перед `G28 Z` переводит голову в `X122.5 Y122.5`, затем `G28 Z` делает `G28.1 Z` и `PROBE`-коррекцию Eddy; отдельный `G28 Z` без готовых X/Y дает явную ошибку.
-5. После штатного homing без ручных `SET_TMC_*` проверить `TREED_MOTOR_CALIBRATION_STATUS`: `runtime_driver_dirty` должен остаться `false`.
-
 ## Первичная калибровка Eddy
 
 До сохраненной калибровки `PROBE_EDDY_CURRENT_CALIBRATE` любые `PROBE`, `BED_MESH_CALIBRATE` и `TREED_Z_PARK_ZERO_EDDY` будут падать с `Must calibrate probe_eddy_current first`.
@@ -160,9 +157,6 @@ LIGHT_OFF
 ## Калибровка input shaper
 
 ADXL345 подключен на EBB42 в `ebb42_can.cfg`. Секция `input_shaper.cfg` намеренно не содержит частоты, типы и damping ratio: эти значения живут в stock `SAVE_CONFIG`-блоке `printer.cfg`, чтобы `SHAPER_CALIBRATE` мог сохранять новые результаты без конфликта с include.
-
-Измерение гармоник двигателей задаёт `motor_calibration.cfg`; состояние и
-границы фазного управления описаны в `docs/motor-noise-calibration.md`.
 
 Ручная full-калибровка:
 

@@ -210,9 +210,6 @@ UNLOAD_FILAMENT LENGTH=120 SPEED=8
 | `TREED_UI_ADJUST_Z_OFFSET` | `TREED_UI_ADJUST_Z_OFFSET DELTA=0.02` | alias для `TREED_UI_BABYSTEP` |
 
 После успешной команды UI должен перечитать состояние через Moonraker objects, а не парсить текст `RESPOND`.
-При `TREED_MOTOR_PHASE ENABLE=1` ускорение дополнительно ограничено
-сохранённым профилем; несовместимое значение отклоняется до изменения лимита.
-
 Минимальный набор объектов:
 - `gcode_move`: `speed_factor`, `extrude_factor`, `homing_origin`;
 - `toolhead`: `max_velocity`, `max_accel`;
@@ -432,10 +429,6 @@ TREED_MOTION_LIMITS_DEFAULT
 ```
 
 Восстанавливает `VELOCITY`, `ACCEL` и `SQUARE_CORNER_VELOCITY` из секции `[printer]`.
-Если включён моторный профиль и штатные лимиты превышают проверенные,
-команда откажет без изменения настроек. Сначала выполните
-`TREED_MOTOR_PHASE ENABLE=0`.
-
 Короткие aliases для Fluidd:
 - `CALIBRATE_SCREWS` -> `TREED_SCREWS_TILT_CALIBRATE`;
 - `CALIBRATE_BED_MESH` -> `TREED_EDDY_BED_MESH_CALIBRATE`;

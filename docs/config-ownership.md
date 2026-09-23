@@ -70,11 +70,6 @@ Runtime:
 Локальные runtime-overrides:
 - `${PI_HOME}/printer_data/config/local_overrides.cfg`
 
-Локальные данные измерения двигателей (не удаляются раскладкой `klipper-core`):
-- `${PI_HOME}/printer_data/treed_motor_calibration/last_measurement.json`
-- `${PI_HOME}/printer_data/treed_motor_calibration/active_profile.json`
-- `${PI_HOME}/printer_data/treed_motor_calibration/previous_profile.json`
-
 CAN-host слой:
 - `/etc/default/treed-can-setup`
 - `/usr/local/sbin/treed-can-setup.sh`

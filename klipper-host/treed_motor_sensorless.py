@@ -31,9 +31,6 @@ class TreedMotorSensorless:
             value = obj.get_status(now).get(key)
             if value in ('printing', 'paused') or value is True:
                 raise gcmd.error('printer_busy_or_paused')
-        motor = self.printer.lookup_object('treed_motor_calibration', None)
-        if motor is not None and (motor.state == 'running' or motor.phase_enabled):
-            raise gcmd.error('motor_calibration_active')
         status = toolhead.get_status(now)
         if not all(axis in status['homed_axes'] for axis in 'xyz'):
             raise gcmd.error('verified_xyz_home_required')

@@ -119,8 +119,6 @@ fi
 FW_MAIN_SHA="$(firmware_config_sha "${TREED_FW_MAIN_CONFIG}")"
 FW_EBB_SHA="$(firmware_config_sha "${TREED_FW_EBB_CONFIG}")"
 FW_EDDY_SHA="$(firmware_config_sha "${TREED_FW_EDDY_CONFIG}")"
-MOTOR_HOST_SHA="$(cd "${REPO_DIR}/klipper-host" && sha256sum treed_motor_*.py | sha256sum | awk '{print $1}')"
-TREED_BUILD_ID="$(printf '%s\n' "${KLIPPER_HEAD}" "${MOTOR_HOST_SHA}" "${FW_MAIN_SHA}" "${FW_EBB_SHA}" "${FW_EDDY_SHA}" | sha256sum | awk '{print $1}')"
 
 LATEST_LINK="${TREED_FIRMWARE_ARTIFACTS_DIR}/latest"
 
@@ -155,8 +153,6 @@ firmware_inputs_current() {
   fi
 
   grep -Fx "klipper_head=${KLIPPER_HEAD}" "${inputs_file}" >/dev/null || return 1
-  grep -Fx "motor_host_sha256=${MOTOR_HOST_SHA}" "${inputs_file}" >/dev/null || return 1
-  grep -Fx "treed_build_id=${TREED_BUILD_ID}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "main_config_sha256=${FW_MAIN_SHA}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "ebb_config_sha256=${FW_EBB_SHA}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "eddy_enabled=${TREED_EDDY_ENABLED}" "${inputs_file}" >/dev/null || return 1
@@ -213,16 +209,12 @@ started_at=$(date -Iseconds)
 run_id=${RUN_ID}
 klipper_src=${TREED_KLIPPER_SRC_DIR}
 klipper_head=${KLIPPER_HEAD}
-motor_host_sha256=${MOTOR_HOST_SHA}
-treed_build_id=${TREED_BUILD_ID}
 build_jobs=${BUILD_JOBS}
 eddy_enabled=${TREED_EDDY_ENABLED}
 EOF
 
 cat > "${INPUTS_FILE}" <<EOF
 klipper_head=${KLIPPER_HEAD}
-motor_host_sha256=${MOTOR_HOST_SHA}
-treed_build_id=${TREED_BUILD_ID}
 main_config=${TREED_FW_MAIN_CONFIG}
 main_config_sha256=${FW_MAIN_SHA}
 ebb_config=${TREED_FW_EBB_CONFIG}

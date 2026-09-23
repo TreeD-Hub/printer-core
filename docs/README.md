@@ -1,7 +1,6 @@
 > Root project map: `README.md`
 > Canonical config ownership model: `docs/config-ownership.md`
 
-Измерения двигателей и граница фазного управления: [Motor Noise Calibration](motor-noise-calibration.md).
 Калибровка X/Y sensorless: [Sensorless Calibration](sensorless-calibration.md).
 
 ## Быстрый install path (V2)

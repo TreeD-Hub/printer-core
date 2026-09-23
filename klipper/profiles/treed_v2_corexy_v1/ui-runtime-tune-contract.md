@@ -27,11 +27,6 @@ UI не должен слать raw `M220`, `M221`, `SET_VELOCITY_LIMIT`, `SET_P
 | `TREED_UI_BABYSTEP` | `DELTA` | `-0.05..0.05` мм за команду, `-1.0..1.0` мм суммарно | да | да | `gcode_move.homing_origin.z`, `gcode_macro _TREED_UI_TUNE_STATE.applied_babystep` |
 | `TREED_UI_ADJUST_Z_OFFSET` | `DELTA` | alias для `TREED_UI_BABYSTEP` | да | да | те же поля, что для `TREED_UI_BABYSTEP` |
 
-При включённом `TREED_MOTOR_PHASE ENABLE=1` для `TREED_UI_SET_ACCEL` действует
-дополнительный максимум из проверенного моторного профиля. Значение выше него
-возвращает ошибку до изменения `toolhead.max_accel`; в обычном режиме доступен
-диапазон базового `[printer]`.
-
 Примеры:
 
 ```gcode
