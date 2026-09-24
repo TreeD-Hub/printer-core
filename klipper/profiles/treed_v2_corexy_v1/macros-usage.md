@@ -48,19 +48,17 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220
 | `MESH_METHOD` | `rapid_scan` | Необязательное legacy-значение `rapid_scan`; остальные методы отклоняются. |
 | `ADAPTIVE_MARGIN` | `5` | Отступ adaptive mesh от объектов. |
 | `HOTEND_READY_MARGIN` | `3` | Сколько градусов можно не дождаться до цели сопла перед purge. |
-| `SHAPER` | `none` | `none`, `light` или `full` перед печатью. |
-| `SHAPER_ACCEL` | `auto` | Ускорение для shaper-прогона. |
 
 Что делает `START_PRINT`:
-1. До изменения состояния валидирует параметры и object-метаданные для KAMP и нативной adaptive mesh.
+1. До изменения состояния валидирует параметры и object-метаданные для нативной adaptive mesh.
 2. Первой state-changing командой выполняет `BED_MESH_CLEAR`, затем сбрасывает G-code offsets.
 3. Включает нагрев стола и preheat сопла, дожидается температуры стола.
-4. Выполняет полный `G28` через sensorless X/Y и Eddy Z-home; при необходимости запускает light/full input shaper.
+4. Выполняет полный `G28` через sensorless X/Y и Eddy Z-home.
 5. Строит новую mesh через Eddy в сервисных raw-координатах: `METHOD=rapid_scan ADAPTIVE=1` с отступом `ADAPTIVE_MARGIN`. Klipper сразу активирует результат.
-6. Включает print-offset рабочей зоны и паркуется на Z=10 мм у объекта после всех калибровочных движений.
-7. Догревает сопло, выполняет скрытый `_TREED_KAMP_LINE_PURGE` и запускает runtime-сессию камеры.
+6. Включает print-offset рабочей зоны и паркуется на Z=10 мм в передней полосе.
+7. Догревает сопло, выполняет фиксированный `_TREED_LINE_PURGE` и запускает runtime-сессию камеры.
 
-Object labels в G-code и `enable_object_processing` в Moonraker обязательны: без polygon-метаданных `START_PRINT` завершится до очистки mesh и прогрева. `MESH=load|none|calibrate`, `MESH_METHOD=scan|automatic|manual`, `MESH_PROFILE` и `MESH_MIN`/`MESH_MAX` здесь отклоняются; для сервисного сканирования используйте `TREED_BED_MESH_CALIBRATE_EDDY`. Высота ожидания сопла `smart_park_height` задаётся отдельно от рабочего Z0.
+Object labels в G-code и `enable_object_processing` в Moonraker обязательны для adaptive mesh: без polygon-метаданных `START_PRINT` завершится до очистки mesh и прогрева. `MESH=load|none|calibrate`, `MESH_METHOD=scan|automatic|manual`, `MESH_PROFILE`, `MESH_MIN`/`MESH_MAX`, `SHAPER` и `SHAPER_ACCEL` отклоняются. Для сервисного сканирования используйте `TREED_BED_MESH_CALIBRATE_EDDY`. Высота ожидания сопла `park_height` задаётся отдельно от рабочего Z0.
 
 ### `END_PRINT`
 
@@ -206,8 +204,7 @@ UNLOAD_FILAMENT LENGTH=120 SPEED=8
 | `TREED_UI_SET_ACCEL` | `TREED_UI_SET_ACCEL ACCEL=12000` | `500..printer.max_accel` |
 | `TREED_UI_SET_PRESSURE_ADVANCE` | `TREED_UI_SET_PRESSURE_ADVANCE ADVANCE=0.075` | `0..0.20` |
 | `TREED_UI_SET_RETRACTION` | `TREED_UI_SET_RETRACTION RETRACT_LENGTH=0.9` | `0..5.0` мм |
-| `TREED_UI_BABYSTEP` | `TREED_UI_BABYSTEP DELTA=-0.02` | `-0.05..0.05` мм за команду, суммарно `-1.0..1.0` |
-| `TREED_UI_ADJUST_Z_OFFSET` | `TREED_UI_ADJUST_Z_OFFSET DELTA=0.02` | alias для `TREED_UI_BABYSTEP` |
+| `TREED_UI_ADJUST_Z_OFFSET` | `TREED_UI_ADJUST_Z_OFFSET DELTA=0.02` | `-0.05..0.05` мм за команду, суммарно `-1.0..1.0` |
 
 После успешной команды UI должен перечитать состояние через Moonraker objects, а не парсить текст `RESPOND`.
 Минимальный набор объектов:
@@ -249,7 +246,7 @@ BED_MESH_CALIBRATE PROFILE=default METHOD=automatic
 - передает эффективные `MESH_MIN`/`MESH_MAX` в базовый Klipper `BED_MESH_CALIBRATE_BASE`;
 - принимает `SCAN_SPEED` только для `METHOD=rapid_scan`; для остальных методов скорость XY берется из `[bed_mesh] speed`.
 
-`TREED_EDDY_BED_MESH_CALIBRATE` и `CALIBRATE_BED_MESH` также передают необязательные `MESH_MIN`/`MESH_MAX` в эту обертку. При `y_offset: -30` штатная область датчика `Y10..210` соответствует перемещению головы `Y40..240`.
+`TREED_EDDY_BED_MESH_CALIBRATE` также передаёт необязательные `MESH_MIN`/`MESH_MAX` в эту обертку. При `y_offset: -30` штатная область датчика `Y10..210` соответствует перемещению головы `Y40..240`.
 
 Это Eddy service mesh в safe scan area, а не скан всей области печати. Scan area меньше стола, потому что sensing point датчика смещен относительно сопла и не может физически покрыть всю заднюю часть `245x245`.
 
@@ -345,38 +342,31 @@ TREED_SHAPER_CALIBRATE MODE=light ACCEL=12000 SAVE=0 HOME=1
 TREED_SHAPER_CALIBRATE MODE=full ACCEL=25000 SAVE=1 HOME=1
 ```
 
-Ручная калибровка допускается только в простое. Внутри `START_PRINT` она запускается в отдельной внутренней фазе с `SAVE=0 HOME=0`; параметр `SOURCE` больше не даёт разрешения на калибровку во время печати.
+Калибровка допускается только в простое и запускается отдельно от `START_PRINT`.
 
-В `START_PRINT` можно включить легкий прогон так:
-
-```gcode
-START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220 SHAPER=light SHAPER_ACCEL=12000
-```
-
-## 9. KAMP park/purge
+## 9. Фиксированные park/purge
 
 Эти helper-ы скрыты от Fluidd префиксом `_` и вручную обычно не вызываются: `START_PRINT` вызывает их сам после homing и mesh, при включённом print-offset.
 
-### `_TREED_KAMP_SMART_PARK`
+### `_TREED_SMART_PARK`
 
 ```gcode
-_TREED_KAMP_SMART_PARK
+_TREED_SMART_PARK
 ```
 
-Паркует голову рядом с минимальной точкой объекта в print-координатах. Требует object metadata через `[exclude_object]`, homed X/Y/Z и включённый print-offset; при нарушении контракта завершится ошибкой до движения.
+Паркует голову в передней полосе print-координат. Требует homed X/Y/Z и включённый print-offset; при нарушении контракта завершится ошибкой до движения.
 
-### `_TREED_KAMP_LINE_PURGE`
+### `_TREED_LINE_PURGE`
 
 ```gcode
-_TREED_KAMP_LINE_PURGE
+_TREED_LINE_PURGE
 ```
 
-Делает purge-линию рядом с объектом с клипингом по рабочей области. Требует:
+Делает фиксированную purge-линию с клипингом по рабочей области. По умолчанию полоса `X10..50, Y5` должна оставаться свободной от модели. Требует:
 - homed X/Y/Z и включённый print-offset;
-- object polygon metadata;
 - `extruder.max_extrude_cross_section >= 5`.
 
-Параметры поведения хранятся в `_KAMP_Settings`: `purge_height`, `purge_margin`, `purge_amount`, `flow_rate`, `smart_park_height` и другие.
+Параметры калибровки хранятся в `_TREED_START_PURGE_CFG`: `park_height`, `purge_height`, `x_inset`, `y_inset`, `purge_amount`, `break_distance`, `flow_rate`.
 
 ## 10. Камера
 
@@ -386,14 +376,7 @@ _TREED_KAMP_LINE_PURGE
 - `PAUSE` останавливает тикер снимков;
 - `RESUME` возвращает тикер, если камера работала до паузы.
 
-Для обратной совместимости есть deprecated-алиасы:
-
-```gcode
-TREED_CAM_START
-TREED_CAM_STOP
-```
-
-В новых сценариях лучше не вызывать их вручную. Runtime-снимки завязаны на Moonraker shell-command `treed_cam_session_start`, `treed_cam_snapshot`, `treed_cam_session_stop`.
+Runtime-снимки завязаны на Moonraker shell-command `treed_cam_session_start`, `treed_cam_snapshot`, `treed_cam_session_stop`.
 
 ## 11. Сервисные команды
 
@@ -433,15 +416,6 @@ TREED_MOTION_LIMITS_DEFAULT
 ```
 
 Восстанавливает `VELOCITY`, `ACCEL` и `SQUARE_CORNER_VELOCITY` из секции `[printer]`.
-Короткие aliases для Fluidd:
-- `CALIBRATE_SCREWS` -> `TREED_SCREWS_TILT_CALIBRATE`;
-- `CALIBRATE_BED_MESH` -> `TREED_EDDY_BED_MESH_CALIBRATE`;
-- `CALIBRATE_EDDY_DRIVE` -> `TREED_EDDY_CALIBRATE_DRIVE_CURRENT`;
-- `CALIBRATE_EDDY_HEIGHT` -> `TREED_EDDY_PRIMARY_HEIGHT_START`;
-- `CALIBRATE_EDDY_TEMP` -> `TREED_EDDY_TEMPERATURE_START`;
-- `CHECK_Z0` -> `TREED_EDDY_CHECK_Z0`;
-- `MOTION_TEST` -> `TREED_XY_MOTION_TEST`;
-- `MOTION_LIMITS_DEFAULT` -> `TREED_MOTION_LIMITS_DEFAULT`.
 
 ## 12. Capability state для TreeD Shell
 

@@ -15,13 +15,8 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 предыдущую mesh, выполняет Eddy Z-home и строит новую adaptive mesh через
 `rapid_scan`. Сохранённые mesh-профили для обычной печати не загружаются.
 
-Для необязательного лёгкого input shaper-прогона перед печатью:
-
-```gcode
-START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] SHAPER=light SHAPER_ACCEL=12000
-```
-
-По умолчанию `SHAPER=none`. Параметры `MESH=load`, `MESH=calibrate`,
+Калибровка input shaper выполняется отдельно командой `TREED_SHAPER_CALIBRATE`.
+Параметры `SHAPER` и `SHAPER_ACCEL` в `START_PRINT` отклоняются. Параметры `MESH=load`, `MESH=calibrate`,
 `MESH_METHOD=scan|automatic|manual`, `MESH_PROFILE` и `MESH_MIN`/`MESH_MAX`
 для `START_PRINT` не поддерживаются. Legacy-параметры `MESH=adaptive` и
 `MESH_METHOD=rapid_scan` допустимы, но обычно не нужны.
@@ -38,9 +33,8 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 2. Очищает прошлую mesh и G-code offsets.
 3. Начинает прогрев стола и preheat сопла.
 4. Выполняет полный `G28` через sensorless X/Y и Eddy Z-home.
-5. По запросу выполняет input shaper без сохранения конфигурации.
-6. Строит новую Eddy mesh методом `rapid_scan` вокруг объектов с adaptive margin.
-7. Включает print-offset, выполняет KAMP smart park, финальный нагрев и purge.
+5. Строит новую Eddy mesh методом `rapid_scan` вокруг объектов с adaptive margin.
+6. Включает print-offset, паркуется в передней полосе, догревает сопло и проводит фиксированную purge-линию.
 
 Параметры `ADAPTIVE_MARGIN` и `HOTEND_READY_MARGIN` можно задавать в вызове;
 значения по умолчанию и полный контракт перечислены в

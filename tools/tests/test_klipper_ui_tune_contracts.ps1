@@ -71,7 +71,6 @@ $flow = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_FLOW_FACTOR"
 $accel = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_ACCEL"
 $pressure = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_PRESSURE_ADVANCE"
 $retraction = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_RETRACTION"
-$babystep = Get-GcodeMacroBlock $uiTune "TREED_UI_BABYSTEP"
 $adjustZ = Get-GcodeMacroBlock $uiTune "TREED_UI_ADJUST_Z_OFFSET"
 
 # Блок 3: State surface и runtime-only guard.
@@ -104,14 +103,14 @@ Assert-Contains $retraction 'MAX_RETRACT = 5\.0' "retraction command must define
 Assert-Contains $retraction 'printer\.firmware_retraction is not defined' "retraction command must fail clearly if firmware_retraction is missing"
 Assert-Contains $retraction '(?m)^\s*SET_RETRACTION RETRACT_LENGTH=\{retract_length\}\s*$' "retraction command must map to SET_RETRACTION"
 
-Assert-Contains $babystep 'params\.DELTA is not defined' "babystep command must require DELTA"
-Assert-Contains $babystep 'MIN_DELTA = -0\.05' "babystep command must define min delta"
-Assert-Contains $babystep 'MAX_DELTA = 0\.05' "babystep command must define max delta"
-Assert-Contains $babystep '"z" not in printer\.toolhead\.homed_axes' "babystep command must require homed Z"
-Assert-Contains $babystep 'printer\.gcode_move\.homing_origin\.z\|float \+ delta' "babystep limit must use actual live Z offset"
-Assert-Contains $babystep '(?m)^\s*SET_GCODE_OFFSET Z_ADJUST=\{delta\} MOVE=1 MOVE_SPEED=5\s*$' "babystep command must map to SET_GCODE_OFFSET Z_ADJUST"
-Assert-Contains $babystep 'VARIABLE=applied_babystep VALUE=\{next_applied\}' "babystep command must update applied_babystep state"
-Assert-Contains $adjustZ '(?m)^\s*TREED_UI_BABYSTEP DELTA=\{params\.DELTA\}\s*$' "adjust z-offset command must be an alias to babystep"
+Assert-Contains $adjustZ 'params\.DELTA is not defined' "Z-offset command must require DELTA"
+Assert-Contains $adjustZ 'MIN_DELTA = -0\.05' "Z-offset command must define min delta"
+Assert-Contains $adjustZ 'MAX_DELTA = 0\.05' "Z-offset command must define max delta"
+Assert-Contains $adjustZ '"z" not in printer\.toolhead\.homed_axes' "Z-offset command must require homed Z"
+Assert-Contains $adjustZ 'printer\.gcode_move\.homing_origin\.z\|float \+ delta' "Z-offset limit must use actual live Z offset"
+Assert-Contains $adjustZ '(?m)^\s*SET_GCODE_OFFSET Z_ADJUST=\{delta\} MOVE=1 MOVE_SPEED=5\s*$' "Z-offset command must map to SET_GCODE_OFFSET Z_ADJUST"
+Assert-Contains $adjustZ 'VARIABLE=applied_babystep VALUE=\{next_applied\}' "Z-offset command must update applied_babystep state"
+if ($uiTune -match '(?m)^\[gcode_macro TREED_UI_BABYSTEP\]\s*$') { throw 'FAIL: obsolete babystep alias must be absent' }
 Assert-Contains $resetZ '(?m)^\s*SET_GCODE_OFFSET Z=0 MOVE=0\s*$' "reset must clear actual live Z offset"
 Assert-Contains $resetZ 'VARIABLE=applied_babystep VALUE=0\.0' "reset must clear UI babystep counter"
 Assert-Contains (Get-GcodeMacroBlock $homing "G28") '_TREED_UI_RESET_Z_OFFSET' "G28 must clear live Z offset and counter"
@@ -132,7 +131,6 @@ foreach ($command in @(
   "TREED_UI_SET_ACCEL",
   "TREED_UI_SET_PRESSURE_ADVANCE",
   "TREED_UI_SET_RETRACTION",
-  "TREED_UI_BABYSTEP",
   "TREED_UI_ADJUST_Z_OFFSET"
 )) {
   Assert-Contains $contractDoc $command "contract doc must mention $command"

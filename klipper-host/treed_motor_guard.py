@@ -67,8 +67,7 @@ class TreedMotorGuard:
                 if action == 'SHAPER':
                     state = self.printer.lookup_object(
                         'gcode_macro _TREED_OPERATION_STATE')
-                    if state.variables['phase'] in ('calibrating',
-                                                   'start_calibrating'):
+                    if state.variables['phase'] == 'calibrating':
                         state.variables = dict(state.variables, phase='idle')
                 raise
         finally:

@@ -24,8 +24,7 @@ UI не должен слать raw `M220`, `M221`, `SET_VELOCITY_LIMIT`, `SET_P
 | `TREED_UI_SET_ACCEL` | `ACCEL` | `500..printer.max_accel` (`25000` в профиле) | да | да | `toolhead.max_accel`, `toolhead.max_velocity` |
 | `TREED_UI_SET_PRESSURE_ADVANCE` | `ADVANCE` | `0..0.20` | да | да | `extruder.pressure_advance` |
 | `TREED_UI_SET_RETRACTION` | `RETRACT_LENGTH` | `0..5.0` мм | да | да | `firmware_retraction.retract_length` |
-| `TREED_UI_BABYSTEP` | `DELTA` | `-0.05..0.05` мм за команду, `-1.0..1.0` мм суммарно | да | да | `gcode_move.homing_origin.z`, `gcode_macro _TREED_UI_TUNE_STATE.applied_babystep` |
-| `TREED_UI_ADJUST_Z_OFFSET` | `DELTA` | alias для `TREED_UI_BABYSTEP` | да | да | те же поля, что для `TREED_UI_BABYSTEP` |
+| `TREED_UI_ADJUST_Z_OFFSET` | `DELTA` | `-0.05..0.05` мм за команду, `-1.0..1.0` мм суммарно | да | да | `gcode_move.homing_origin.z`, `gcode_macro _TREED_UI_TUNE_STATE.applied_babystep` |
 
 Примеры:
 
@@ -35,7 +34,7 @@ TREED_UI_SET_FLOW_FACTOR PERCENT=97
 TREED_UI_SET_ACCEL ACCEL=12000
 TREED_UI_SET_PRESSURE_ADVANCE ADVANCE=0.075
 TREED_UI_SET_RETRACTION RETRACT_LENGTH=0.9
-TREED_UI_BABYSTEP DELTA=-0.02
+TREED_UI_ADJUST_Z_OFFSET DELTA=-0.02
 ```
 
 ## State surface

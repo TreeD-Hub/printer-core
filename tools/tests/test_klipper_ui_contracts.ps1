@@ -42,8 +42,11 @@ function Assert-NotContains {
 $macros = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros.cfg") -Raw
 $contract = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_ui_contract.cfg") -Raw
 $probeEddy = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg") -Raw
+$camera = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_camera.cfg") -Raw
+$printFlow = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_print_flow.cfg") -Raw
+$pause = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg") -Raw
 $utils = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_utils.cfg") -Raw
-$kamp = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_kamp.cfg") -Raw
+$startPurge = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_start_purge.cfg") -Raw
 
 Assert-Contains $macros '(?m)^\[include macros_ui_contract\.cfg\]\s*$' "macros.cfg must include UI device contract"
 Assert-Contains $contract '(?m)^\[gcode_macro _TREED_UI_CONTRACT\]\s*$' "UI device contract macro must exist"
@@ -100,7 +103,7 @@ foreach ($macro in @(
   Assert-Contains $contract ([regex]::Escape($macro)) "required macro list must include $macro"
 }
 
-# Блок 6: Видимая сервисная поверхность Fluidd и скрытые KAMP helper-ы.
+# Блок 6: Единственные публичные имена и скрытые park/purge helper-ы.
 foreach ($macro in @(
   "CALIBRATE_SCREWS",
   "CALIBRATE_BED_MESH",
@@ -109,14 +112,23 @@ foreach ($macro in @(
   "CALIBRATE_EDDY_TEMP",
   "CHECK_Z0"
 )) {
-  Assert-Contains $probeEddy "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "Fluidd service alias must exist: $macro"
+  Assert-NotContains $probeEddy "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "obsolete Eddy alias must be absent: $macro"
 }
 foreach ($macro in @("MOTION_TEST", "MOTION_LIMITS_DEFAULT")) {
-  Assert-Contains $utils "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "Fluidd motion alias must exist: $macro"
+  Assert-NotContains $utils "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "obsolete motion alias must be absent: $macro"
 }
-Assert-Contains $kamp '(?m)^\[gcode_macro _TREED_KAMP_SMART_PARK\]\s*$' "KAMP smart park helper must be hidden from Fluidd"
-Assert-Contains $kamp '(?m)^\[gcode_macro _TREED_KAMP_LINE_PURGE\]\s*$' "KAMP line purge helper must be hidden from Fluidd"
-Assert-NotContains $kamp '(?m)^\[gcode_macro SMART_PARK\]\s*$' "KAMP smart park must not be public in active profile"
-Assert-NotContains $kamp '(?m)^\[gcode_macro LINE_PURGE\]\s*$' "KAMP line purge must not be public in active profile"
+foreach ($macro in @("TREED_CAM_START", "TREED_CAM_STOP")) {
+  Assert-NotContains $camera "(?m)^\[gcode_macro $([regex]::Escape($macro))\]\s*$" "obsolete camera alias must be absent: $macro"
+}
+Assert-Contains $camera '(?m)^\[gcode_macro _TREED_CAM_START\]\s*$' "internal camera start must remain"
+Assert-Contains $camera '(?m)^\[gcode_macro _TREED_CAM_STOP\]\s*$' "internal camera stop must remain"
+Assert-Contains $printFlow '(?ms)^\[gcode_macro _TREED_START_POST_HOOKS\].*?^\s*_TREED_CAM_START\s*$' "START_PRINT hooks must start the camera session"
+Assert-Contains $printFlow '(?ms)^\[gcode_macro END_PRINT\].*?^\s*_TREED_CAM_STOP\s*$' "END_PRINT must stop the camera session"
+Assert-Contains $pause '(?ms)^\[gcode_macro CANCEL_PRINT\].*?^\s*_TREED_CAM_STOP\s*$' "CANCEL_PRINT must stop the camera session"
+Assert-Contains $camera 'cmd="treed_cam_snapshot"' "camera ticker must retain snapshot command"
+Assert-Contains $startPurge '(?m)^\[gcode_macro _TREED_SMART_PARK\]\s*$' "smart park helper must be hidden from Fluidd"
+Assert-Contains $startPurge '(?m)^\[gcode_macro _TREED_LINE_PURGE\]\s*$' "line purge helper must be hidden from Fluidd"
+Assert-NotContains $startPurge '(?m)^\[gcode_macro SMART_PARK\]\s*$' "smart park must not be public in active profile"
+Assert-NotContains $startPurge '(?m)^\[gcode_macro LINE_PURGE\]\s*$' "line purge must not be public in active profile"
 
 Write-Host "PASS: Klipper UI device contract"

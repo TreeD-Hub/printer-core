@@ -27,7 +27,7 @@
 
 `macros.cfg` дополнительно подключает:
 - `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
-- `macros_input_shaper.cfg` перед `macros_print_flow.cfg`, чтобы `START_PRINT` мог вызвать TreeD-калибровку input shaper;
+- `macros_input_shaper.cfg` содержит отдельную сервисную калибровку; `macros_start_purge.cfg` — фиксированные park/purge для `START_PRINT`;
 - `macros_ui_tune.cfg` как публичный runtime tune контракт для TreeD Shell;
 - `macros_ui_motion.cfg` как safety-boundary для относительного перемещения осей из TreeD Shell.
 
@@ -71,11 +71,11 @@ Eddy scan area меньше области печати: текущий штат
 - `[force_move] enable_force_move: True` входит в штатный профиль, потому что `SET_KINEMATIC_POSITION` нужен для Eddy Z-home correction;
 - `BED_MESH_CALIBRATE` переопределен wrapper-ом и всегда проходит через `TREED_BED_MESH_CALIBRATE_EDDY`, который строит Eddy service mesh внутри safe scan area, а не скан всей области печати.
 
-`START_PRINT` сначала проверяет параметры и KAMP object-метаданные. Затем первым изменением состояния очищает старую mesh и offsets, прогревает стол до `BED_TEMP`, делает preheat сопла и выполняет рабочий Eddy Z-home и опциональный input shaper. Перед каждой печатью строит новую mesh через `METHOD=rapid_scan ADAPTIVE=1 ADAPTIVE_MARGIN=5` (отступ можно задать параметром), после чего один раз включает print-offset и вызывает KAMP park helper. Сохранённые mesh-профили в обычной печати не загружаются; сервисные методы доступны через `TREED_BED_MESH_CALIBRATE_EDDY`.
+`START_PRINT` сначала проверяет параметры и object-метаданные для native adaptive mesh. Затем очищает старую mesh и offsets, прогревает стол, делает Eddy Z-home и строит новую mesh через `METHOD=rapid_scan ADAPTIVE=1 ADAPTIVE_MARGIN=5`. После этого включает print-offset и паркуется в передней полосе. Сервисная калибровка input shaper запускается отдельно. Сохранённые mesh-профили в обычной печати не загружаются; сервисные методы доступны через `TREED_BED_MESH_CALIBRATE_EDDY`.
 Так Z0, mesh и парковка фиксируются в тепловом состоянии печати.
-`_TREED_KAMP_SMART_PARK` паркует голову на Z=10 мм перед финальным нагревом сопла; эта высота ожидания не определяет рабочий Z0.
+`_TREED_SMART_PARK` паркует голову на Z=10 мм перед финальным нагревом сопла; эта высота ожидания не определяет рабочий Z0.
 Финальный нагрев задает `EXTRUDER_TEMP`, но ждет только нижнюю готовность `EXTRUDER_TEMP - HOTEND_READY_MARGIN` (`3C` по умолчанию), поэтому штатный overshoot выше цели не блокирует старт purge/первого слоя.
-`_TREED_KAMP_LINE_PURGE` после готовности сопла сначала поднимается на `purge_height`, затем едет к старту purge-линии.
+`_TREED_LINE_PURGE` после готовности сопла безопасно перемещается к фиксированной линии в передней полосе `X10..50, Y5` по умолчанию. Эта полоса должна оставаться свободной от модели.
 
 Обязательные аппаратные предпосылки перед запуском loader:
 - на X/Y и Z стоят TMC5160/TMC5160T Pro;
@@ -157,13 +157,13 @@ TREED_SHAPER_CALIBRATE_FULL ACCEL=25000
 
 Макрос делает homing, запускает быстрый sweep X/Y, затем вызывает `TREED_SAVE_CONFIG`. После сохранения Klipper штатно перезапускается.
 
-Легкий прогон перед печатью:
+Отдельный легкий сервисный прогон:
 
 ```gcode
-START_PRINT BED_TEMP=... EXTRUDER_TEMP=... SHAPER=light SHAPER_ACCEL=12000
+TREED_SHAPER_CALIBRATE_LIGHT ACCEL=12000
 ```
 
-`SHAPER=light` измеряет узкие диапазоны вокруг сохраненных `shaper_freq_x/y`, применяет новые значения на текущую сессию и не вызывает `SAVE_CONFIG`.
+Команда измеряет узкие диапазоны вокруг сохраненных `shaper_freq_x/y`, применяет новые значения на текущую сессию и не вызывает `SAVE_CONFIG`.
 
 PID хотэнда и стола остается в профильных heater-секциях, потому что Klipper требует `pid_Kp/Ki/Kd` при загрузке `control: pid`. После `PID_CALIBRATE HEATER=extruder ...` или `PID_CALIBRATE HEATER=heater_bed ...` новые значения нужно перенести в `ebb42_can.cfg` или `bed_heater_dc.cfg`.
 
