@@ -1,222 +1,83 @@
 # TreeD Printer Core
 
-Единая точка входа для ветки `treed-v2`.
+Единая точка входа для поддерживаемого runtime `treed-v2`: образ принтера,
+конфигурация Klipper/Moonraker, firmware targets и экранный UI.
 
-## V2 runtime-модель
+## Поддерживаемая V2-модель
 
 ```text
 Rock Pi (Armbian Debian 12)
  └─ USB -> U2C V2.1
           ├─ CAN -> Octopus Pro (main MCU, required)
           ├─ CAN -> EBB42 (required)
-          └─ CAN -> Eddy Duo (enabled by default)
+          └─ CAN -> Eddy Duo (required)
 ```
 
-Ветка `treed-v2` не поддерживает RN12/RPi/UART legacy-контур.
+Активный профиль `treed_v2_corexy_v1` использует Eddy как штатный Z-endstop.
+Без Eddy этот профиль не поддерживается. Ветка не поддерживает RN12/RPi/UART
+legacy-контур.
 
+## Версии и release assets
 
-## Версионирование и релизы
+Версия проекта хранится в `VERSION`. Совместимые версии Klipper, Moonraker,
+KlipperScreen и Crowsnest, а также версия и checksum Mainsail закреплены в
+`runtime-versions.env`. Loader не выбирает `latest` для runtime-зависимостей.
 
-Версия `printer-core` хранится в `VERSION` в формате `x.y.z`.
+Release workflow запускается тегом `vX.Y.Z`, совпадающим с `VERSION`. Имена
+`treed-mainshellos-source.zip` и `treed-mainshellos-release.json` — сохранённые
+**legacy compatibility asset names** для совместимости релизного процесса.
 
-Совместимый runtime-стек фиксируется в `runtime-versions.env`: immutable commit SHA для Klipper, Moonraker, KlipperScreen и Crowsnest, а также версия, URL и SHA-256 Mainsail. Loader не выбирает `latest` и перед сборкой firmware обязан синхронизировать host Klipper с этим manifest.
+## Установка и обслуживание
 
-Релиз создается workflow `.github/workflows/release.yml` по тегу `vX.Y.Z`. Тег должен совпадать с содержимым `VERSION`; workflow сохраняет совместимые имена assets `treed-mainshellos-source.zip` и `treed-mainshellos-release.json`.
-
-## Быстрый запуск (копируй в SSH)
+Быстрый install на Rock Pi:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
 ```
 
-Loader сам определяет `fresh|update|recover`, выбирает `clean|preserve` и ребутает только после `fresh`.
+Loader определяет состояние устройства как `fresh`, `update` или `recover`.
+`TREED_DEPLOY_MODE=auto` выбирает `clean` для `fresh` и `preserve` для
+`update`/`recover`. После `fresh` выполняется перезагрузка; повторные раскладки
+сохраняют runtime-параметры.
 
-Production apply по умолчанию требует `Klipper state=ready` и подключенные main MCU, EBBCan и Eddy. Для стендовой установки без железа нужен явный `TREED_ALLOW_HARDWARE_NOT_READY=1`; этот режим не означает готовность принтера к печати.
-
-## Диагностика камеры
-
-```bash
-grep -R "max_fps\|target_fps\|custom_flags\|1920x1080" -n \
-  ~/printer_data/config/crowsnest.conf \
-  ~/printer_data/config/moonraker/generated/50-webcam-treed.conf
-
-journalctl -u crowsnest -b --no-pager | grep -Ei "fps|resolution|ustreamer|format|encoder|warning|error"
-v4l2-ctl --list-formats-ext -d "$(sed -n 's/^device:[[:space:]]*//p' ~/printer_data/config/crowsnest.conf | tail -n 1)"
-```
-
-Ожидаемый режим TreeD USB-камеры:
+Для read-only проверки существующего клона запускать loader в режиме `check`:
 
 ```bash
-resolution: 1920x1080
-max_fps: 30
-custom_flags: --format=MJPEG --encoder=HW
+sudo env TREED_LOADER_MODE=check bash loader/loader.sh
 ```
 
-## Вариации UI
+Обычный apply требует готового Klipper и доступных main MCU, EBB42 и Eddy.
+`TREED_ALLOW_HARDWARE_NOT_READY=1` разрешает стендовый apply без полного набора
+железа, но не означает готовность принтера к печати.
 
-sudo treed-ui ks
-sudo treed-ui status
+## Часто используемые команды
 
-## Вариации работы перед печатью
-
-Стартовый G-code слайсера должен вызывать `START_PRINT` и передавать температуры первого слоя:
+В start G-code слайсера передавайте температуры первого слоя:
 
 ```gcode
-START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] MESH=load MESH_PROFILE=default
+START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer]
 ```
 
-Дополнительно можно включить быструю TreeD-калибровку input shaper перед печатью:
+Перед каждой печатью `START_PRINT` строит новую adaptive Eddy mesh через
+`rapid_scan`. Сохранённые mesh-профили в обычной печати не загружаются.
+Подробности — в [потоке печати и mesh](docs/print-flow.md).
+
+Ручное сервисное сканирование стола:
 
 ```gcode
-START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] MESH=adaptive SHAPER=light SHAPER_ACCEL=12000
+TREED_BED_MESH_CALIBRATE_EDDY PROFILE=default METHOD=scan
 ```
 
-Параметры shaper-контура:
-- `SHAPER=none` — не трогать input shaper перед печатью (default).
-- `SHAPER=light` — быстрый прогон вокруг уже сохраненных частот X/Y, применяет результат на текущую печать без `SAVE_CONFIG`.
-- `SHAPER=full` — полный быстрый sweep X/Y перед печатью, но из `START_PRINT` всегда без сохранения, чтобы не перезапускать Klipper.
-- `SHAPER_ACCEL=...` — целевое ускорение калибровки. Можно передать число из профиля/слайсера; если не передано, `light` берет текущий live `max_accel`, а ручной `full` использует `25000`.
-
-Варианты mesh-контура:
-- `MESH=load MESH_PROFILE=default` — использовать сохраненную сетку без новой калибровки.
-- `MESH=adaptive MESH_METHOD=scan` — повседневный вариант: прогреть стол, сделать Eddy Z-home, построить адаптивную сетку рядом с моделью и выполнить KAMP purge.
-- `MESH=adaptive MESH_METHOD=rapid_scan` — быстрый повседневный вариант, если важнее скорость, чем максимальная точность.
-- `MESH=calibrate MESH_METHOD=rapid_scan MESH_PROFILE=treed_full` — быстрая калибровка всего стола перед печатью.
-- `MESH=calibrate MESH_METHOD=scan MESH_PROFILE=treed_full` — более точная калибровка всего стола перед печатью.
-- `MESH=calibrate MESH_METHOD=automatic MESH_PROFILE=treed_full` — самый точный, но самый медленный точечный режим.
-
-Пример для быстрой калибровки всего стола:
-
-```gcode
-START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer] MESH=calibrate MESH_METHOD=rapid_scan MESH_PROFILE=treed_full
-```
-
-`SAVE_CONFIG` в стартовый G-code добавлять не нужно: mesh и `SHAPER=light` активируются для текущей печати, а сохранение конфигурации остается ручной сервисной операцией.
-
-## Калибровка input shaper
-
-В профиле включен ADXL345 на EBB42 и TreeD-макросы:
-
-```gcode
-TREED_SHAPER_CALIBRATE_FULL
-TREED_SHAPER_CALIBRATE_LIGHT
-```
-
-`TREED_SHAPER_CALIBRATE_FULL` делает `G28`, запускает быстрый полный sweep X/Y на `ACCEL=25000` по умолчанию, сохраняет результат через `TREED_SAVE_CONFIG` и перезапускает Klipper штатным `SAVE_CONFIG`.
-
-`TREED_SHAPER_CALIBRATE_LIGHT` делает `G28`, измеряет узкие диапазоны вокруг сохраненных `shaper_freq_x/y`, применяет результат сразу и не сохраняет конфиг.
-
-Если нужно задать ускорение явно:
+Полная калибровка input shaper:
 
 ```gcode
 TREED_SHAPER_CALIBRATE_FULL ACCEL=25000
-TREED_SHAPER_CALIBRATE_LIGHT ACCEL=12000
 ```
 
-PID хотэнда/стола сейчас задается в профильных heater-секциях, потому что Klipper требует `pid_Kp/Ki/Kd` при загрузке `control: pid`. После `PID_CALIBRATE` новые значения нужно перенести в `ebb42_can.cfg` или `bed_heater_dc.cfg`; параметры input shaper остаются в stock `SAVE_CONFIG`-блоке `printer.cfg`.
+Это сервисная операция; профильное описание — в разделе
+[Input shaper](klipper/profiles/treed_v2_corexy_v1/README.md#калибровка-input-shaper).
 
-## Калибровка Eddy
-
-До сохраненной калибровки `PROBE_EDDY_CURRENT_CALIBRATE` команды `PROBE`, `BED_MESH_CALIBRATE`, `START_PRINT` с mesh-контуром и `TREED_Z_PARK_ZERO_EDDY` будут падать с ошибкой `Must calibrate probe_eddy_current first`.
-
-Базовый порядок первичной калибровки:
-
-1. Навести Eddy примерно в центр стола и поставить датчик около 20 мм над поверхностью.
-2. Выполнить калибровку drive current:
-
-```gcode
-LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy
-TREED_SAVE_CONFIG
-```
-
-3. После рестарта выполнить автоматизированную калибровку Eddy через проектный макрос:
-
-```gcode
-PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy
-```
-
-4. Пройти paper test, выполнить `ACCEPT`, затем сохранить:
-
-```gcode
-TREED_SAVE_CONFIG
-```
-
-5. После рестарта снова выполнить homing, затем запустить компенсацию температурного дрейфа:
-
-```gcode
-G28
-SET_IDLE_TIMEOUT TIMEOUT=36000
-TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4
-```
-
-6. Пройти запрошенные paper test шаги, выполнить `ACCEPT`, затем сохранить:
-
-```gcode
-TREED_SAVE_CONFIG
-```
-
-После этого рабочая проверка Z0:
-
-```gcode
-G28
-TREED_Z_PARK_ZERO_EDDY
-```
-
-`PROBE_EDDY_CURRENT_CALIBRATE_AUTO` сам использует runtime `[force_move]`, ставит Eddy в центр безопасной scan area `X10..235 / Y10..210` с учетом offset и запускает штатный `PROBE_EDDY_CURRENT_CALIBRATE`. После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper; использовать `preserve` или `auto`.
-
-## Сервисные тесты движения
-
-`TREED_XY_MOTION_TEST` — ручной XY stress-test без печати. Макрос сам делает `G28`, поднимается на безопасный Z, гоняет периметр, диагонали, зигзаг, круг, мелкие перемещения вокруг центра и ромбовую восьмерку. Во время активной печати или паузы запуск запрещен.
-
-Базовый безопасный прогон:
-
-```gcode
-TREED_XY_MOTION_TEST SPEED=150 ACCEL=3000 ITER=1 Z=20 END_Z=100
-```
-
-Рабочий прогон для проверки скорости, ускорений и ремней:
-
-```gcode
-TREED_XY_MOTION_TEST SPEED=250 ACCEL=7000 ITER=2 SCV=8 SMALL_STEP=5 SMALL_REPEATS=8 ZIGZAG_STEPS=5 Z=20 END_Z=100
-```
-
-Стресс-прогон с кругом и мелкими разворотами:
-
-```gcode
-TREED_XY_MOTION_TEST SPEED=350 ACCEL=10000 ITER=3 SCV=9 CIRCLE_RADIUS=70 SMALL_STEP=5 SMALL_REPEATS=12 ZIGZAG_STEPS=8 Z=20 END_Z=120
-```
-
-После теста макрос восстанавливает `VELOCITY`, `ACCEL` и `SQUARE_CORNER_VELOCITY` из состояния до запуска. Если нужно вручную вернуть лимиты из `[printer]`, выполнить:
-
-```gcode
-TREED_MOTION_LIMITS_DEFAULT
-```
-
-## Карта слоев
-
-1. Репозиторий (source of truth)
-- `loader/` — pipeline provisioning и проверки.
-- `klipper/` — канонические конфиги Klipper.
-- `moonraker/` — базовый конфиг Moonraker и компоненты.
-- `runtime-scripts/` — runtime-скрипты (например, камера).
-- `mainsail/` — тема и UI-ресурсы Mainsail.
-- `firmware/` — репозиторные firmware-артефакты.
-
-2. Loader
-- entrypoint: `loader/loader.sh`
-- шаги: `loader/steps/*.sh`
-
-3. Staging на устройстве
-- `${PI_HOME}/treed/klipper`
-
-4. Runtime на устройстве
-- `${PI_HOME}/printer_data/config`
-- `${PI_HOME}/treed/cam/bin`
-
-5. Сервисы и UI
-- `klipper`, `moonraker`, `crowsnest`, `treed-shell`, `KlipperScreen`, `mainsail`
-- активный экранный UI по умолчанию: TreeD Shell (`TREED_UI_MODE=ts`, release asset `treed-shell-ui.zip`)
-- ручное переключение на Rock Pi:
+Переключение экранного UI и проверка текущего режима:
 
 ```bash
 sudo treed-ui ts
@@ -224,8 +85,56 @@ sudo treed-ui ks
 treed-ui status
 ```
 
+Loader собирает firmware-артефакты Octopus, EBB42 и Eddy, но не прошивает MCU.
+Ручную прошивку выполнять по [инструкции firmware](firmware/README.md) после
+проверки модели платы, target, артефакта и `klipper.dict`.
+
+`TREED_XY_MOTION_TEST` — сервисный XY-тест, не команда для печати:
+
+```gcode
+TREED_XY_MOTION_TEST SPEED=200 ACCEL=5000 ITER=2 Z=20 END_Z=100
+```
+
+Перед его запуском прочитайте [инструкцию сервисного теста движения](docs/service-motion-tests.md).
+
+## Безопасность и статус
+
+Production apply требует `Klipper state=ready` и подключённые Octopus Pro,
+EBB42 и Eddy. Камера необязательна, если не включён строгий режим.
+Перед ручной прошивкой проверьте ревизию платы и соответствие артефакта.
+Стартовую подготовку Rock Pi см. в [`docs/firstStart.md`](docs/firstStart.md).
+
+## Первичная калибровка Eddy
+
+`PROBE_EDDY_CURRENT_CALIBRATE_AUTO` разрешён только при достоверной Z-позиции.
+При неизвестной Z нужен отдельный проверенный сервисный порядок; не запускайте
+AUTO как следующий шаг вслепую. Полная процедура находится в
+[инструкции калибровки Eddy](docs/eddy-calibration.md).
+
+## Runtime и source of truth
+
+- `loader/loader.sh` — entrypoint provisioning; актуальный порядок шагов описан
+  в [модели владения конфигами](docs/config-ownership.md).
+- `loader/steps/` — изолированные шаги apply/check.
+- `klipper/` — канонические конфигурации и профиль `treed_v2_corexy_v1`.
+- `moonraker/` — базовая конфигурация и компоненты Moonraker.
+- `runtime-scripts/` — устанавливаемые runtime-скрипты.
+- `mainsail/` — тема и UI-ресурсы Mainsail.
+- `klipperscreen/` — тема KlipperScreen.
+- `firmware/` — target-конфиги и описание процесса сборки/прошивки.
+
+Репозиторные конфиги копируются loader-ом через staging в runtime на устройстве.
+Границы владения и локальных overrides описаны в
+[`docs/config-ownership.md`](docs/config-ownership.md).
+
 ## Документация
 
-- Быстрый install path: `docs/README.md`
-- Модель владения конфигами: `docs/config-ownership.md`
-- Профиль Klipper V2: `klipper/profiles/treed_v2_corexy_v1/README.md`
+- [Установка и переменные окружения](docs/README.md)
+- [Владение runtime-конфигами](docs/config-ownership.md)
+- [Профиль `treed_v2_corexy_v1`](klipper/profiles/treed_v2_corexy_v1/README.md)
+- [Поток печати и mesh](docs/print-flow.md)
+- [Первичная калибровка Eddy](docs/eddy-calibration.md)
+- [Диагностика камеры](docs/camera.md)
+- [Сервисные тесты движения](docs/service-motion-tests.md)
+- [Сборка и ручная прошивка MCU](firmware/README.md)
+- [Использование макросов профиля](klipper/profiles/treed_v2_corexy_v1/macros-usage.md)

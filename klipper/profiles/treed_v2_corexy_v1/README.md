@@ -132,19 +132,18 @@ LIGHT_OFF
 
 ## Первичная калибровка Eddy
 
-До сохраненной калибровки `PROBE_EDDY_CURRENT_CALIBRATE` любые `PROBE`, `BED_MESH_CALIBRATE` и `TREED_Z_PARK_ZERO_EDDY` будут падать с `Must calibrate probe_eddy_current first`.
+Пошаговая процедура находится в [`docs/eddy-calibration.md`](../../../docs/eddy-calibration.md).
+`PROBE_EDDY_CURRENT_CALIBRATE_AUTO` требует предварительно достоверной
+Z-позиции; при неизвестной Z нужен отдельный проверенный сервисный порядок.
+Eddy scan area, runtime `[force_move]` и ограничения макроса описаны в
+`probe_eddy_duo.cfg` и [`macros-usage.md`](macros-usage.md).
 
-Базовый порядок:
-1. Навести датчик примерно в центр стола и около 20 мм над поверхностью.
-2. Выполнить `LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy`, затем `TREED_SAVE_CONFIG`.
-3. После рестарта `PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy` допускается только при уже достоверной Z-позиции. Макрос ставит Eddy в центр безопасной scan area, а не в заднюю недостижимую зону стола. Для первого запуска из неизвестной Z этому профилю нужен отдельный аппаратно проверенный или ручной сервисный порядок; автоматический запуск заблокирован.
-4. Снова выполнить `TREED_SAVE_CONFIG`.
-5. После рестарта сначала независимо восстановить достоверную Z-позицию; штатный профиль не делает этого автоматически. Затем выполнить `G28`, а для компенсации thermal drift — `SET_IDLE_TIMEOUT TIMEOUT=36000`, `TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4`, пройти запрошенные paper test шаги и сохранить через `TREED_SAVE_CONFIG`.
-   Если камера/датчик стабильно выходят выше 56C, `TARGET` подбирать по фактической максимальной температуре Eddy.
-
-`eddy_force_move_calibration.cfg` больше не нужен для первичной калибровки: runtime `[force_move]` живет в `probe_eddy_duo.cfg`. Старый include оставлен пустым только для совместимости с локальными конфигами.
-
-После успешной калибровки не запускать deploy в `TREED_DEPLOY_MODE=clean`, если нужно сохранить autosave-сегмент Klipper. Для обычных повторных раскладок использовать `preserve` или `auto` на ветке `treed-v2`.
+`eddy_force_move_calibration.cfg` больше не нужен для первичной калибровки:
+runtime `[force_move]` живёт в `probe_eddy_duo.cfg`. Старый include оставлен
+пустым только для совместимости с локальными конфигами. После успешной
+калибровки не используйте `TREED_DEPLOY_MODE=clean`, если нужно сохранить
+Klipper autosave-сегмент; для повторной раскладки используйте `preserve` или
+`auto`.
 
 ## Калибровка input shaper
 

@@ -1,4 +1,4 @@
-# TreeD MainshellOS: V2 модель владения конфигами и слоями
+# TreeD Printer Core: V2 модель владения конфигами и слоями
 
 Документ фиксирует фактическую модель для ветки `treed-v2`.
 Если поведение в runtime и текст документа расходятся, источником истины считается код шагов loader.
@@ -10,30 +10,30 @@ Entrypoint:
 
 Порядок шагов:
 1. `check-env`
-2. `detect-boot-env`
-3. `timezone-sync`
-4. `maintenance-stop`
-5. `packages-core`
-6. `runtime-bootstrap`
-7. `can-setup`
-8. `firmware-build`
-9. `boot-hdmi-config`
-10. `plymouth-theme-install`
-11. `plymouth-initramfs`
-12. `plymouth-initramfs-config`
-13. `plymouth-cmdline`
-14. `plymouth-systemd`
-15. `klipper-sync`
-16. `klipper-core`
-17. `klipper-anti-shutdown`
-18. `mainsail-web`
-19. `moonraker-config`
-20. `crowsnest-webcam`
-21. `treed-cam`
-22. `klipper-mainsail-theme`
-23. `klipperscreen-install`
-24. `klipperscreen-theme`
-25. `klipperscreen-integr`
+2. `timezone-sync`
+3. `maintenance-stop`
+4. `packages-core`
+5. `runtime-bootstrap`
+6. `can-setup`
+7. `firmware-build`
+8. `boot-hdmi-config`
+9. `plymouth-theme-install`
+10. `plymouth-initramfs`
+11. `plymouth-initramfs-config`
+12. `plymouth-cmdline`
+13. `plymouth-systemd`
+14. `klipper-sync`
+15. `klipper-core`
+16. `klipper-anti-shutdown`
+17. `mainsail-web`
+18. `moonraker-config`
+19. `crowsnest-webcam`
+20. `treed-cam`
+21. `klipper-mainsail-theme`
+22. `klipperscreen-install`
+23. `klipperscreen-theme`
+24. `klipperscreen-integr`
+25. `treed-shell-install`
 26. `maintenance-start`
 27. `verify`
 
@@ -96,7 +96,7 @@ Optional:
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`)
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`)
-- `TREED_EDDY_ENABLED` (legacy `0|1`, default `1`; для активного Klipper-профиля должно оставаться `1`)
+- `TREED_EDDY_ENABLED` (legacy `0|1`, default `1`; Eddy required для активного Klipper-профиля, значение `0` не поддерживается)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
 
 Активный профиль `treed_v2_corexy_v1` использует Eddy как обязательный штатный Z-контур:
@@ -108,7 +108,7 @@ Optional:
 
 Fail-fast сценарии:
 - пустой `TREED_MAIN_MCU_CANBUS_UUID` -> fail;
-- `TREED_EDDY_ENABLED=1` и пустой `TREED_EDDY_CANBUS_UUID` -> fail.
+- `TREED_EDDY_ENABLED=1` и пустой `TREED_EDDY_CANBUS_UUID` -> fail; значение `0` несовместимо с активным профилем.
 
 ## 5. Что не используется в `treed-v2`
 

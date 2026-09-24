@@ -263,6 +263,10 @@ TREED_Z_PARK_ZERO_EDDY
 
 ### `PROBE_EDDY_CURRENT_CALIBRATE_AUTO`
 
+Запускайте только после того, как Z достоверно привязана. При неизвестной Z
+макрос должен остановиться; для первого запуска нужен отдельный проверенный
+сервисный порядок. Полная последовательность: [`docs/eddy-calibration.md`](../../../docs/eddy-calibration.md).
+
 ```gcode
 PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy
 ```
@@ -480,7 +484,7 @@ M109 S220
 UNLOAD_FILAMENT LENGTH=120 SPEED=8
 ```
 
-### Полная калибровка Eddy после первичной установки
+### Команды калибровки Eddy после проверки достоверной Z
 
 ```gcode
 LDC_CALIBRATE_DRIVE_CURRENT CHIP=btt_eddy
@@ -489,7 +493,10 @@ PROBE_EDDY_CURRENT_CALIBRATE_AUTO CHIP=btt_eddy
 TREED_SAVE_CONFIG
 ```
 
-Интерактивные шаги `ACCEPT`/paper test выполняются по подсказкам Klipper.
+Этот короткий список не заменяет полный порядок: перед каждым запуском AUTO
+сначала восстановите достоверную Z-позицию и следуйте
+[`docs/eddy-calibration.md`](../../../docs/eddy-calibration.md). Интерактивные
+шаги `ACCEPT`/paper test выполняются по подсказкам Klipper.
 
 ### Полная калибровка input shaper
 
