@@ -104,6 +104,16 @@ Assert-Match "loader\steps\firmware-build.sh" 'artifact_sha256.*klipper_commit.*
 Assert-Match "loader\steps\verify.sh" 'sha256sum.*firmware_artifact' "verify checks firmware artifact content"
 Assert-Match "loader\steps\moonraker-config.sh" 'MOONRAKER_COMPONENTS_DIR=.*moonraker/components' "components deploy to active managed checkout"
 Assert-Match "loader\steps\runtime-bootstrap.sh" "runtime_repo_add_excludes" "managed Moonraker components do not leave checkout dirty"
+$bootstrap = Read-RepoFile "loader\steps\runtime-bootstrap.sh"
+$klipperSyncIndex = $bootstrap.IndexOf('sync_managed_repo "${repo_dir}"')
+foreach ($suffix in @('pre-canonical', 'pre-waypoint')) {
+  $pattern = '/klippy/extras/treed_motor_calibration.py.' + $suffix
+  $first = $bootstrap.IndexOf($pattern)
+  $last = $bootstrap.LastIndexOf($pattern)
+  if ($first -lt 0 -or $last -le $klipperSyncIndex -or $first -ge $klipperSyncIndex) {
+    throw "FAIL: known Klipper backup $suffix must be excluded before and after sync"
+  }
+}
 Assert-Match "loader\steps\moonraker-config.sh" 'restart_and_verify_moonraker_components' "Moonraker restarts and verifies components"
 Assert-Match "loader\steps\mainsail-web.sh" 'archive checksum mismatch' "Mainsail artifact checksum is enforced"
 Assert-Match "loader\steps\klipperscreen-install.sh" 'installed package matches manifest' "KlipperScreen requires exact manifest commit"

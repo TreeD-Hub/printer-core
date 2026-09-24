@@ -127,6 +127,8 @@ ensure_repo_present() {
   if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
     runtime_repo_add_excludes "${repo_dir}" \
       '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/treed_motor_calibration.py.pre-canonical' \
+      '/klippy/extras/treed_motor_calibration.py.pre-waypoint' \
       '/klippy/extras/__pycache__/treed_motor_*.pyc'
   fi
 
@@ -140,6 +142,8 @@ ensure_repo_present() {
   if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
     runtime_repo_add_excludes "${repo_dir}" \
       '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/treed_motor_calibration.py.pre-canonical' \
+      '/klippy/extras/treed_motor_calibration.py.pre-waypoint' \
       '/klippy/extras/__pycache__/treed_motor_*.pyc'
   fi
 }

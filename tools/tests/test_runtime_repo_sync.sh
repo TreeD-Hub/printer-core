@@ -92,7 +92,27 @@ sync_managed_repo "${tmp}/managed" "${remote}" "${target_commit}" master Moonrak
 assert_synced "${tmp}/managed"
 [ -f "${tmp}/managed/managed-runtime.txt" ]
 
-# Блок 7: KlipperScreen theme overlay разрешён целиком и переживает exact/repeated sync.
+# Блок 7: Две известные резервные копии Klipper переживают sync; другие файлы блокируют его.
+git clone "${remote}" "${tmp}/klipper-backups" >/dev/null
+mkdir -p "${tmp}/klipper-backups/klippy/extras"
+for suffix in pre-canonical pre-waypoint; do
+  printf 'saved-%s\n' "${suffix}" > "${tmp}/klipper-backups/klippy/extras/treed_motor_calibration.py.${suffix}"
+  runtime_repo_add_excludes "${tmp}/klipper-backups" \
+    "/klippy/extras/treed_motor_calibration.py.${suffix}"
+done
+sync_managed_repo "${tmp}/klipper-backups" "${remote}" "${target_commit}" master Klipper
+assert_synced "${tmp}/klipper-backups"
+for suffix in pre-canonical pre-waypoint; do
+  grep -Fx "saved-${suffix}" "${tmp}/klipper-backups/klippy/extras/treed_motor_calibration.py.${suffix}" >/dev/null
+done
+printf 'unknown\n' > "${tmp}/klipper-backups/klippy/extras/treed_motor_calibration.py.pre-other"
+if sync_managed_repo "${tmp}/klipper-backups" "${remote}" "${target_commit}" master Klipper; then
+  printf 'unknown Klipper backup unexpectedly synced\n' >&2
+  exit 1
+fi
+grep -Fx 'unknown' "${tmp}/klipper-backups/klippy/extras/treed_motor_calibration.py.pre-other" >/dev/null
+
+# Блок 8: KlipperScreen theme overlay разрешён целиком и переживает exact/repeated sync.
 git clone "${remote}" "${tmp}/ks-theme" >/dev/null
 git -C "${tmp}/ks-theme" checkout -B master "${old_commit}" >/dev/null
 runtime_repo_add_excludes "${tmp}/ks-theme" '/styles/treed-oled/'
@@ -114,7 +134,7 @@ sync_managed_repo "${tmp}/ks-theme" "${remote}" "${target_commit}" master Klippe
 assert_synced "${tmp}/ks-theme"
 grep -Fx 'theme-v2' "${tmp}/ks-theme/styles/treed-oled/style.css" >/dev/null
 
-# Блок 8: Неизвестный файл рядом с managed theme блокирует sync.
+# Блок 9: Неизвестный файл рядом с managed theme блокирует sync.
 git clone "${remote}" "${tmp}/ks-random-style" >/dev/null
 runtime_repo_add_excludes "${tmp}/ks-random-style" '/styles/treed-oled/'
 mkdir -p "${tmp}/ks-random-style/styles"
@@ -125,7 +145,7 @@ if sync_managed_repo "${tmp}/ks-random-style" "${remote}" "${target_commit}" mas
 fi
 [ -f "${tmp}/ks-random-style/styles/random-file.txt" ]
 
-# Блок 9: Неизвестный файл в корне KlipperScreen блокирует sync.
+# Блок 10: Неизвестный файл в корне KlipperScreen блокирует sync.
 git clone "${remote}" "${tmp}/ks-root-unknown" >/dev/null
 runtime_repo_add_excludes "${tmp}/ks-root-unknown" '/styles/treed-oled/'
 printf 'unknown\n' > "${tmp}/ks-root-unknown/local.txt"
@@ -135,7 +155,7 @@ if sync_managed_repo "${tmp}/ks-root-unknown" "${remote}" "${target_commit}" mas
 fi
 [ -f "${tmp}/ks-root-unknown/local.txt" ]
 
-# Блок 10: Tracked user modification в KlipperScreen блокирует sync.
+# Блок 11: Tracked user modification в KlipperScreen блокирует sync.
 git clone "${remote}" "${tmp}/ks-tracked-dirty" >/dev/null
 runtime_repo_add_excludes "${tmp}/ks-tracked-dirty" '/styles/treed-oled/'
 printf 'user-change\n' >> "${tmp}/ks-tracked-dirty/runtime.txt"
@@ -145,7 +165,7 @@ if sync_managed_repo "${tmp}/ks-tracked-dirty" "${remote}" "${target_commit}" ma
 fi
 grep -Fx 'user-change' "${tmp}/ks-tracked-dirty/runtime.txt" >/dev/null
 
-# Блок 11: Повреждённая Git metadata сохраняется перед восстановлением.
+# Блок 12: Повреждённая Git metadata сохраняется перед восстановлением.
 git clone "${remote}" "${tmp}/corrupt" >/dev/null
 printf 'broken-index\n' > "${tmp}/corrupt/.git/index"
 sync_managed_repo "${tmp}/corrupt" "${remote}" "${target_commit}" master Moonraker
@@ -153,7 +173,7 @@ assert_synced "${tmp}/corrupt"
 corrupt_backup="$(find "${tmp}" -maxdepth 1 -type d -name 'corrupt.treed-backup-*' -print -quit)"
 [ -n "${corrupt_backup}" ]
 
-# Блок 12: Некорректный каталог сохраняется рядом и заменяется валидным checkout.
+# Блок 13: Некорректный каталог сохраняется рядом и заменяется валидным checkout.
 mkdir "${tmp}/broken"
 printf 'keep-me\n' > "${tmp}/broken/local.txt"
 sync_managed_repo "${tmp}/broken" "${remote}" "${target_commit}" master Moonraker
