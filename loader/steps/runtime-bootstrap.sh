@@ -127,6 +127,9 @@ ensure_repo_present() {
   if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
     runtime_repo_add_excludes "${repo_dir}" \
       '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/treed_sgt_calibration.py' \
+      '/klippy/extras/treed_sgt_executor.py' \
+      '/klippy/extras/__pycache__/treed_sgt_*.pyc' \
       '/klippy/extras/treed_motor_calibration.py.pre-canonical' \
       '/klippy/extras/treed_motor_calibration.py.pre-waypoint' \
       '/klippy/extras/__pycache__/treed_motor_*.pyc'
@@ -142,6 +145,9 @@ ensure_repo_present() {
   if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
     runtime_repo_add_excludes "${repo_dir}" \
       '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/treed_sgt_calibration.py' \
+      '/klippy/extras/treed_sgt_executor.py' \
+      '/klippy/extras/__pycache__/treed_sgt_*.pyc' \
       '/klippy/extras/treed_motor_calibration.py.pre-canonical' \
       '/klippy/extras/treed_motor_calibration.py.pre-waypoint' \
       '/klippy/extras/__pycache__/treed_motor_*.pyc'
@@ -610,6 +616,13 @@ rm -f \
 motor_guard="${REPO_DIR}/klipper-host/treed_motor_guard.py"
 [ -f "${motor_guard}" ] || { log_error "runtime-bootstrap: missing motor guard"; exit 1; }
 install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${motor_guard}" "${KLIPPER_DIR}/klippy/extras/treed_motor_guard.py"
+
+# Отдельный opt-in исполнитель SGT; доставка не активирует движения или cfg.
+for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py; do
+  [ -f "${REPO_DIR}/${sgt_source}" ] || { log_error "runtime-bootstrap: missing ${sgt_source}"; exit 1; }
+  install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${REPO_DIR}/${sgt_source}" \
+    "${KLIPPER_DIR}/klippy/extras/${sgt_source##*/}"
+done
 
 KLIPPER_REQ_FILE="${KLIPPER_DIR}/scripts/klippy-requirements.txt"
 if [ ! -f "${KLIPPER_REQ_FILE}" ]; then

@@ -7,6 +7,8 @@
 - `tools/tests/` — локальные контрактные проверки loader/steps.
 - `tools/skills/` — локальные skills для Codex, используемые в этом репозитории.
 - `tools/collect_eddy_diagnostic.sh` — passive по умолчанию пакет CAN/MCU; `eddy-scan` требует отдельного разрешения движения.
+- `tools/treed_sgt_calibration.py` — изолированный алгоритм подбора SGT по повторяемости; не выполняет движения. Контракт: [sgt-calibration.md](../docs/sgt-calibration.md).
+
 ## `tools/skills/`
 
 Содержит навыки Codex:
@@ -31,4 +33,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_ed
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_parking_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_system_capabilities_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_shutdown_recovery_contracts.ps1"
+```
+
+Проверка ядра и исполнителя SGT без принтера (Python 3.8+):
+
+```text
+python -m unittest discover -s tools/tests -p "test_sgt*.py" -v
 ```
