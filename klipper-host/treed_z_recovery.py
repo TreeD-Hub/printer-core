@@ -16,7 +16,6 @@ class TreedZRecovery:
     # Блок 1: Отдельные параметры и DIAG, не заменяющий endstop рельса Z.
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.enabled = config.getboolean('enabled', False)
         self.running = False
         self.last_run = {}
         self.last_eddy = {}
@@ -36,12 +35,11 @@ class TreedZRecovery:
         low = zconfig.getfloat('position_min', 0.)
         high = zconfig.getfloat('position_max')
         self.bottom = config.getfloat('bottom_position', high)
-        self.max_seek = config.getfloat('max_seek', high - low, above=0.)
+        self.max_seek = config.getfloat('max_seek', high - low, above=0., maxval=210.)
         values = (low, high, self.bottom, self.max_seek, self.speed,
                   self.current, self.accel, self.clearance, self.pause)
         if (not all(math.isfinite(v) for v in values)
                 or not low < self.bottom <= high
-                or self.max_seek > self.bottom - low
                 or self.clearance >= self.max_seek):
             raise config.error('Z recovery: неверные границы поиска или отхода')
         if (config.getsection('printer').get('kinematics') != 'corexy'
@@ -234,8 +232,6 @@ class TreedZRecovery:
         if 'z' in self.kin.get_status(now)['homed_axes']:
             gcmd.respond_info('Z recovery: Z уже известна; нижняя опора пропущена')
             return
-        if not self.enabled:
-            raise gcmd.error('Z recovery: требуется аппаратная настройка и enabled: True')
         if self.speed > min(self.toolhead.max_velocity, self.kin.max_z_velocity):
             raise gcmd.error('Z recovery: speed превышает текущий лимит Z')
         self.toolhead.wait_moves()
@@ -261,10 +257,13 @@ class TreedZRecovery:
             self.driver.mcu_tmc.set_register(self.driver.fields.lookup_register('tcoolthrs'),
                                              bits, self.toolhead.get_last_move_time())
             self.enable.motor_enable(self.toolhead.get_last_move_time())
+            # Временное начало ниже soft limit даёт запас хода без расширения position_max.
             self._set_z(self.bottom - self.max_seek)
             _, overshoot = self._seek()
             self._set_z(self.bottom + overshoot)
             self._retreat(self.clearance)
+            # До Eddy Z0 координата только безопасная временная привязка у нижней границы.
+            self._set_z(self.bottom - self.clearance)
             success = True
         finally:
             try:
@@ -302,8 +301,6 @@ class TreedZRecovery:
         self._require_test(gcmd)
         if set(gcmd.get_command_parameters()) - {'CONFIRM', 'START_Z'}:
             raise gcmd.error('Acceptance: неизвестный параметр')
-        if not self.enabled:
-            raise gcmd.error('Acceptance: recovery не допущен в конфиге')
         start_z = gcmd.get_float('START_Z', None)
         if start_z is not None:
             if (not math.isfinite(start_z) or not 0. < start_z <= self.bottom - self.clearance

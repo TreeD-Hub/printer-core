@@ -76,11 +76,15 @@ class Fields:
 class Rig:
     def __init__(self, **config):
         self.pos = [17., 29., 0., 4.]
+        self.physical_z = 0.
+        self.contact_z = None
+        self.kin_pos = list(self.pos)
+        self.gcode_pos = list(self.pos)
         self.homed = ''
         self.shutdown = False
         self.phase, self.stats, self.paused, self.sd_active = 'idle', 'standby', False, False
         self.manual_active = False
-        self.hits = [(120., .025)]
+        self.hits = [(205., .025)]
         self.moves, self.seeks, self.pauses, self.writes = [], [], [], []
         self.fail_move = None
         self.fields = Fields()
@@ -99,7 +103,7 @@ class Rig:
                          mcu_tmc=NS(set_register=self.write))
         self.kin = NS(rails=[None, None, NS(get_steppers=lambda: [NS(get_name=lambda: 'stepper_z')])],
                       max_z_velocity=25., get_status=lambda _: dict(homed_axes=self.homed),
-                      clear_homing_state=self.clear)
+                      clear_homing_state=self.clear, get_position=lambda: list(self.kin_pos))
         self.toolhead = NS(max_velocity=300., max_accel=3000., square_corner_velocity=5.,
                            min_cruise_ratio=.5, get_kinematics=lambda: self.kin,
                            get_position=lambda: list(self.pos), set_position=self.set_position,
@@ -110,6 +114,8 @@ class Rig:
         self.objects = {
             'toolhead': self.toolhead,
             'gcode': NS(register_command=Mock()),
+            'gcode_move': NS(get_status=lambda _: dict(position=list(self.gcode_pos),
+                                                       gcode_position=list(self.gcode_pos))),
             'pins': NS(setup_pin=Mock(return_value=self.endstop)),
             'stepper_enable': NS(lookup_enable=lambda _: self.enable),
             'gcode_macro _TREED_OPERATION_STATE': NS(variables={}),
@@ -124,7 +130,8 @@ class Rig:
                           get_reactor=lambda: NS(monotonic=lambda: 0.), is_shutdown=lambda: self.shutdown,
                           get_state_message=lambda: ('ready', 'ready'), invoke_shutdown=self.stop,
                           config_error=ValueError, command_error=ValueError)
-        self.extra = module.TreedZRecovery(Config(self, enabled=True, **config))
+        config.setdefault('max_seek', 210)
+        self.extra = module.TreedZRecovery(Config(self, **config))
         self.extra._connect()
         self.command = NS(get_command_parameters=lambda: {}, respond_info=Mock(), error=ValueError)
 
@@ -143,6 +150,8 @@ class Rig:
 
     def set_position(self, pos, homing_axes=''):
         self.pos[:] = pos
+        self.kin_pos[:] = pos
+        self.gcode_pos[:] = pos
         self.homed = ''.join(sorted(set(self.homed + homing_axes)))
 
     def set_limits(self, *values):
@@ -157,7 +166,9 @@ class Rig:
             raise ValueError('ошибка отхода')
         assert pos[:2] == self.pos[:2] and pos[3] == self.pos[3]
         assert -5 <= pos[2] <= 203
+        self.physical_z += pos[2] - self.pos[2]
         self.pos[:] = pos
+        self.kin_pos[:] = pos
 
     def run(self):
         self.objects['gcode_macro _TREED_OPERATION_STATE'].variables['phase'] = self.phase
@@ -179,6 +190,8 @@ class Rig:
                 self.zero = travel == 0
                 trigger = list(rig.pos)
                 trigger[2] += travel
+                rig.contact_z = rig.physical_z + travel
+                rig.physical_z = rig.contact_z + overshoot
                 rig.pos[2] = trigger[2] + overshoot
                 return trigger
 
@@ -204,13 +217,29 @@ class RecoveryTests(unittest.TestCase):
         rig = Rig()
         rig.run()
         self.assertEqual(rig.pos, [17., 29., 198., 4.])
-        self.assertEqual(rig.seeks, [(-5., 203., 5.)])
+        self.assertEqual(rig.extra.last_run['probes'][0]['trigger_mm'], 198.)
+        gcode = rig.objects['gcode_move'].get_status(0)
+        self.assertEqual((rig.toolhead.get_position()[2], rig.kin.get_position()[2],
+                          gcode['position'][2], gcode['gcode_position'][2]),
+                         (rig.extra.bottom - rig.extra.clearance,) * 4)
+        self.assertEqual(rig.seeks, [(-7., 203., 5.)])
         self.assertEqual([p[2] for p in rig.moves], [198.])
+        self.assertAlmostEqual(rig.contact_z - rig.physical_z, 5.)
         self.assertEqual(rig.pauses, [2.])
         self.assertEqual(len(rig.extra.last_run['probes']), 1)
         self.assertNotIn('second_travel_mm', rig.extra.last_run)
         self.assertIsNone(rig.extra.last_run['probes'][0]['failure_reason'])
         rig.endstop.add_stepper.assert_called_once()
+        self.restored(rig, True)
+
+    def test_contact_at_200_retreats_five_mm(self):
+        rig = Rig()
+        rig.hits[0] = (207., .025)
+        rig.run()
+        self.assertEqual(rig.extra.last_run['probes'][0]['trigger_mm'], 200.)
+        self.assertEqual([p[2] for p in rig.moves], [198.])
+        self.assertAlmostEqual(rig.contact_z - rig.physical_z, 5.)
+        self.assertEqual(rig.pos[2], 198.)
         self.restored(rig, True)
 
     def test_print_preparation_allowed(self):
@@ -219,15 +248,10 @@ class RecoveryTests(unittest.TestCase):
         rig.run()
         self.restored(rig, True)
 
-    def test_known_z_and_disabled_unknown(self):
+    def test_known_z_skips_recovery(self):
         rig = Rig()
-        rig.extra.enabled = False
         rig.homed = 'xyz'
         rig.run()
-        self.assertFalse(rig.seeks or rig.moves or rig.writes)
-        rig.homed = 'xy'
-        with self.assertRaises(ValueError):
-            rig.run()
         self.assertFalse(rig.seeks or rig.moves or rig.writes)
 
     def test_pause_transition_and_sgt_calibration(self):
@@ -274,9 +298,9 @@ class RecoveryTests(unittest.TestCase):
     def test_invalid_first_probe_reasons(self):
         for travel, overshoot, reason in ((0., 0., 'no_movement'),
                                           (-1., 0., 'trigger_before_start'),
-                                          (209., 0., 'trigger_after_bottom'),
+                                          (211., 0., 'trigger_after_bottom'),
                                           (120., -.1, 'halt_before_trigger'),
-                                          (208., .1, 'halt_after_bottom'),
+                                          (210., .1, 'halt_after_bottom'),
                                           (120., 6., 'overshoot_exceeds_clearance'),
                                           (float('nan'), 0., 'non_finite_trigger'),
                                           (float('inf'), 0., 'non_finite_trigger')):
@@ -294,7 +318,7 @@ class RecoveryTests(unittest.TestCase):
                 self.restored(rig)
 
     def test_first_probe_boundary(self):
-        for travel in (0.001, 208.):
+        for travel in (0.001, 210.):
             rig = Rig()
             rig.hits[0] = (travel, 0.)
             rig.run()
@@ -311,6 +335,22 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             rig.run()
         self.assertFalse(rig.seeks)
+        self.restored(rig)
+
+    def test_final_position_sync_failure_clears_homing(self):
+        rig = Rig()
+        calls = 0
+
+        def set_position(pos, homing_axes=''):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise ValueError('ошибка синхронизации Z')
+            rig.set_position(pos, homing_axes)
+
+        rig.toolhead.set_position = set_position
+        with self.assertRaisesRegex(ValueError, 'ошибка синхронизации Z'):
+            rig.run()
         self.restored(rig)
 
     def test_partial_write_and_restore_failure(self):
@@ -332,8 +372,8 @@ class RecoveryTests(unittest.TestCase):
 
     def test_config_validation(self):
         for params in (dict(speed=float('nan')), dict(current=float('inf')),
-                        dict(max_seek=209), dict(bottom_position=204),
-                        dict(bottom_clearance_mm=208),
+                        dict(max_seek=211), dict(bottom_position=204),
+                        dict(bottom_clearance_mm=210),
                        dict(sgt=64), dict(stallguard_pause=1), dict(current=4)):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 Rig(**params)
@@ -351,9 +391,9 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn('position_max: 203', steppers)
         self.assertIn('[force_move]', (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8'))
         recovery = (profile / 'z_recovery.cfg').read_text(encoding='utf-8')
-        self.assertIn('enabled: False', recovery)
+        self.assertNotIn('enabled:', recovery)
         self.assertIn('bottom_position: 203', recovery)
-        self.assertIn('max_seek: 208', recovery)
+        self.assertIn('max_seek: 210', recovery)
         self.assertNotIn('verify_backoff_mm', recovery)
         self.assertNotIn('tolerance:', recovery)
         self.assertIn('variable_axis_z_max: 203.0', (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8'))
