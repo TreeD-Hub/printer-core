@@ -9,3 +9,10 @@
 `treed_sgt_executor.py` — отдельно включаемый исполнитель проб X/Y. Ядро
 `tools/treed_sgt_calibration.py` доставляется рядом с ним из единственного исходника.
 Активация, команда и ограничения: [подбор SGT](../docs/sgt-calibration.md).
+
+`treed_z_recovery.py` — нижняя опора неизвестной Z: две ограниченные пробы
+TMC5160, проверка хода второй пробы и отход. Доставляется обязательно;
+до аппаратной настройки `enabled: False` блокирует unknown-Z homing.
+[Параметры и допуск](../klipper/profiles/treed_v2_corexy_v1/README.md#нижняя-опора-z).
+При обновлении Klipper сверять `HomingMove`, CoreXY и внутренний экспорт
+`TMC5160.get_status.__self__.current_helper` с закреплённой версией.
