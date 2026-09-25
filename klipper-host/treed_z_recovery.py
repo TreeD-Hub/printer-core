@@ -92,7 +92,8 @@ class TreedZRecovery:
         rail.position_max = limit
         if self.kin.limits[2][0] <= self.kin.limits[2][1]:
             self.kin.limits[2] = rail.get_range()
-        self.kin.axes_max = self.kin.axes_max._replace(z=limit)
+        self.kin.axes_max = self.toolhead.Coord(
+            [self.kin.axes_max.x, self.kin.axes_max.y, limit])
         contract = self.printer.lookup_object('gcode_macro _TREED_UI_CONTRACT', None)
         if contract is not None:
             contract.variables = dict(contract.variables, axis_z_max=limit)

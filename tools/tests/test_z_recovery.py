@@ -6,7 +6,6 @@ Z_RECOVERY_KLIPPER_SOURCE позволяет дополнительно пров
 import importlib.util
 import json
 import os
-from collections import namedtuple
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace as NS
@@ -109,11 +108,12 @@ class Rig:
         self.rail.get_range = lambda: (self.rail.position_min, self.rail.position_max)
         self.kin = NS(rails=[None, None, self.rail],
                       limits=[(0., 245.), (0., 245.), (1., -1.)],
-                      axes_max=namedtuple('Coord', 'x y z')(245., 245., 203.),
+                      axes_max=NS(x=245., y=245., z=203.),
                       max_z_velocity=25., get_status=lambda _: dict(homed_axes=self.homed),
                       clear_homing_state=self.clear, get_position=lambda: list(self.kin_pos))
         self.toolhead = NS(max_velocity=300., max_accel=3000., square_corner_velocity=5.,
                            min_cruise_ratio=.5, get_kinematics=lambda: self.kin,
+                           Coord=lambda xyz: NS(x=xyz[0], y=xyz[1], z=xyz[2]),
                            get_position=lambda: list(self.pos), set_position=self.set_position,
                            set_max_velocities=self.set_limits, get_last_move_time=lambda: 1.,
                            wait_moves=lambda: None, dwell=self.pauses.append, move=self.move)
@@ -294,7 +294,7 @@ class RecoveryTests(unittest.TestCase):
                 self.assertAlmostEqual(rig.extra.z_travel['z_max'], expected)
                 self.assertAlmostEqual(rig.kin.limits[2][1], expected)
                 self.assertAlmostEqual(rig.kin.axes_max.z, expected)
-                self.assertEqual(rig.kin.axes_max[:2], (245., 245.))
+                self.assertEqual((rig.kin.axes_max.x, rig.kin.axes_max.y), (245., 245.))
                 self.assertAlmostEqual(rig.objects['gcode_macro _TREED_UI_CONTRACT'].variables[
                     'axis_z_max'], expected)
                 rig.extra._set_z(.25)
@@ -552,18 +552,25 @@ class RecoveryTests(unittest.TestCase):
     # Блок 3: Реальный HomingMove закреплённого Klipper с моделируемыми MCU-счётчиками.
     @unittest.skipUnless(os.environ.get('Z_RECOVERY_KLIPPER_SOURCE'), 'upstream source not supplied')
     def test_upstream_corexy_enforces_limit_after_coordinate_reset(self):
-        source = Path(os.environ['Z_RECOVERY_KLIPPER_SOURCE']) / 'kinematics_corexy.py'
-        upstream_spec = importlib.util.spec_from_file_location('_z_real_corexy', source)
+        source = Path(os.environ['Z_RECOVERY_KLIPPER_SOURCE'])
+        coord_spec = importlib.util.spec_from_file_location('_z_real_coord', source / 'gcode.py')
+        coord_module = importlib.util.module_from_spec(coord_spec)
+        coord_spec.loader.exec_module(coord_module)
+        upstream_spec = importlib.util.spec_from_file_location(
+            '_z_real_corexy', source / 'kinematics_corexy.py')
         real = importlib.util.module_from_spec(upstream_spec)
         with patch.dict(sys.modules, {'stepper': ModuleType('stepper')}):
             upstream_spec.loader.exec_module(real)
         rig = Rig()
+        rig.toolhead.Coord = coord_module.Coord
+        rig.kin.axes_max = coord_module.Coord([245., 245., 203.])
         rig.hits = [(180., .025)]
         rig.run()
         rig.finish_eddy()
+        self.assertIsInstance(rig.kin.axes_max, coord_module.Coord)
         native = real.CoreXYKinematics.__new__(real.CoreXYKinematics)
         native.limits, native.axes_max = rig.kin.limits, rig.kin.axes_max
-        native.axes_min = native.axes_max._replace(x=0., y=0., z=-5.)
+        native.axes_min = coord_module.Coord([0., 0., -5.])
         native.max_z_velocity, native.max_z_accel = 25., 100.
         rig.rail.set_position = lambda pos: None
         native.rails = [rig.rail] * 3
