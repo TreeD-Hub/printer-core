@@ -12,10 +12,13 @@
 
 `treed_z_recovery.py` — нижняя опора неизвестной Z: одна ограниченная проба
 TMC5160 и отход от фактического DIAG. Доставляется обязательно и вызывается
-штатным homing при неизвестной Z.
+штатным homing при неизвестной Z. После рабочего Eddy Z0 измеряет ход от DIAG
+по общей MCU-опоре и ограничивает runtime Z с запасом `bottom_clearance_mm`.
 [Параметры и допуск](../klipper/profiles/treed_v2_corexy_v1/README.md#нижняя-опора-z).
 При обновлении Klipper сверять `HomingMove`, CoreXY и внутренний экспорт
 `TMC5160.get_status.__self__.current_helper` с закреплённой версией.
+Для рабочего Z-лимита используются `rail.position_max`, `CoreXY.limits` и
+`CoreXY.axes_max`; `MCU_stepper.get_mcu_position` должен переживать смену координат.
 
 Этот же extra предоставляет диагностические команды и telemetry Z/Eddy.
 Диагностический mesh временно подавляет `bed_mesh.save_profile`, восстанавливает

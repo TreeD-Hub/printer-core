@@ -1,4 +1,4 @@
-"""Нижняя опора Z через TMC5160; required для неизвестной Z после допуска.
+"""Доступный ход Z между DIAG и Eddy; required для неизвестной Z.
 
 Eddy остаётся рабочим Z-endstop. Повторяемость StallGuard не доказывает
 отсутствие препятствия: параметры и свободный ход проверяет оператор.
@@ -17,6 +17,8 @@ class TreedZRecovery:
     def __init__(self, config):
         self.printer = config.get_printer()
         self.running = False
+        self.eddy_homing = False
+        self.z_travel = {}
         self.last_run = {}
         self.last_eddy = {}
         self.capture_eddy = False
@@ -34,12 +36,14 @@ class TreedZRecovery:
         zconfig = config.getsection('stepper_z')
         low = zconfig.getfloat('position_min', 0.)
         high = zconfig.getfloat('position_max')
+        self.config_z_max = high
         self.bottom = config.getfloat('bottom_position', high)
         self.max_seek = config.getfloat('max_seek', high - low, above=0., maxval=210.)
         values = (low, high, self.bottom, self.max_seek, self.speed,
                   self.current, self.accel, self.clearance, self.pause)
         if (not all(math.isfinite(v) for v in values)
                 or not low < self.bottom <= high
+                or self.bottom - self.clearance <= low
                 or self.clearance >= self.max_seek):
             raise config.error('Z recovery: неверные границы поиска или отхода')
         if (config.getsection('printer').get('kinematics') != 'corexy'
@@ -56,6 +60,8 @@ class TreedZRecovery:
         self.printer.lookup_object('gcode').register_command(
             'TREED_Z_HOME_BOTTOM', self.cmd_home)
         gcode = self.printer.lookup_object('gcode')
+        gcode.register_command('_TREED_Z_TRAVEL_BEGIN', self.cmd_travel_begin)
+        gcode.register_command('_TREED_Z_TRAVEL_APPLY', self.cmd_travel_apply)
         gcode.register_command('TREED_Z_RECOVERY_TEST', self.cmd_test)
         gcode.register_command('TREED_EDDY_ACCEPTANCE_HOME', self.cmd_eddy_test)
         gcode.register_command('TREED_EDDY_ACCEPTANCE_MESH', self.cmd_mesh_test)
@@ -71,15 +77,41 @@ class TreedZRecovery:
         self.endstop.add_stepper(steppers[0])
         self.enable = self.printer.lookup_object('stepper_enable').lookup_enable('stepper_z')
         self.enable.register_state_callback(self._motor_state)
+        self.printer.register_event_handler('gcode:command_error', self._command_error)
+        self.printer.register_event_handler('klippy:shutdown', self._invalidate_travel)
 
     def _motor_state(self, print_time, enabled):
         if not enabled:
             self.motor_epoch += 1
+            self._invalidate_travel()
+
+    def _set_z_limit(self, limit):
+        # CoreXY ce7002bed: rail нужен для следующих set_position/homing,
+        # limits — для check_move, axes_max и UI-контракт — для потребителей.
+        rail = self.kin.rails[2]
+        rail.position_max = limit
+        if self.kin.limits[2][0] <= self.kin.limits[2][1]:
+            self.kin.limits[2] = rail.get_range()
+        self.kin.axes_max = self.kin.axes_max._replace(z=limit)
+        contract = self.printer.lookup_object('gcode_macro _TREED_UI_CONTRACT', None)
+        if contract is not None:
+            contract.variables = dict(contract.variables, axis_z_max=limit)
+
+    def _invalidate_travel(self):
+        self.z_travel = {}
+        self.eddy_homing = False
+        self.kin.clear_homing_state('z')
+        self._set_z_limit(self.config_z_max)
+
+    def _command_error(self):
+        if self.eddy_homing:
+            self._invalidate_travel()
 
     def get_status(self, eventtime):
         return copy.deepcopy(dict(last_run=self.last_run, last_eddy=self.last_eddy,
                                   last_mesh=self.last_mesh, mesh_active=self.mesh_active,
                                   mesh_fault=self.mesh_fault,
+                                  z_travel=self.z_travel,
                                   running=self.running, motor_epoch=self.motor_epoch))
 
     # Блок 2: Допуск до любых изменений координат, тока и движения.
@@ -95,7 +127,7 @@ class TreedZRecovery:
         manual = self.printer.lookup_object('manual_probe', None)
         sgt = self.printer.lookup_object('treed_sgt_executor', None)
         # virtual_sd уже printing внутри START_PRINT; только preparing допускает этот случай.
-        if (self.running or phase not in ('idle', 'preparing') or paused
+        if (self.running or self.eddy_homing or phase not in ('idle', 'preparing') or paused
                 or stats in ('paused', 'error')
                 or ((stats == 'printing' or sd_active) and phase != 'preparing')
                 or (manual is not None and manual.get_status(now)['is_active'])
@@ -105,6 +137,8 @@ class TreedZRecovery:
     def _alive(self, check_pause=True):
         if self.printer.is_shutdown():
             raise self.printer.command_error('Z recovery: Klipper shutdown')
+        if check_pause and self.running and self.motor_epoch != self.last_run['motor_epoch']:
+            raise self.printer.command_error('Z recovery: мотор Z отключался во время поиска')
         pause_resume = self.printer.lookup_object('pause_resume')
         if check_pause and (pause_resume.is_paused or pause_resume.pause_command_sent):
             raise self.printer.command_error('Z recovery: запрошена пауза')
@@ -235,6 +269,7 @@ class TreedZRecovery:
         if self.speed > min(self.toolhead.max_velocity, self.kin.max_z_velocity):
             raise gcmd.error('Z recovery: speed превышает текущий лимит Z')
         self.toolhead.wait_moves()
+        self._invalidate_travel()
         fields = ('sgt', 'en_pwm_mode', 'diag0_stall', 'diag1_stall',
                   'tcoolthrs', 'thigh', 'globalscaler', 'irun', 'ihold')
         saved = {f: self.driver.fields.get_field(f) for f in fields}
@@ -260,10 +295,19 @@ class TreedZRecovery:
             # Временное начало ниже soft limit даёт запас хода без расширения position_max.
             self._set_z(self.bottom - self.max_seek)
             _, overshoot = self._seek()
+            stepper = self.kin.rails[2].get_steppers()[0]
+            step_mm = stepper.get_step_dist()
+            contact_mcu_mm = stepper.get_mcu_position() * step_mm - overshoot
+            if (not math.isfinite(contact_mcu_mm) or not math.isfinite(step_mm)
+                    or step_mm <= 0. or self.motor_epoch != self.last_run['motor_epoch']):
+                raise gcmd.error('Z recovery: потеря MCU-опоры DIAG')
             self._set_z(self.bottom + overshoot)
             self._retreat(self.clearance)
-            # До Eddy Z0 координата только безопасная временная привязка у нижней границы.
+            # До Eddy Z0 это временная координата, не измеренная высота контакта.
             self._set_z(self.bottom - self.clearance)
+            self._set_z_limit(self.bottom - self.clearance)
+            self.z_travel = dict(state='pending_eddy', contact_mcu_mm=contact_mcu_mm,
+                                 step_mm=step_mm, motor_epoch=self.motor_epoch)
             success = True
         finally:
             try:
@@ -283,14 +327,54 @@ class TreedZRecovery:
                     self.running = False
                     self.last_run.update(tmc_restored=restored,
                                          tmc_after={f: self.driver.fields.get_field(f) for f in fields})
-                    if not success or not restored:
-                        self.kin.clear_homing_state('z')
+                    if not success or not restored or self.motor_epoch != self.last_run['motor_epoch']:
+                        self._invalidate_travel()
             if not restored:
                 raise gcmd.error('Z recovery: MCU не восстановлен; нужен FIRMWARE_RESTART')
-        gcmd.respond_info('Z recovery: нижняя опора подтверждена, Z=%.6f; рабочий Z0 — Eddy'
+        if self.motor_epoch != self.last_run['motor_epoch']:
+            raise gcmd.error('Z recovery: мотор Z отключался во время поиска')
+        gcmd.respond_info('Z recovery: DIAG найден, временная Z=%.6f; Z0 и ход определит Eddy'
                           % (self.bottom - self.clearance))
 
-    # Блок 5: Явные диагностические входы. Никаких записей конфигурации.
+    # Блок 5: Общая MCU-опора DIAG/Eddy и рабочий лимит до следующей потери Z.
+    def cmd_travel_begin(self, gcmd):
+        self._require_idle(gcmd)
+        if gcmd.get_command_parameters() or not self.z_travel:
+            self._invalidate_travel()
+            raise gcmd.error('Z travel: нужна новая опора DIAG; выполните полный G28')
+        self.eddy_homing = True
+
+    def cmd_travel_apply(self, gcmd):
+        try:
+            if gcmd.get_command_parameters() or not self.eddy_homing or not self.z_travel:
+                raise gcmd.error('Z travel: нет начатого измерения DIAG/Eddy')
+            self.toolhead.wait_moves()
+            self._alive()
+            ref = self.z_travel
+            stepper = self.kin.rails[2].get_steppers()[0]
+            step_mm = stepper.get_step_dist()
+            if (not ref or self.motor_epoch != ref['motor_epoch'] or step_mm != ref['step_mm']
+                    or 'z' not in self.kin.get_status(0)['homed_axes']):
+                raise gcmd.error('Z travel: общая опора DIAG/Eddy потеряна')
+            z = self.toolhead.get_position()[2]
+            # SET_KINEMATIC_POSITION и G28 меняют координаты, но сохраняют MCU-счётчик.
+            z0_mcu_mm = stepper.get_mcu_position() * step_mm - z
+            contact_z = ref['contact_mcu_mm'] - z0_mcu_mm
+            limit = min(self.config_z_max, contact_z - self.clearance)
+            if (not all(math.isfinite(v) for v in (z, z0_mcu_mm, contact_z, limit))
+                    or limit <= 0. or not self.kin.rails[2].position_min <= z <= limit):
+                raise gcmd.error('Z travel: неверный или недостаточный ход между DIAG и Eddy')
+            self._set_z_limit(limit)
+            self.z_travel.update(state='measured', z0_mcu_mm=z0_mcu_mm,
+                                 contact_z=contact_z, z_max=limit)
+            self.eddy_homing = False
+            gcmd.respond_info('Z travel: DIAG Z=%.3f, запас=%.3f, доступно Z<=%.3f мм'
+                              % (contact_z, self.clearance, limit))
+        except BaseException:
+            self._invalidate_travel()
+            raise
+
+    # Блок 6: Явные диагностические входы. Никаких записей конфигурации.
     def _require_test(self, gcmd):
         self._require_idle(gcmd)
         phase = self.printer.lookup_object('gcode_macro _TREED_OPERATION_STATE').variables['phase']
@@ -313,7 +397,7 @@ class TreedZRecovery:
                 self.toolhead.move(pos, self.speed)
                 self.toolhead.wait_moves()
             except BaseException:
-                self.kin.clear_homing_state('z')
+                self._invalidate_travel()
                 self.printer.invoke_shutdown('Acceptance: сбой установки стартовой Z')
                 raise
         before = dict(position=self.toolhead.get_position(),
@@ -349,7 +433,7 @@ class TreedZRecovery:
             for stage, state in self.last_eddy['stages'].items():
                 if state == 'running':
                     self.last_eddy['stages'][stage] = 'failed'
-            self.kin.clear_homing_state('z')
+            self._invalidate_travel()
             raise
         finally:
             self.capture_eddy = False

@@ -6,6 +6,7 @@ Z_RECOVERY_KLIPPER_SOURCE позволяет дополнительно пров
 import importlib.util
 import json
 import os
+from collections import namedtuple
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace as NS
@@ -77,6 +78,7 @@ class Rig:
     def __init__(self, **config):
         self.pos = [17., 29., 0., 4.]
         self.physical_z = 0.
+        self.mcu_offset_steps = 1234567
         self.contact_z = None
         self.kin_pos = list(self.pos)
         self.gcode_pos = list(self.pos)
@@ -101,7 +103,13 @@ class Rig:
 
         self.driver = NS(fields=self.fields, get_status=DriverStatus().get_status,
                          mcu_tmc=NS(set_register=self.write))
-        self.kin = NS(rails=[None, None, NS(get_steppers=lambda: [NS(get_name=lambda: 'stepper_z')])],
+        self.stepper = NS(get_name=lambda: 'stepper_z', get_step_dist=lambda: .001,
+                          get_mcu_position=lambda: round(self.physical_z / .001) + self.mcu_offset_steps)
+        self.rail = NS(position_min=-5., position_max=203., get_steppers=lambda: [self.stepper])
+        self.rail.get_range = lambda: (self.rail.position_min, self.rail.position_max)
+        self.kin = NS(rails=[None, None, self.rail],
+                      limits=[(0., 245.), (0., 245.), (1., -1.)],
+                      axes_max=namedtuple('Coord', 'x y z')(245., 245., 203.),
                       max_z_velocity=25., get_status=lambda _: dict(homed_axes=self.homed),
                       clear_homing_state=self.clear, get_position=lambda: list(self.kin_pos))
         self.toolhead = NS(max_velocity=300., max_accel=3000., square_corner_velocity=5.,
@@ -119,6 +127,7 @@ class Rig:
             'pins': NS(setup_pin=Mock(return_value=self.endstop)),
             'stepper_enable': NS(lookup_enable=lambda _: self.enable),
             'gcode_macro _TREED_OPERATION_STATE': NS(variables={}),
+            'gcode_macro _TREED_UI_CONTRACT': NS(variables={'axis_z_max': 203.}),
             'print_stats': NS(get_status=lambda _: dict(state=self.stats)),
             'pause_resume': NS(get_status=lambda _: dict(is_paused=self.paused),
                                is_paused=False, pause_command_sent=False),
@@ -147,12 +156,16 @@ class Rig:
 
     def clear(self, axes):
         self.homed = ''.join(a for a in self.homed if a not in axes)
+        if 'z' in axes:
+            self.kin.limits[2] = (1., -1.)
 
     def set_position(self, pos, homing_axes=''):
         self.pos[:] = pos
         self.kin_pos[:] = pos
         self.gcode_pos[:] = pos
         self.homed = ''.join(sorted(set(self.homed + homing_axes)))
+        if 'z' in homing_axes:
+            self.kin.limits[2] = self.rail.get_range()
 
     def set_limits(self, *values):
         for name, value in zip(('max_velocity', 'max_accel', 'square_corner_velocity',
@@ -165,7 +178,8 @@ class Rig:
         if len(self.moves) == self.fail_move:
             raise ValueError('ошибка отхода')
         assert pos[:2] == self.pos[:2] and pos[3] == self.pos[3]
-        assert -5 <= pos[2] <= 203
+        if not self.rail.position_min <= pos[2] <= self.rail.position_max:
+            raise ValueError('Move out of range')
         self.physical_z += pos[2] - self.pos[2]
         self.pos[:] = pos
         self.kin_pos[:] = pos
@@ -200,6 +214,14 @@ class Rig:
 
         with patch.object(homing, 'HomingMove', Move, create=True):
             self.extra.cmd_home(self.command)
+
+    def finish_eddy(self, z0_physical=0., corrected_z=.25):
+        self.extra.cmd_travel_begin(self.command)
+        # Движение до Eddy и две смены системы координат не обнуляют MCU-счётчик.
+        self.physical_z = z0_physical + corrected_z
+        self.extra._set_z(100.)
+        self.extra._set_z(corrected_z)
+        self.extra.cmd_travel_apply(self.command)
 
 
 # Блок 2: Успех и отказы; проверяем состояние, а не только текст ошибки.
@@ -253,6 +275,125 @@ class RecoveryTests(unittest.TestCase):
         rig.homed = 'xyz'
         rig.run()
         self.assertFalse(rig.seeks or rig.moves or rig.writes)
+
+    def test_measured_limit_uses_physical_contact_after_eddy(self):
+        for contact, start, origin, expected in (
+                (175., 0., 1234567, 169.5), (175., 100., -1234567, 169.5),
+                (175., 170., 0, 169.5), (203., 100., 1234567, 197.5),
+                (209., 100., 1234567, 203.)):
+            with self.subTest(contact=contact, start=start, origin=origin):
+                rig = Rig()
+                rig.physical_z, rig.mcu_offset_steps = start, origin
+                rig.hits = [(contact - start, .025)]
+                rig.run()
+                self.assertEqual(rig.pos[2], 198.)
+                self.assertEqual(rig.extra.z_travel['state'], 'pending_eddy')
+                self.assertEqual(rig.rail.position_max, 198.)
+                rig.finish_eddy(z0_physical=.5)
+                self.assertAlmostEqual(rig.extra.z_travel['contact_z'], contact - .5)
+                self.assertAlmostEqual(rig.extra.z_travel['z_max'], expected)
+                self.assertAlmostEqual(rig.kin.limits[2][1], expected)
+                self.assertAlmostEqual(rig.kin.axes_max.z, expected)
+                self.assertEqual(rig.kin.axes_max[:2], (245., 245.))
+                self.assertAlmostEqual(rig.objects['gcode_macro _TREED_UI_CONTRACT'].variables[
+                    'axis_z_max'], expected)
+                rig.extra._set_z(.25)
+                self.assertAlmostEqual(rig.kin.limits[2][1], expected)
+                rig.move([17., 29., expected, 4.], 5.)
+                self.assertGreaterEqual(contact - rig.physical_z + 1.e-6, 5.)
+                with self.assertRaisesRegex(ValueError, 'out of range'):
+                    rig.move([17., 29., expected + .01, 4.], 5.)
+
+    def test_repeated_eddy_keeps_contact_reference_and_limit_on_move_error(self):
+        rig = Rig()
+        rig.run()
+        rig.finish_eddy()
+        contact = rig.extra.z_travel['contact_mcu_mm']
+        rig.run()  # Уже известная Z не ищет DIAG заново.
+        self.assertEqual(len(rig.seeks), 1)
+        rig.finish_eddy(z0_physical=.1)
+        self.assertEqual(rig.extra.z_travel['contact_mcu_mm'], contact)
+        self.assertAlmostEqual(rig.rail.position_max, 199.9)
+        rig.extra._command_error()  # Ошибка обычного G1 не открывает прежние 203 мм.
+        self.assertAlmostEqual(rig.rail.position_max, 199.9)
+        snapshot = rig.extra.get_status(0)
+        snapshot['z_travel'].clear()
+        self.assertEqual(rig.extra.z_travel['state'], 'measured')
+
+    def test_lost_reference_requires_new_bottom_before_eddy(self):
+        for failure in ('motor_off', 'eddy_error', 'shutdown'):
+            with self.subTest(failure=failure):
+                rig = Rig()
+                rig.run()
+                rig.finish_eddy()
+                if failure == 'motor_off':
+                    rig.extra._motor_state(0., False)
+                elif failure == 'eddy_error':
+                    rig.extra.cmd_travel_begin(rig.command)
+                    rig.extra._command_error()
+                else:
+                    rig.extra._invalidate_travel()
+                self.assertEqual(rig.extra.z_travel, {})
+                self.assertNotIn('z', rig.homed)
+                self.assertEqual(rig.kin.limits[2], (1., -1.))
+                self.assertEqual(rig.rail.position_max, 203.)
+                with self.assertRaisesRegex(ValueError, 'опора DIAG'):
+                    rig.extra.cmd_travel_begin(rig.command)
+                rig.hits = [(10., .025)]
+                rig.run()
+                self.assertEqual(rig.seeks[-1], (-7., 203., 5.))
+                self.assertEqual(rig.extra.z_travel['state'], 'pending_eddy')
+
+    def test_invalid_travel_clears_z_without_fallback(self):
+        for fault in ('no_begin', 'unknown', 'motor_epoch', 'step_distance', 'motor_during_wait',
+                      'counter', 'nan_z', 'short', 'outside', 'shutdown', 'pause'):
+            with self.subTest(fault=fault):
+                rig = Rig()
+                rig.run()
+                if fault != 'no_begin':
+                    rig.extra.cmd_travel_begin(rig.command)
+                rig.physical_z = .25
+                rig.extra._set_z(.25)
+                if fault == 'unknown':
+                    rig.clear('z')
+                elif fault == 'motor_epoch':
+                    rig.extra.motor_epoch += 1
+                elif fault == 'motor_during_wait':
+                    rig.toolhead.wait_moves = lambda: rig.extra._motor_state(0., False)
+                elif fault == 'step_distance':
+                    rig.stepper.get_step_dist = lambda: .002
+                elif fault == 'counter':
+                    rig.stepper.get_mcu_position = lambda: float('nan')
+                elif fault == 'nan_z':
+                    rig.pos[2] = float('nan')
+                elif fault == 'short':
+                    rig.physical_z = rig.contact_z
+                elif fault == 'outside':
+                    rig.pos[2], rig.physical_z = 10., rig.contact_z - 1.
+                elif fault == 'shutdown':
+                    rig.shutdown = True
+                elif fault == 'pause':
+                    rig.objects['pause_resume'].pause_command_sent = True
+                with self.assertRaises(ValueError):
+                    rig.extra.cmd_travel_apply(rig.command)
+                self.assertEqual(rig.extra.z_travel, {})
+                self.assertNotIn('z', rig.homed)
+                self.assertEqual(rig.kin.limits[2], (1., -1.))
+
+    def test_motor_off_during_retreat_or_restore_cannot_publish_reference(self):
+        for phase in ('retreat', 'restore'):
+            with self.subTest(phase=phase):
+                rig = Rig()
+                def wait():
+                    ready = rig.moves if phase == 'retreat' else rig.extra.z_travel
+                    if ready and not rig.extra.motor_epoch:
+                        rig.extra._motor_state(0., False)
+                rig.toolhead.wait_moves = wait
+                with self.assertRaisesRegex(ValueError, 'мотор Z отключался'):
+                    rig.run()
+                self.assertEqual(rig.extra.z_travel, {})
+                self.assertNotIn('z', rig.homed)
+                self.restored(rig)
 
     def test_pause_transition_and_sgt_calibration(self):
         rig = Rig()
@@ -373,7 +514,7 @@ class RecoveryTests(unittest.TestCase):
     def test_config_validation(self):
         for params in (dict(speed=float('nan')), dict(current=float('inf')),
                         dict(max_seek=211), dict(bottom_position=204),
-                        dict(bottom_clearance_mm=210),
+                        dict(bottom_clearance_mm=208), dict(bottom_clearance_mm=210),
                        dict(sgt=64), dict(stallguard_pause=1), dict(current=4)):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 Rig(**params)
@@ -397,12 +538,44 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('verify_backoff_mm', recovery)
         self.assertNotIn('tolerance:', recovery)
         self.assertIn('variable_axis_z_max: 203.0', (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8'))
+        eddy = (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8')
+        home = eddy.split('[gcode_macro _TREED_EDDY_HOME_Z]')[1].split('[gcode_macro')[0]
+        correction = eddy.split('[gcode_macro SET_Z_FROM_PROBE]')[1].split('[gcode_macro')[0]
+        self.assertLess(home.index('_TREED_Z_TRAVEL_BEGIN'), home.index('G28.1 Z'))
+        self.assertLess(correction.index('_RELOAD_Z_OFFSET_FROM_PROBE'), correction.index('_TREED_Z_TRAVEL_APPLY'))
+        self.assertLess(correction.index('_TREED_Z_TRAVEL_APPLY'), correction.index('G1 Z{cfg.z_hop'))
         self.assertIn('z_recovery.cfg]', (ROOT / 'klipper/printer.cfg').read_text(encoding='utf-8'))
         loader = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
         self.assertIn('klipper-host/treed_z_recovery.py; do', loader)
         self.assertEqual(loader.count("'/klippy/extras/treed_z_recovery.py'"), 2)
 
     # Блок 3: Реальный HomingMove закреплённого Klipper с моделируемыми MCU-счётчиками.
+    @unittest.skipUnless(os.environ.get('Z_RECOVERY_KLIPPER_SOURCE'), 'upstream source not supplied')
+    def test_upstream_corexy_enforces_limit_after_coordinate_reset(self):
+        source = Path(os.environ['Z_RECOVERY_KLIPPER_SOURCE']) / 'kinematics_corexy.py'
+        upstream_spec = importlib.util.spec_from_file_location('_z_real_corexy', source)
+        real = importlib.util.module_from_spec(upstream_spec)
+        with patch.dict(sys.modules, {'stepper': ModuleType('stepper')}):
+            upstream_spec.loader.exec_module(real)
+        rig = Rig()
+        rig.hits = [(180., .025)]
+        rig.run()
+        rig.finish_eddy()
+        native = real.CoreXYKinematics.__new__(real.CoreXYKinematics)
+        native.limits, native.axes_max = rig.kin.limits, rig.kin.axes_max
+        native.axes_min = native.axes_max._replace(x=0., y=0., z=-5.)
+        native.max_z_velocity, native.max_z_accel = 25., 100.
+        rig.rail.set_position = lambda pos: None
+        native.rails = [rig.rail] * 3
+        native.set_position([17., 29., .25], 'z')
+        self.assertEqual(native.get_status(0)['axis_maximum'].z, 175.)
+        move = NS(end_pos=[17., 29., 175.], axes_d=[0., 0., 1.], move_d=1.,
+                  limit_speed=Mock(), move_error=lambda *args: ValueError('out of range'))
+        native.check_move(move)
+        move.end_pos[2] = 175.01
+        with self.assertRaisesRegex(ValueError, 'out of range'):
+            native.check_move(move)
+
     @unittest.skipUnless(os.environ.get('Z_RECOVERY_KLIPPER_SOURCE'), 'upstream source not supplied')
     def test_upstream_trigger_differs_from_halt_and_target(self):
         source = Path(os.environ['Z_RECOVERY_KLIPPER_SOURCE']) / 'extras_homing.py'

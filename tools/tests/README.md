@@ -4,7 +4,7 @@
 
 ## Состав
 
-- `test_z_recovery.py` — одна проба нижней опоры, диагностика отказов, запреты, восстановление TMC/лимитов и интеграция cfg; запуск `python -B tools/tests/test_z_recovery.py`. Это офлайн-модель, не аппаратный допуск.
+- `test_z_recovery.py` — одна проба DIAG, измеренный ход до Eddy Z0, ограничение Z, сброс при отказах, восстановление TMC и интеграция cfg; запуск `python -B tools/tests/test_z_recovery.py`. Это офлайн-модель, не аппаратный допуск. С `Z_RECOVERY_KLIPPER_SOURCE` дополнительно проверяет реальный HomingMove и CoreXY закреплённого Klipper (`extras_homing.py` и `kinematics_corexy.py`).
 
 - `test_sgt_calibration.py` / `test_sgt_executor.py` — поиск SGT, модель Klipper, восстановление и отказы; [контракт и запуск](../../docs/sgt-calibration.md).
 - `test_loader_contracts.ps1` — PowerShell-проверка ключевых контрактов bootstrap/runtime/verify.
