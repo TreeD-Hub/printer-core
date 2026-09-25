@@ -220,6 +220,10 @@ PID хотэнда и стола остается в профильных heater
 
 ## Переменные окружения
 
+Диагностические серии нижней опоры, Eddy Z0 и mesh описаны в
+[приёмке Z/Eddy](../../../docs/z-eddy-acceptance.md). Номинал Z=255 мм пока
+не измерен на механике; software PASS не заменяет аппаратную приёмку.
+
 - `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, default `d372e54bf965`.
 - `TREED_CAN_IFACE` — интерфейс CAN, default `can0`.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`.

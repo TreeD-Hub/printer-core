@@ -16,3 +16,9 @@ TMC5160, проверка хода второй пробы и отход. Дос
 [Параметры и допуск](../klipper/profiles/treed_v2_corexy_v1/README.md#нижняя-опора-z).
 При обновлении Klipper сверять `HomingMove`, CoreXY и внутренний экспорт
 `TMC5160.get_status.__self__.current_helper` с закреплённой версией.
+
+Этот же extra предоставляет диагностические команды и telemetry Z/Eddy.
+Диагностический mesh временно подавляет `bed_mesh.save_profile`, восстанавливает
+callback и проверяет неизменность pending autosave. Сверять также BedMesh,
+configfile.get_status и GCodeDispatch.ready_gcode_handlers при обновлении Klipper.
+[Контракты и запуск серий](../docs/z-eddy-acceptance.md).

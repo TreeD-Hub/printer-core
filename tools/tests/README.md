@@ -27,6 +27,11 @@
 
 ## Запуск
 
+Полный offline набор: `python -B tools/tests/run_offline.py` (Python, `pwsh` 7,
+Bash; на Windows предпочтён Git Bash). `test_z_acceptance.py` проверяет mesh
+persistence, ошибки/реентерабельность, численные метрики и evidence на mocks;
+`test_z_recovery.py` — bounded recovery. Эти проверки не закрывают hardware gates.
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_loader_contracts.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools/tests/test_klipper_eddy_contracts.ps1"

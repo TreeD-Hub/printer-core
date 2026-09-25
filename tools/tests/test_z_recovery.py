@@ -105,7 +105,7 @@ class Rig:
                            set_max_velocities=self.set_limits, get_last_move_time=lambda: 1.,
                            wait_moves=lambda: None, dwell=self.pauses.append, move=self.move)
         self.endstop = NS(add_stepper=Mock())
-        self.enable = NS(motor_enable=Mock())
+        self.enable = NS(motor_enable=Mock(), register_state_callback=Mock())
         self.objects = {
             'toolhead': self.toolhead,
             'gcode': NS(register_command=Mock()),

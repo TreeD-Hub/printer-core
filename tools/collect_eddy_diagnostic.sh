@@ -8,18 +8,18 @@ set -uo pipefail
 # - По умолчанию пассивно собирает ограниченный пакет host/CAN/Klipper/Moonraker.
 # - Eddy scan доступен только отдельным mode и явным разрешением движения.
 # Контур:
-# - read-only в mode=passive; один mesh в mode=eddy-scan.
+# - read-only в mode=passive; один mesh в mode=eddy-scan; явные серии в acceptance.
 
 # Блок 1: Неподменяемые идентификаторы и пути пакета.
 RUN_ID="${TREED_EDDY_RUN_ID:-}"
 MODE="${TREED_DIAGNOSTIC_MODE:-passive}"
-COMMIT="${TREED_EDDY_REFERENCE_COMMIT:-6947713}"
 CAN_IFACE="can0"
 PI_HOME="${HOME}"
 REPO_DIR="${PI_HOME}/treed/printer-core"
+COMMIT="${TREED_EDDY_REFERENCE_COMMIT:-$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null)}"
 KLIPPY_LOG="${PI_HOME}/printer_data/logs/klippy.log"
 MOONRAKER_LOG="${PI_HOME}/printer_data/logs/moonraker.log"
-RUNTIME_CFG="${PI_HOME}/printer_data/config/probe_eddy_duo.cfg"
+RUNTIME_CFG="${PI_HOME}/printer_data/config/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
 PROFILE_PATH="klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
 OUT_ROOT="${PI_HOME}/treed/diagnostics"
 
@@ -32,14 +32,18 @@ if ! [[ "${COMMIT}" =~ ^[0-9a-fA-F]{7,64}$ ]]; then
   exit 2
 fi
 case "${MODE}" in
-  passive|eddy-scan) ;;
+  passive|eddy-scan|acceptance) ;;
   *)
-    echo "TREED_EDDY_DIAG_ERROR: TREED_DIAGNOSTIC_MODE must be passive or eddy-scan" >&2
+    echo "TREED_EDDY_DIAG_ERROR: TREED_DIAGNOSTIC_MODE must be passive, eddy-scan or acceptance" >&2
     exit 2
     ;;
 esac
 if [ "${MODE}" = "eddy-scan" ] && [ "${TREED_EDDY_ALLOW_MOTION:-0}" != "1" ]; then
   echo "TREED_EDDY_DIAG_ERROR: set TREED_EDDY_ALLOW_MOTION=1 for the single approved scan" >&2
+  exit 2
+fi
+if [ "${MODE}" = "acceptance" ] && [ "${TREED_ACCEPTANCE_ALLOW_MOTION:-0}" != "1" ]; then
+  echo "TREED_EDDY_DIAG_ERROR: acceptance requires TREED_ACCEPTANCE_ALLOW_MOTION=1" >&2
   exit 2
 fi
 
@@ -50,6 +54,8 @@ if [ -e "${RUN_DIR}" ]; then
 fi
 
 umask 077
+mkdir -p "${OUT_ROOT}"
+mkdir "${RUN_DIR}" || exit 2
 mkdir -p "${RUN_DIR}"/{can,config,kernel,klipper,moonraker,system,versions}
 
 SCAN_RESULT="not_started"
@@ -57,6 +63,8 @@ STARTED_AT=""
 ENDED_AT=""
 LOG_START_LINE=1
 CANDUMP_PID=""
+LOG_START_ID=""
+STATE_QUERY='configfile&webhooks&toolhead&print_stats&pause_resume&treed_z_recovery&mcu&mcu%20EBBCan&mcu%20eddy'
 
 capture() {
   local relative_path="$1"
@@ -65,6 +73,13 @@ capture() {
   local rc
 
   mkdir -p "$(dirname "${output}")"
+  # JSON остаётся машинно читаемым; метаданные и stderr хранятся рядом.
+  if [[ "${relative_path}" == *.json ]]; then
+    "$@" >"${output}" 2>"${output}.stderr"
+    rc=$?
+    printf 'captured_at=%s\nexit_code=%s\n' "$(date --iso-8601=seconds)" "${rc}" >"${output}.meta"
+    return "${rc}"
+  fi
   {
     printf '# captured_at='; date --iso-8601=seconds
     printf '# command='
@@ -266,15 +281,25 @@ finalize() {
     fi
   fi
 
-  if [ "${MODE}" = "eddy-scan" ] && [ -f "${KLIPPY_LOG}" ]; then
+  if [ "${MODE}" != "passive" ] && [ -f "${KLIPPY_LOG}" ]; then
     sed -n "${LOG_START_LINE},\$p" "${KLIPPY_LOG}" | tail -n 20000 >"${RUN_DIR}/klipper/klippy.interval.log"
+    if [ "${LOG_START_ID}" != "$(stat -c '%d:%i' "${KLIPPY_LOG}")" ] || [ "$(wc -l < "${KLIPPY_LOG}")" -lt "$((LOG_START_LINE - 1))" ]; then
+      record_failure "klippy_interval_rotated_or_truncated"
+    fi
+    if [ "$(( $(wc -l < "${KLIPPY_LOG}") - LOG_START_LINE + 1 ))" -gt 20000 ]; then
+      record_failure "klippy_interval_exceeds_capture_limit"
+    fi
   elif [ "${MODE}" = "passive" ]; then
     printf 'not applicable in passive mode\n' >"${RUN_DIR}/klipper/klippy.interval.log"
   fi
   capture "can/ip-details.after.txt" ip -details -statistics link show "${CAN_IFACE}"
+  capture "can/counters.after.json" ip -json -details -statistics link show "${CAN_IFACE}"
   write_can_delta || record_failure "can_stats_delta_unavailable"
   capture "kernel/messages.interval.txt" journalctl -k --since "${STARTED_AT:-now}" --until "${ENDED_AT}" --no-pager
-  capture "moonraker/gcode-store.after.json" curl -fsS "http://127.0.0.1:7125/server/gcode_store?count=200"
+  capture "moonraker/gcode-store.after.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/server/gcode_store?count=200"
+  capture "moonraker/acceptance-after.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/printer/objects/query?${STATE_QUERY}"
+  capture "moonraker/printer-info-after.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/printer/info"
+  capture "moonraker/bed-mesh.after.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/printer/objects/query?bed_mesh"
 
   {
     printf 'run_id=%s\n' "${RUN_ID}"
@@ -285,12 +310,19 @@ finalize() {
     printf 'scan_result=%s\n' "${SCAN_RESULT}"
     printf 'exit_code=%s\n' "${rc}"
     if [ "${MODE}" = "eddy-scan" ]; then
-      printf 'scan_command=TREED_BED_MESH_CALIBRATE_EDDY PROFILE=eddy_diag_%s METHOD=scan\n' "${RUN_ID}"
+      printf 'scan_command=TREED_EDDY_ACCEPTANCE_MESH CONFIRM=1\n'
+    elif [ "${MODE}" = "acceptance" ]; then
+      printf 'command_sequence=result.json:commands\n'
     else
       printf 'scan_command=not_sent\n'
     fi
     printf 'save_config_sent=0\nrestart_sent=0\nfirmware_restart_sent=0\ncan_reconfigured=0\n'
   } >"${RUN_DIR}/manifest.env"
+
+  if [ "${MODE}" = "acceptance" ] || [ "${MODE}" = "eddy-scan" ]; then
+    python3 "${REPO_DIR}/tools/z_acceptance.py" finalize --package "${RUN_DIR}" || rc=24
+  fi
+  sed -i "s/^exit_code=.*/exit_code=${rc}/" "${RUN_DIR}/manifest.env"
 
   if ! tar -C "${OUT_ROOT}" -czf "${OUT_ROOT}/eddy-${RUN_ID}.tar.gz" "eddy-${RUN_ID}"; then
     record_failure "archive_create_failed"
@@ -308,13 +340,17 @@ trap finalize EXIT
 capture "versions/host.txt" bash -c 'hostnamectl; uname -a; cat /etc/os-release'
 capture "versions/boot.txt" bash -c 'printf "boot_id="; cat /proc/sys/kernel/random/boot_id; printf "uptime="; cat /proc/uptime'
 capture "versions/klipper.txt" git -C "${PI_HOME}/klipper" log -1 --format='commit=%H%nsubject=%s'
+capture "versions/printer-core.txt" git -C "${REPO_DIR}" log -1 --format='commit=%H%nsubject=%s'
+capture "versions/printer-core.diff" git -C "${REPO_DIR}" diff -- klipper-host klipper tools/collect_eddy_diagnostic.sh tools/z_acceptance.py
+capture "versions/extra-checksums.txt" sha256sum "${REPO_DIR}/klipper-host/treed_z_recovery.py" "${PI_HOME}/klipper/klippy/extras/treed_z_recovery.py"
 capture "versions/driver-gs_usb.txt" modinfo gs_usb
 capture "versions/usb-can.txt" lsusb -d 1d50:606f
 capture_sh "versions/mcu-from-klippy.txt" "tail -c 8388608 '${KLIPPY_LOG}' 2>/dev/null | grep -E '^Loaded MCU' || true"
-capture "versions/mcu-live.json" curl -fsS "http://127.0.0.1:7125/printer/objects/query?mcu&mcu%20EBBCan&mcu%20eddy&webhooks"
+capture "versions/mcu-live.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/printer/objects/query?mcu&mcu%20EBBCan&mcu%20eddy&webhooks"
 capture_sh "versions/runtime-manifest.txt" "sed -n '1,160p' '${REPO_DIR}/runtime-versions.env'"
 capture_sh "versions/firmware-manifest.txt" "sed -n '1,160p' '${PI_HOME}/treed/firmware-artifacts/treed-v2/latest/manifest.tsv'"
 capture "can/ip-details.before.txt" ip -details -statistics link show "${CAN_IFACE}"
+capture "can/counters.before.json" ip -json -details -statistics link show "${CAN_IFACE}"
 capture "can/ethtool-driver.txt" ethtool -i "${CAN_IFACE}"
 capture "system/can-unit.txt" systemctl cat treed-can-setup.service
 capture "system/can-unit-properties.txt" systemctl show treed-can-setup.service -p Before -p After -p Wants -p Requires -p Conflicts -p ActiveState
@@ -324,9 +360,10 @@ capture "system/klipper-unit-dependencies.txt" systemctl list-dependencies --all
 capture "system/unit-states.txt" systemctl show klipper.service moonraker.service treed-can-setup.service -p Id -p ActiveState -p SubState -p Result -p ExecMainStatus
 capture "kernel/current-boot.txt" journalctl -k -b -n 4000 --no-pager
 capture_sh "config/runtime-printer-include.txt" "grep -nF 'probe_eddy_duo.cfg' '${PI_HOME}/printer_data/config/printer.cfg' || true"
-capture "moonraker/configfile-before.json" curl -fsS "http://127.0.0.1:7125/printer/objects/query?configfile"
-capture "moonraker/printer-info-before.json" curl -fsS "http://127.0.0.1:7125/printer/info"
-capture "moonraker/gcode-store.before.json" curl -fsS "http://127.0.0.1:7125/server/gcode_store?count=200"
+capture "moonraker/configfile-before.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/printer/objects/query?configfile"
+capture "moonraker/printer-info-before.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/printer/info"
+capture "moonraker/acceptance-before.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/printer/objects/query?${STATE_QUERY}"
+capture "moonraker/gcode-store.before.json" curl -fsS --max-time 15 "http://127.0.0.1:7125/server/gcode_store?count=200"
 
 STARTED_AT="$(date --iso-8601=seconds)"
 last_mcu_stats "${RUN_DIR}/klipper/mcu-stats.before.txt"
@@ -343,6 +380,31 @@ if [ "${MODE}" = "passive" ]; then
     printf 'candump unavailable; passive capture skipped\n' >"${RUN_DIR}/can/candump.unavailable.txt"
   fi
   exit 0
+fi
+
+if [ "${MODE}" = "acceptance" ]; then
+  # Блок 3: Явная серия; collector пишет evidence даже после первого отказа.
+  LOG_START_LINE=$(( $(wc -l < "${KLIPPY_LOG}") + 1 ))
+  LOG_START_ID="$(stat -c '%d:%i' "${KLIPPY_LOG}")"
+  if [ "${TREED_ACCEPTANCE_CANDUMP:-0}" = "1" ]; then
+    candump -L "${CAN_IFACE}" >"${RUN_DIR}/can/candump.log" 2>"${RUN_DIR}/can/candump.error.log" &
+    CANDUMP_PID=$!
+    sleep 1
+    if ! kill -0 "${CANDUMP_PID}" 2>/dev/null; then
+      record_failure "candump_failed"
+      exit 6
+    fi
+  fi
+  acceptance_args=(run --mode "${TREED_ACCEPTANCE_MODE:-bottom}" --package "${RUN_DIR}" --runs "${TREED_ACCEPTANCE_RUNS:-10}" --allow-motion)
+  if [ "${TREED_ACCEPTANCE_LOSE_Z:-0}" = "1" ]; then acceptance_args+=(--lose-z); fi
+  if [ -n "${TREED_ACCEPTANCE_STARTS:-}" ]; then
+    read -r -a acceptance_starts <<< "${TREED_ACCEPTANCE_STARTS}"
+    acceptance_args+=(--starts "${acceptance_starts[@]}")
+  fi
+  python3 "${REPO_DIR}/tools/z_acceptance.py" "${acceptance_args[@]}"
+  acceptance_rc=$?
+  SCAN_RESULT="acceptance_exit_${acceptance_rc}"
+  exit "${acceptance_rc}"
 fi
 
 if ! git -C "${REPO_DIR}" cat-file -e "${COMMIT}^{commit}" 2>"${RUN_DIR}/config/reference-commit.error.txt"; then
@@ -418,6 +480,7 @@ fi
 
 # Блок 3: Один обычный scan и синхронный пассивный захват интервала.
 LOG_START_LINE=$(( $(wc -l < "${KLIPPY_LOG}") + 1 ))
+LOG_START_ID="$(stat -c '%d:%i' "${KLIPPY_LOG}")"
 last_mcu_stats "${RUN_DIR}/klipper/mcu-stats.before.txt"
 STARTED_AT="$(date --iso-8601=seconds)"
 candump -L "${CAN_IFACE}" >"${RUN_DIR}/can/candump.log" 2>"${RUN_DIR}/can/candump.error.log" &
@@ -429,14 +492,13 @@ if ! kill -0 "${CANDUMP_PID}" 2>/dev/null; then
   exit 6
 fi
 
-PROFILE="eddy_diag_${RUN_ID}"
 GCODE=$'RESPOND PREFIX=eddy_diag MSG="BEGIN run='"${RUN_ID}"$'"\n'
-GCODE+="TREED_BED_MESH_CALIBRATE_EDDY PROFILE=${PROFILE} METHOD=scan"
+GCODE+="TREED_EDDY_ACCEPTANCE_MESH CONFIRM=1"
 GCODE+=$'\nM400\n'
 GCODE+=$'RESPOND PREFIX=eddy_diag MSG="END run='"${RUN_ID}"$'"'
 printf '%s\n' "${GCODE}" >"${RUN_DIR}/klipper/mesh-command.gcode"
 python3 -c 'import json, sys; print(json.dumps({"script": sys.stdin.read()}))' <<<"${GCODE}" \
-  | curl -fsS -H 'Content-Type: application/json' -X POST --data-binary @- \
+  | curl -fsS --max-time 1200 -H 'Content-Type: application/json' -X POST --data-binary @- \
       "http://127.0.0.1:7125/printer/gcode/script" >"${RUN_DIR}/moonraker/gcode-submit.json" || {
   SCAN_RESULT="gcode_submit_failed"
   record_failure "gcode_submit_failed"
@@ -445,7 +507,7 @@ python3 -c 'import json, sys; print(json.dumps({"script": sys.stdin.read()}))' <
 
 SCAN_RESULT="waiting"
 for ((waited=0; waited<1200; waited++)); do
-  curl -fsS "http://127.0.0.1:7125/server/gcode_store?count=200" >"${RUN_DIR}/moonraker/gcode-store.current.json" 2>/dev/null || true
+  curl -fsS --max-time 15 "http://127.0.0.1:7125/server/gcode_store?count=200" >"${RUN_DIR}/moonraker/gcode-store.current.json" 2>/dev/null || true
   if grep -Fq "END run=${RUN_ID}" "${RUN_DIR}/moonraker/gcode-store.current.json"; then
     SCAN_RESULT="completed"
     exit 0

@@ -6,6 +6,8 @@ API закреплён в runtime-versions.env (Klipper ce7002bed).
 """
 import logging
 import math
+import copy
+from datetime import datetime, timezone
 
 from . import homing
 
@@ -16,6 +18,14 @@ class TreedZRecovery:
         self.printer = config.get_printer()
         self.enabled = config.getboolean('enabled', False)
         self.running = False
+        self.last_run = {}
+        self.last_eddy = {}
+        self.capture_eddy = False
+        self.mesh_active = False
+        self.mesh_fault = False
+        self.mesh_dispatch = None
+        self.last_mesh = {}
+        self.motor_epoch = 0
         self.sgt = config.getint('sgt', 3, minval=-64, maxval=63)
         self.speed = config.getfloat('speed', 5., above=0.)
         self.current = config.getfloat('current', 0.9, above=0.)
@@ -51,6 +61,12 @@ class TreedZRecovery:
         self.printer.register_event_handler('klippy:mcu_identify', self._connect)
         self.printer.lookup_object('gcode').register_command(
             'TREED_Z_HOME_BOTTOM', self.cmd_home)
+        gcode = self.printer.lookup_object('gcode')
+        gcode.register_command('TREED_Z_RECOVERY_TEST', self.cmd_test)
+        gcode.register_command('TREED_EDDY_ACCEPTANCE_HOME', self.cmd_eddy_test)
+        gcode.register_command('TREED_EDDY_ACCEPTANCE_MESH', self.cmd_mesh_test)
+        gcode.register_command('_TREED_ACCEPTANCE_MESH_RUN', self.cmd_mesh_run)
+        gcode.register_command('_TREED_ACCEPTANCE_STAGE', self.cmd_stage)
 
     def _connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
@@ -60,6 +76,17 @@ class TreedZRecovery:
             raise self.printer.config_error('Z recovery: поддерживается один мотор Z')
         self.endstop.add_stepper(steppers[0])
         self.enable = self.printer.lookup_object('stepper_enable').lookup_enable('stepper_z')
+        self.enable.register_state_callback(self._motor_state)
+
+    def _motor_state(self, print_time, enabled):
+        if not enabled:
+            self.motor_epoch += 1
+
+    def get_status(self, eventtime):
+        return copy.deepcopy(dict(last_run=self.last_run, last_eddy=self.last_eddy,
+                                  last_mesh=self.last_mesh, mesh_active=self.mesh_active,
+                                  mesh_fault=self.mesh_fault,
+                                  running=self.running, motor_epoch=self.motor_epoch))
 
     # Блок 2: Допуск до любых изменений координат, тока и движения.
     def _require_idle(self, gcmd):
@@ -113,6 +140,12 @@ class TreedZRecovery:
             raise
         self._alive()
         halt = self.toolhead.get_position()[2]
+        self.last_run.setdefault('probes', []).append(dict(
+            trigger_mm=trigger if math.isfinite(trigger) else None,
+            halt_mm=halt if math.isfinite(halt) else None,
+            start_mm=start, target_mm=target[2],
+            travel_mm=trigger - start if math.isfinite(trigger) else None,
+            overshoot_mm=halt - trigger if math.isfinite(halt - trigger) else None))
         if (not all(math.isfinite(v) for v in (trigger, halt))
                 or move.check_no_movement() is not None
                 or not start < trigger <= self.bottom
@@ -148,6 +181,24 @@ class TreedZRecovery:
         return True
 
     def cmd_home(self, gcmd):
+        self.last_run = dict(timestamp=datetime.now(timezone.utc).isoformat(),
+                             start_state=dict(position=self.toolhead.get_position(),
+                                              homed_axes=self.kin.get_status(0)['homed_axes']),
+                             probes=[], expected_second_travel_mm=self.backoff,
+                             tolerance_mm=self.tolerance, sgt=self.sgt, current=self.current,
+                             motor_epoch=self.motor_epoch, result='running')
+        try:
+            self._home(gcmd)
+            self.last_run['result'] = 'passed' if self.last_run['probes'] else 'skipped'
+        except BaseException as exc:
+            self.last_run.update(result='failed', error=str(exc))
+            raise
+        finally:
+            self.last_run['shutdown'] = self.printer.is_shutdown()
+            self.last_run['klipper_state'] = self.printer.get_state_message()[1]
+            self.last_run['end_position'] = self.toolhead.get_position()
+
+    def _home(self, gcmd):
         if gcmd.get_command_parameters():
             raise gcmd.error('TREED_Z_HOME_BOTTOM: параметры задаются в [treed_z_recovery]')
         self._require_idle(gcmd)
@@ -163,6 +214,7 @@ class TreedZRecovery:
         fields = ('sgt', 'en_pwm_mode', 'diag0_stall', 'diag1_stall',
                   'tcoolthrs', 'thigh', 'globalscaler', 'irun', 'ihold')
         saved = {f: self.driver.fields.get_field(f) for f in fields}
+        self.last_run['tmc_before'] = dict(saved)
         requested_hold = self.current_helper.get_current()[2]
         limits = (self.toolhead.max_velocity, self.toolhead.max_accel,
                   self.toolhead.square_corner_velocity, self.toolhead.min_cruise_ratio)
@@ -188,6 +240,7 @@ class TreedZRecovery:
             # Смещение временного нуля оставляет допуск пробы внутри soft limits.
             self._set_z(self.bottom - self.backoff - self.tolerance)
             travel, overshoot = self._seek()
+            self.last_run.update(second_travel_mm=travel, deviation_mm=travel - self.backoff)
             if abs(travel - self.backoff) > self.tolerance:
                 raise gcmd.error('Z recovery: повторный DIAG вне окна: %.6f мм' % travel)
             self._set_z(self.bottom + overshoot)
@@ -209,12 +262,185 @@ class TreedZRecovery:
                     raise
                 finally:
                     self.running = False
+                    self.last_run.update(tmc_restored=restored,
+                                         tmc_after={f: self.driver.fields.get_field(f) for f in fields})
                     if not success or not restored:
                         self.kin.clear_homing_state('z')
             if not restored:
                 raise gcmd.error('Z recovery: MCU не восстановлен; нужен FIRMWARE_RESTART')
         gcmd.respond_info('Z recovery: нижняя опора подтверждена, Z=%.6f; рабочий Z0 — Eddy'
                           % (self.bottom - self.clearance))
+
+    # Блок 5: Явные диагностические входы. Никаких записей конфигурации.
+    def _require_test(self, gcmd):
+        self._require_idle(gcmd)
+        phase = self.printer.lookup_object('gcode_macro _TREED_OPERATION_STATE').variables['phase']
+        if phase != 'idle' or self.capture_eddy or self.mesh_fault or gcmd.get_int('CONFIRM', 0) != 1:
+            raise gcmd.error('Acceptance: нужны idle и явный CONFIRM=1')
+
+    def cmd_test(self, gcmd):
+        self._require_test(gcmd)
+        if set(gcmd.get_command_parameters()) - {'CONFIRM', 'START_Z'}:
+            raise gcmd.error('Acceptance: неизвестный параметр')
+        if not self.enabled:
+            raise gcmd.error('Acceptance: recovery не допущен в конфиге')
+        start_z = gcmd.get_float('START_Z', None)
+        if start_z is not None:
+            if (not math.isfinite(start_z) or not 0. < start_z <= self.bottom - self.clearance
+                    or 'z' not in self.kin.get_status(0)['homed_axes']):
+                raise gcmd.error('Acceptance: START_Z требует известную Z в безопасных пределах')
+            self.toolhead.wait_moves()
+            pos = self.toolhead.get_position()
+            pos[2] = start_z
+            try:
+                self.toolhead.move(pos, self.speed)
+                self.toolhead.wait_moves()
+            except BaseException:
+                self.kin.clear_homing_state('z')
+                self.printer.invoke_shutdown('Acceptance: сбой установки стартовой Z')
+                raise
+        before = dict(position=self.toolhead.get_position(),
+                      homed_axes=self.kin.get_status(0)['homed_axes'])
+        self.kin.clear_homing_state('z')
+        gcode = self.printer.lookup_object('gcode')
+        try:
+            self.cmd_home(gcode.create_gcode_command('TREED_Z_HOME_BOTTOM', '', {}))
+        finally:
+            self.last_run['before_forced_unknown'] = before
+
+    def cmd_eddy_test(self, gcmd):
+        self._require_test(gcmd)
+        if set(gcmd.get_command_parameters()) != {'CONFIRM'}:
+            raise gcmd.error('Acceptance: допустим только CONFIRM=1')
+        if not set('xyz') <= set(self.kin.get_status(0)['homed_axes']):
+            raise gcmd.error('Acceptance: перед Eddy нужны известные XYZ')
+        self.last_eddy = dict(timestamp=datetime.now(timezone.utc).isoformat(),
+                              stages={name: 'not_started' for name in
+                                      ('eddy_coarse', 'eddy_probe', 'final_z0')},
+                              motor_epoch=self.motor_epoch, result='running')
+        self.capture_eddy = True
+        try:
+            self.printer.lookup_object('gcode').run_script_from_command(
+                'BED_MESH_CLEAR\n_TREED_PRINT_OFFSET_DISABLE\n_TREED_UI_RESET_Z_OFFSET\n_TREED_EDDY_HOME_Z')
+            if any(v != 'passed' for v in self.last_eddy['stages'].values()):
+                raise gcmd.error('Acceptance: маркеры стадий Eddy отсутствуют')
+            if self.motor_epoch != self.last_eddy['motor_epoch']:
+                raise gcmd.error('Acceptance: во время измерения отключался мотор Z')
+            self.last_eddy['result'] = 'passed'
+        except BaseException as exc:
+            self.last_eddy.update(result='failed', error=str(exc))
+            for stage, state in self.last_eddy['stages'].items():
+                if state == 'running':
+                    self.last_eddy['stages'][stage] = 'failed'
+            self.kin.clear_homing_state('z')
+            raise
+        finally:
+            self.capture_eddy = False
+
+    def cmd_stage(self, gcmd):
+        if not self.capture_eddy:
+            return
+        stage, state = gcmd.get('STAGE'), gcmd.get('STATE')
+        if stage not in self.last_eddy['stages'] or state not in ('running', 'passed'):
+            raise gcmd.error('Acceptance: неизвестная стадия')
+        if stage == 'final_z0' and state == 'passed':
+            self.toolhead.wait_moves()
+            stepper = self.kin.rails[2].get_steppers()[0]
+            counter, step_mm = stepper.get_mcu_position(), stepper.get_step_dist()
+            # Координаты Klipper каждый раз обнуляются; MCU-счётчик сохраняет
+            # общую систему отсчёта только внутри одной сессии с включённым Z.
+            z = self.toolhead.get_position()[2]
+            self.last_eddy.update(z0_mcu_mm=counter * step_mm - z,
+                                  mcu_counter=counter, step_mm=step_mm, corrected_z=z)
+        self.last_eddy['stages'][stage] = state
+
+    def cmd_mesh_test(self, gcmd):
+        self._require_test(gcmd)
+        if set(gcmd.get_command_parameters()) != {'CONFIRM'}:
+            raise gcmd.error('Acceptance: допустим только CONFIRM=1')
+        if not set('xyz') <= set(self.kin.get_status(0)['homed_axes']):
+            raise gcmd.error('Acceptance: перед mesh нужны известные XYZ')
+        bedmesh = self.printer.lookup_object('bed_mesh')
+        gcode = self.printer.lookup_object('gcode')
+        configfile = self.printer.lookup_object('configfile')
+        snapshot = lambda: copy.deepcopy(configfile.get_status(self.printer.get_reactor().monotonic()))
+        before = snapshot()
+        save_profile = bedmesh.save_profile
+        handlers = {name: gcode.ready_gcode_handlers[name]
+                    for name in ('BED_MESH_CALIBRATE', 'BED_MESH_CALIBRATE_BASE')}
+        self.last_mesh = dict(timestamp=datetime.now(timezone.utc).isoformat(), result='running',
+                              mesh_profile_persistence_suppressed=0, save_profile_restored=0,
+                              save_config_sent=0, pending_config_changed=None, config_before=before)
+        self.capture_eddy = True
+        self.mesh_active = True
+        deny = self._deny_mesh
+        try:
+            # В закреплённом Klipper calibrate всегда вызывает этот callback.
+            # Запрещаем даже изменение autosave в памяти, не только запись файла.
+            bedmesh.save_profile = lambda name: None
+            self.last_mesh['mesh_profile_persistence_suppressed'] = 1
+            for name in handlers:
+                # register_command повторно оборачивает extended G-code;
+                # сохраняем именно исходные dispatch callbacks и их identity.
+                gcode.ready_gcode_handlers[name] = deny
+            self.mesh_dispatch = handlers['BED_MESH_CALIBRATE_BASE']
+            gcode.run_script_from_command(
+                'TREED_BED_MESH_CALIBRATE_EDDY ACCEPTANCE=1 PROFILE=treed_acceptance METHOD=scan ADAPTIVE=0')
+            self.toolhead.wait_moves()
+            if self.mesh_dispatch is not None:
+                raise gcmd.error('Acceptance: диагностический scan не был вызван')
+            self.last_mesh['mesh'] = copy.deepcopy(bedmesh.get_status(self.printer.get_reactor().monotonic()))
+            current_mesh = bedmesh.get_mesh()
+            if current_mesh is None:
+                raise gcmd.error('Acceptance: runtime mesh отсутствует')
+            self.last_mesh['mesh']['mesh_params'] = copy.deepcopy(current_mesh.get_mesh_params())
+            self.last_mesh['mesh']['z_range'] = current_mesh.get_z_range()
+            self.last_mesh['result'] = 'passed'
+        except BaseException as exc:
+            self.last_mesh.update(result='failed', error=str(exc))
+            raise
+        finally:
+            faults = []
+            try:
+                bedmesh.save_profile = save_profile
+                if bedmesh.save_profile is not save_profile:
+                    faults.append('save_profile identity mismatch')
+                else:
+                    self.last_mesh['save_profile_restored'] = 1
+            except BaseException as exc:
+                faults.append(str(exc))
+            for name, handler in handlers.items():
+                try:
+                    gcode.ready_gcode_handlers[name] = handler
+                    if gcode.ready_gcode_handlers[name] is not handler:
+                        faults.append(name+' identity mismatch')
+                except BaseException as exc:
+                    faults.append(name+': '+str(exc))
+            try:
+                after = snapshot()
+                self.last_mesh.update(config_after=after, pending_config_changed=int(before != after))
+                if before != after:
+                    faults.append('production/pending config changed')
+            except BaseException as exc:
+                faults.append('config snapshot: '+str(exc))
+            self.mesh_dispatch = None
+            self.mesh_active = False
+            self.capture_eddy = False
+            if faults:
+                self.mesh_fault = True
+                self.last_mesh.update(result='fault', restoration_errors=faults)
+                self.printer.invoke_shutdown('Acceptance: mesh handler/config fault')
+                raise gcmd.error('Acceptance: '+ '; '.join(faults))
+
+    def _deny_mesh(self, gcmd):
+        raise gcmd.error('Acceptance: обычный mesh запрещён во время diagnostic scan')
+
+    def cmd_mesh_run(self, gcmd):
+        if not self.mesh_active or self.mesh_dispatch is None:
+            raise gcmd.error('Acceptance: диагностический mesh не ожидается или уже запущен')
+        handler = self.mesh_dispatch
+        self.mesh_dispatch = None  # Одноразовый вход закрывается до вызова probe.
+        handler(gcmd)
 
 
 def load_config(config):

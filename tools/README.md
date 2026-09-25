@@ -23,6 +23,10 @@
 
 ## `tools/tests/`
 
+`z_acceptance.py` выполняет явные серии Z/Eddy через существующий
+`collect_eddy_diagnostic.sh`, формирует JSON schema 1 и сравнивает независимые
+cold-start пакеты. [Команды, переменные и критерии](../docs/z-eddy-acceptance.md).
+
 Содержит легкие контрактные проверки, которые можно запускать локально на Windows без WSL.
 
 Команда:

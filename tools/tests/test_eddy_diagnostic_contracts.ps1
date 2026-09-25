@@ -34,7 +34,7 @@ Assert-Contains 'systemctl show klipper\.service' "Klipper systemd dependencies 
 Assert-Contains 'mcu-stats\.delta\.txt' "per-MCU Klipper counter deltas are written"
 Assert-Contains 'candump -L "\$\{CAN_IFACE\}"' "CAN capture is passive"
 Assert-Contains 'journalctl -k --since' "kernel messages use the scan interval"
-Assert-Contains 'TREED_BED_MESH_CALIBRATE_EDDY PROFILE=\$\{PROFILE\} METHOD=scan' "single direct standard-area scan is submitted"
+Assert-Contains 'TREED_EDDY_ACCEPTANCE_MESH CONFIRM=1' "single standard-area scan uses the non-saving diagnostic entry"
 Assert-Contains 'M400' "completion marker is queued after the scan"
 Assert-Contains 'result_timeout_no_repeat_sent' "timeout stops the series without another scan"
 Assert-Contains 'TREED_EDDY_ALLOW_MOTION:-0' "motion requires explicit runtime confirmation"
