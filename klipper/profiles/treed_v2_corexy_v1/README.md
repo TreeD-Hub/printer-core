@@ -116,19 +116,12 @@ LIGHT_OFF
 
 По умолчанию и при аварийном завершении Klipper подсветка выключена (`value: 0`, `shutdown_value: 0`).
 
-База пинов (Octopus Pro):
-- `stepper_x`: `step_pin=PG0`, `dir_pin=!PG1`, `enable_pin=!PF15`, `cs_pin=PD11`, `diag1_pin=^!PG9`;
-- `stepper_y`: `step_pin=PF13`, `dir_pin=!PF12`, `enable_pin=!PF14`, `cs_pin=PC4`, `diag1_pin=^!PG6`;
-- `stepper_z`: `step_pin=PF11`, `dir_pin=!PG3`, `enable_pin=!PG5`, `cs_pin=PC6`, `diag1_pin=^!PG10`;
-- общая software-SPI обвязка: `sclk=PA5`, `mosi=PA7`, `miso=PA6`.
+Распиновка моторов, SPI и DIAG, а также параметры осей и драйверов заданы в [`steppers.cfg`](steppers.cfg). В README оставлена только схема: X/Y используют DIAG для sensorless homing, Z — Eddy как штатный endstop, а Z DIAG служит аппаратным резервом.
 
 Для CoreXY X-знак развернут не одиночной инверсией `dir_pin`, а парной перестановкой MOTOR0/MOTOR1 с инверсией обоих направлений.
 Это сохраняет направление Y и переводит `X0` в левый край.
 
-Стартовые параметры X/Y:
-- X: `homing_speed: 65`, `driver_SGT: 1`; Y: `homing_speed: 55`, `driver_SGT: -1`;
-- `homing_retract_dist: 0`, `run_current: 1.1`, `sense_resistor: 0.075`, `stealthchop_threshold: 0`;
-- `hold_current` для X/Y не используется.
+Скорости homing, токи и чувствительность sensorless настраиваются только в `steppers.cfg`. Скорость подбирают по стабильности и надёжности homing; `driver_SGT` — по надёжному обнаружению упора без ложных срабатываний; `run_current` — по достаточному усилию при приемлемом нагреве мотора и драйвера. После изменения параметры проверяют на принтере.
 
 ## Первичная калибровка Eddy
 

@@ -43,6 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 - CAN adapter: U2C V2.1 (USB -> CAN).
 - Toolhead MCU: EBB42 по CAN (required).
 - Probe: Eddy / Eddy Duo по CAN (required для профиля `treed_v2_corexy_v1`).
+- На EBB42 контакт `CAN L` соединяется с зелёным проводом Eddy Duo.
 - Z: при Eddy enabled штатный `G28 Z`/полный `G28` использует Eddy как `probe:z_virtual_endstop`, затем уточняет Z через `PROBE` и `SET_KINEMATIC_POSITION`; Zmax sensorless оставлен только как аппаратный резерв вне основного профиля.
 
 Ветка `treed-v2` не поддерживает RN12/RPi/UART-миграции.
