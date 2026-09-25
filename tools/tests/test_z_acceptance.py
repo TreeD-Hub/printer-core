@@ -192,9 +192,11 @@ class Client:
         self.sent = []
         self.fail = fail
         self.data = dict(webhooks=dict(state='ready'), print_stats=dict(state='standby'),
-                         pause_resume=dict(is_paused=False), toolhead=dict(homed_axes=''),
+                         pause_resume=dict(is_paused=False),
+                         toolhead=dict(homed_axes='', position=[17., 29., 190., 0.]),
                          configfile=dict(settings={'same': 1}), bed_mesh={},
-                         treed_z_recovery=dict(last_run={}, last_eddy={}, last_mesh={}))
+                         treed_z_recovery=dict(last_run={}, last_eddy={}, last_mesh={}, motor_epoch=0))
+        self.bottom_offset = 0.
         self.data['gcode_macro _TREED_OPERATION_STATE'] = dict(phase='idle')
 
     def state(self):
@@ -206,11 +208,23 @@ class Client:
             raise TimeoutError('reply lost; execution unknown')
         count = len(self.sent)
         if script.startswith('TREED_Z_RECOVERY_TEST'):
-            probe = dict(trigger_mm=254.5, halt_mm=254.525, start_mm=249.5, overshoot_mm=.025)
+            before = dict(position=list(self.data['toolhead']['position']),
+                          homed_axes=self.data['toolhead']['homed_axes'])
+            if 'START_Z=' in script:
+                before['position'][2] = float(script.split('START_Z=')[1])
+            start_z = before['position'][2]
+            contact = 203. + (count - 1) * .01
+            travel = contact - start_z - self.bottom_offset
+            trigger = -5. + travel
+            probe = dict(start_mm=-5., target_mm=203., trigger_mm=trigger,
+                         halt_mm=trigger + .025, travel_mm=travel, overshoot_mm=.025,
+                         no_movement=False, failure_reason=None)
             self.data['treed_z_recovery']['last_run'] = dict(timestamp=str(count), result='passed',
-                probes=[dict(probe), dict(probe)], second_travel_mm=5., expected_second_travel_mm=5.,
-                tolerance_mm=.5, deviation_mm=0., tmc_restored=True, tmc_before={'sgt': 3}, tmc_after={'sgt': 3})
+                probes=[probe], before_forced_unknown=before, motor_epoch=0,
+                tmc_restored=True, tmc_before={'sgt': 3}, tmc_after={'sgt': 3})
+            self.bottom_offset = contact - 203.
             self.data['toolhead']['homed_axes'] = 'z'
+            self.data['toolhead']['position'][2] = 198.
         elif script.startswith('TREED_EDDY_ACCEPTANCE_HOME'):
             self.data['treed_z_recovery']['last_eddy'] = dict(timestamp=str(count), result='passed',
                 stages={k: 'passed' for k in acceptance.STAGES[3:]}, z0_mcu_mm=12.+count*.001, motor_epoch=1)
@@ -246,12 +260,54 @@ class RunnerTests(unittest.TestCase):
     def test_multiple_starts_and_numeric_results(self):
         with tempfile.TemporaryDirectory() as folder:
             client = Client()
+            client.data['toolhead']['homed_axes'] = 'xyz'
             run = acceptance.Run(folder, 'bottom', client)
-            self.assertTrue(run.execute(10, [20., 100., 250.]))
+            self.assertTrue(run.execute(10, [20., 100., 190.]))
             self.assertEqual(len(client.sent), 10)
             self.assertIn('START_Z=100.000000', client.sent[1])
-            self.assertEqual(run.result['z_bottom']['second_travel']['median'], 5.)
+            self.assertEqual(run.result['z_bottom']['trigger_position']['samples'], 10)
+            self.assertAlmostEqual(run.result['z_bottom']['trigger_position']['range'], .09)
+            self.assertNotEqual(run.result['z_bottom']['raw'][0]['probes'][0]['trigger_mm'],
+                                run.result['z_bottom']['raw'][1]['probes'][0]['trigger_mm'])
             self.assertEqual(run.result['z_bottom']['overshoot']['max'], .025)
+
+    def test_failed_cycle_is_not_retried_or_counted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            client = Client(fail=3)
+            client.data['toolhead']['homed_axes'] = 'xyz'
+            run = acceptance.Run(folder, 'bottom', client)
+            self.assertFalse(run.execute(10, [20., 100.]))
+            self.assertEqual(len(client.sent), 3)
+            self.assertEqual(run.result['z_bottom']['successful_runs'], 2)
+            self.assertEqual(run.result['z_bottom']['trigger_position']['samples'], 2)
+
+    def test_second_hit_telemetry_is_rejected(self):
+        class OldClient(Client):
+            def command(self, script):
+                super().command(script)
+                if script.startswith('TREED_Z_RECOVERY_TEST'):
+                    self.data['treed_z_recovery']['last_run']['probes'].append(
+                        dict(self.data['treed_z_recovery']['last_run']['probes'][0]))
+        with tempfile.TemporaryDirectory() as folder:
+            client = OldClient()
+            run = acceptance.Run(folder, 'bottom', client)
+            self.assertFalse(run.execute(10, []))
+            self.assertEqual(len(client.sent), 1)
+            self.assertEqual(run.result['z_bottom']['successful_runs'], 0)
+
+    def test_failed_probe_telemetry_is_not_a_sample(self):
+        class FailedClient(Client):
+            def command(self, script):
+                super().command(script)
+                if script.startswith('TREED_Z_RECOVERY_TEST'):
+                    self.data['treed_z_recovery']['last_run']['result'] = 'failed'
+        with tempfile.TemporaryDirectory() as folder:
+            client = FailedClient()
+            run = acceptance.Run(folder, 'bottom', client)
+            self.assertFalse(run.execute(10, []))
+            self.assertEqual(len(client.sent), 1)
+            self.assertEqual(run.result['stages']['bottom_reference'], 'failed')
+            self.assertEqual(run.result['z_bottom']['successful_runs'], 0)
 
     def test_z0_and_mesh_series(self):
         for mode in ('z0', 'mesh'):
@@ -339,7 +395,7 @@ class EvidenceTests(unittest.TestCase):
             acceptance.save(path/('moonraker/printer-info-'+side+'.json'), {'result': {'process_id': 123}})
             acceptance.save(path/('can/counters.'+side+'.json'), [{'stats64': {'rx': {'errors': 0}, 'tx': {'errors': 0}}}])
         acceptance.save(path/'result.json', dict(schema_version=1, mode='cold-start', result='measured_pass',
-            initial_state=state, z_bottom={'raw': [{'second_travel_mm': 5.}]},
+            initial_state=state, z_bottom={'raw': [{'probes': [{'overshoot_mm': .025}]}]},
             mesh={'raw': [mesh()]}, mesh_diagnostics={'raw': [dict(result='passed',
                 save_profile_restored=1, mesh_profile_persistence_suppressed=1, pending_config_changed=0)]}))
         return path

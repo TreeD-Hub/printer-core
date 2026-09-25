@@ -2,20 +2,20 @@
 
 OWNS: GATES.md, tools/collect_eddy_diagnostic.sh, tools/z_acceptance.py, tools/tests/test_z_acceptance.py, klipper-host/treed_z_recovery.py, klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg
 
-Scope: OFFLINE PASS подтверждает программный контракт. HARDWARE ACCEPTED требует реальных пакетов и ручного решения; unit tests не закрывают аппаратные gates. Номинальные 255 мм не являются измерением механики.
+Scope: OFFLINE PASS подтверждает программный контракт. HARDWARE ACCEPTED требует реальных пакетов и ручного решения; unit tests не закрывают аппаратные gates. Геометрия Z=203 мм измерена на экземпляре, но StallGuard ещё не принят аппаратно.
 
 - [x] G0: Диагностические контракты и численные расчёты проходят офлайн.
   CHECK: python -B tools/tests/test_z_acceptance.py
   EXPECT: Z_ACCEPTANCE_OFFLINE_PASS
-  EVIDENCE: automatic-evidence=v1; definition-sha256=aab4b4b1a9831bd9c758fad91578a54b2e156de886b3cafbfde5a886944d5bfd; exit=0; EXPECT=matched; output-sha256=b652310257965782c9693e95e3be18c06db9d2001a66ce0f1f78fd619460e572; output-bytes=151; shell=C:\Windows\system32\cmd.exe; cwd=C:\Users\Yawllen\Documents\GitHub\printer-core; path=279ce660d262/39 entries
+  EVIDENCE: локальный запуск 2026-09-26; exit=0; EXPECT=matched. Аппаратный допуск не выполнялся.
 
-- [x] G1: Две пробы Z-bottom, запреты и восстановление состояния проходят офлайн.
+- [x] G1: Одна проба Z-bottom, запреты и восстановление состояния проходят офлайн.
   CHECK: python -B tools/tests/test_z_recovery.py
   EXPECT: Z_RECOVERY_CHECKS_PASSED
-  EVIDENCE: automatic-evidence=v1; definition-sha256=6c1f3e75b7b93e14b21daf2032dd01980b59eb6a231657edfc96018c76a5e0f8; exit=0; EXPECT=matched; output-sha256=6114fbf8bce8c5e68153aa2cf0feac10023e1733a929db9593517934aecd3f00; output-bytes=144; shell=C:\Windows\system32\cmd.exe; cwd=C:\Users\Yawllen\Documents\GitHub\printer-core; path=279ce660d262/39 entries
+  EVIDENCE: локальный запуск 2026-09-26; exit=0; EXPECT=matched; upstream Klipper test пропущен без Z_RECOVERY_KLIPPER_SOURCE. Аппаратный допуск не выполнялся.
 
-- [ ] G2: Z-bottom физически повторяем: минимум 10 проб из нескольких стартовых Z после явной потери координаты.
-  EVIDENCE: pending; требуется полный CAN/MCU пакет и second_travel в окне verify_backoff_mm ± tolerance.
+- [ ] G2: Z-bottom физически повторяем: минимум 10 независимых recovery cycles из нескольких START_Z после явной потери координаты в каждом цикле.
+  EVIDENCE: pending; требуется полный CAN/MCU пакет, статистика первых trigger positions в общей координатной опоре и ручное решение по разбросу. Прежние 0.5 мм относились ко второй пробе одного цикла и могут служить только ориентиром до аппаратного обоснования нового допуска.
 
 - [ ] G3: Полный bootstrap завершает bottom_reference, x_home, y_home, eddy_coarse, eddy_probe, final_z0 без retry.
   EVIDENCE: pending

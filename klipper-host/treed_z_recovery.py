@@ -30,8 +30,6 @@ class TreedZRecovery:
         self.speed = config.getfloat('speed', 5., above=0.)
         self.current = config.getfloat('current', 0.9, above=0.)
         self.accel = config.getfloat('accel', 100., above=0.)
-        self.backoff = config.getfloat('verify_backoff_mm', 5., above=0.)
-        self.tolerance = config.getfloat('tolerance', 0.5, above=0.)
         self.clearance = config.getfloat('bottom_clearance_mm', 5., above=0.)
         self.pause = config.getfloat('stallguard_pause', 2., minval=2.)
         zconfig = config.getsection('stepper_z')
@@ -40,13 +38,11 @@ class TreedZRecovery:
         self.bottom = config.getfloat('bottom_position', high)
         self.max_seek = config.getfloat('max_seek', high - low, above=0.)
         values = (low, high, self.bottom, self.max_seek, self.speed,
-                  self.current, self.accel, self.backoff, self.tolerance,
-                  self.clearance, self.pause)
+                  self.current, self.accel, self.clearance, self.pause)
         if (not all(math.isfinite(v) for v in values)
                 or not low < self.bottom <= high
                 or self.max_seek > self.bottom - low
-                or max(self.backoff + self.tolerance, self.clearance)
-                >= self.max_seek or self.tolerance >= self.backoff / 2.):
+                or self.clearance >= self.max_seek):
             raise config.error('Z recovery: неверные границы поиска или отхода')
         if (config.getsection('printer').get('kinematics') != 'corexy'
                 or zconfig.get('endstop_pin') != 'probe:z_virtual_endstop'):
@@ -132,25 +128,57 @@ class TreedZRecovery:
         target = self.toolhead.get_position()
         target[2] = self.bottom
         move = homing.HomingMove(self.printer, [(self.endstop, 'z_bottom')])
+        probe = dict(start_mm=start if math.isfinite(start) else None,
+                     target_mm=target[2], trigger_mm=None, halt_mm=None,
+                     travel_mm=None, overshoot_mm=None, no_movement=None,
+                     failure_reason=None)
+        self.last_run.setdefault('probes', []).append(probe)
         try:
             trigger = move.homing_move(target, self.speed, probe_pos=True)[2]
         except BaseException:
+            probe['failure_reason'] = self.last_run['failure_reason'] = 'homing_error'
             # Исключение возможно до home_wait: прекращаем MCU-движение без отхода.
             self.printer.invoke_shutdown('Z recovery: сбой sensorless-поиска')
             raise
-        self._alive()
         halt = self.toolhead.get_position()[2]
-        self.last_run.setdefault('probes', []).append(dict(
-            trigger_mm=trigger if math.isfinite(trigger) else None,
-            halt_mm=halt if math.isfinite(halt) else None,
-            start_mm=start, target_mm=target[2],
-            travel_mm=trigger - start if math.isfinite(trigger) else None,
-            overshoot_mm=halt - trigger if math.isfinite(halt - trigger) else None))
-        if (not all(math.isfinite(v) for v in (trigger, halt))
-                or move.check_no_movement() is not None
-                or not start < trigger <= self.bottom
-                or halt < trigger or halt > self.bottom):
-            raise self.printer.command_error('Z recovery: некорректный или неподвижный DIAG')
+        no_movement = move.check_no_movement() is not None
+        finite = all(math.isfinite(v) for v in (start, trigger, halt))
+        travel = trigger - start if finite else None
+        overshoot = halt - trigger if finite else None
+        probe.update(trigger_mm=trigger if math.isfinite(trigger) else None,
+                     halt_mm=halt if math.isfinite(halt) else None,
+                     travel_mm=travel if travel is not None and math.isfinite(travel) else None,
+                     overshoot_mm=overshoot if overshoot is not None and math.isfinite(overshoot) else None,
+                     no_movement=no_movement)
+        if not math.isfinite(start):
+            reason = 'non_finite_start'
+        elif not math.isfinite(trigger):
+            reason = 'non_finite_trigger'
+        elif not math.isfinite(halt):
+            reason = 'non_finite_halt'
+        elif no_movement:
+            reason = 'no_movement'
+        elif trigger <= start:
+            reason = 'trigger_before_start'
+        elif trigger > self.bottom:
+            reason = 'trigger_after_bottom'
+        elif halt < trigger:
+            reason = 'halt_before_trigger'
+        elif halt > self.bottom:
+            reason = 'halt_after_bottom'
+        elif halt - trigger > self.clearance:
+            reason = 'overshoot_exceeds_clearance'
+        else:
+            reason = None
+        probe['failure_reason'] = reason
+        if reason:
+            self.last_run['failure_reason'] = reason
+            raise self.printer.command_error('Z recovery: DIAG %s' % reason)
+        try:
+            self._alive()
+        except BaseException:
+            probe['failure_reason'] = self.last_run['failure_reason'] = 'state_lost'
+            raise
         return trigger - start, halt - trigger
 
     def _retreat(self, distance):
@@ -184,8 +212,7 @@ class TreedZRecovery:
         self.last_run = dict(timestamp=datetime.now(timezone.utc).isoformat(),
                              start_state=dict(position=self.toolhead.get_position(),
                                               homed_axes=self.kin.get_status(0)['homed_axes']),
-                             probes=[], expected_second_travel_mm=self.backoff,
-                             tolerance_mm=self.tolerance, sgt=self.sgt, current=self.current,
+                             probes=[], sgt=self.sgt, current=self.current,
                              motor_epoch=self.motor_epoch, result='running')
         try:
             self._home(gcmd)
@@ -196,7 +223,8 @@ class TreedZRecovery:
         finally:
             self.last_run['shutdown'] = self.printer.is_shutdown()
             self.last_run['klipper_state'] = self.printer.get_state_message()[1]
-            self.last_run['end_position'] = self.toolhead.get_position()
+            self.last_run['end_position'] = [v if math.isfinite(v) else None
+                                             for v in self.toolhead.get_position()]
 
     def _home(self, gcmd):
         if gcmd.get_command_parameters():
@@ -235,14 +263,6 @@ class TreedZRecovery:
             self.enable.motor_enable(self.toolhead.get_last_move_time())
             self._set_z(self.bottom - self.max_seek)
             _, overshoot = self._seek()
-            self._set_z(self.bottom + overshoot)
-            self._retreat(self.backoff)
-            # Смещение временного нуля оставляет допуск пробы внутри soft limits.
-            self._set_z(self.bottom - self.backoff - self.tolerance)
-            travel, overshoot = self._seek()
-            self.last_run.update(second_travel_mm=travel, deviation_mm=travel - self.backoff)
-            if abs(travel - self.backoff) > self.tolerance:
-                raise gcmd.error('Z recovery: повторный DIAG вне окна: %.6f мм' % travel)
             self._set_z(self.bottom + overshoot)
             self._retreat(self.clearance)
             success = True

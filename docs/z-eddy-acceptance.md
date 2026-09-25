@@ -3,8 +3,8 @@
 `OFFLINE PASS` подтверждает программные проверки. `HARDWARE ACCEPTED` требует
 пакетов с принтера и ручного закрытия G2–G7 в [GATES.md](../GATES.md).
 Сейчас аппаратная приёмка не выполнена; `enabled: False` сохранён.
-`position_max: 255` и `bottom_position: 255` — временные неизмеренные номиналы,
-не результат определения хода. Clearance 5 мм и tolerance 0.5 мм сохранены.
+Измеренная геометрия профиля: `position_min: -5`, `position_max: 203`,
+`bottom_position: 203`, `max_seek: 208`. Отход от нижней опоры — 5 мм.
 Слайсер, механический ход и рабочие токи этим процессом не калибруются.
 
 ## Исполнители и условия
@@ -24,8 +24,8 @@ SGT/тока и разрешения `enabled: True` в локальном runti
 runner их не меняет, а сохраняет снимки состояний до/после каждой команды.
 
 - `TREED_Z_RECOVERY_TEST CONFIRM=1 [START_Z=...]`: при указанном старте сначала
-  движется к нему с известной Z, затем явно сбрасывает homed Z и выполняет две
-  штатные sensorless-пробы. Без START_Z начинает из фактического положения.
+  движется к нему с известной Z, затем явно сбрасывает homed Z и выполняет одну
+  ограниченную sensorless-пробу. Без START_Z начинает из фактического положения.
   Допустим START_Z > 0 и не выше bottom-clearance. Повторных попыток при ошибке нет.
 - `TREED_EDDY_ACCEPTANCE_HOME CONFIRM=1`: требует известные XYZ; очищает runtime
   mesh/offsets и выполняет штатные coarse/probe/final_z0 с отметками стадий.
@@ -68,12 +68,16 @@ cd ~/treed/printer-core
 TREED_EDDY_RUN_ID=bottom_20260925_01 \
 TREED_DIAGNOSTIC_MODE=acceptance TREED_ACCEPTANCE_MODE=bottom \
 TREED_ACCEPTANCE_ALLOW_MOTION=1 TREED_ACCEPTANCE_LOSE_Z=1 \
-TREED_ACCEPTANCE_RUNS=10 TREED_ACCEPTANCE_STARTS="20 100 200" \
+TREED_ACCEPTANCE_RUNS=10 TREED_ACCEPTANCE_STARTS="20 100 190" \
 bash tools/collect_eddy_diagnostic.sh
 ```
 
-Разные STARTS допустимы только при известной исходной Z. Без STARTS выполняется
-10 циклов из фактических положений, но это не закрывает требование разных стартов G2.
+Разные STARTS допустимы только при известной исходной Z. Каждый запуск команды
+снова теряет homed Z и делает один физический bottom hit; после отказа серия
+останавливается без retry. Для G2 нужны минимум 10 успешных циклов из нескольких
+START_Z. Без STARTS выполняются циклы из фактических положений, но это не
+закрывает требование разных стартов G2. При неизвестной исходной Z первая проба
+не имеет общей координатной опоры для сравнения trigger positions.
 Для полного bootstrap использовать новый RUN_ID, MODE=bootstrap, ALLOW_MOTION=1
 и LOSE_Z=1. Строгий порядок: bottom_reference → x_home → y_home → eddy_coarse →
 eddy_probe → final_z0. На первом отказе позднейшие стадии остаются not_started.
@@ -119,10 +123,18 @@ python3 tools/z_acceptance.py compare \
 со временем/состояниями, stages, сырые z_bottom/eddy_z0/mesh/mesh_diagnostics,
 статистику, commit, boot_id, Klipper process_id, CAN/MCU deltas и evidence issues.
 
-Для нижней опоры сохранены начальное состояние, две trigger/halt/overshoot,
-второй ход/отклонение, SGT/ток, TMC before/after и восстановление. Статистика:
-median/min/max/range/выборочное standard_deviation второго хода; median/max
-overshoot обеих проб. Mesh: median absolute delta, nearest-rank P95, max absolute
+Для нижней опоры сохранены начальное состояние, одна trigger/halt/overshoot,
+причина отказа пробы, SGT/ток, TMC before/after и восстановление. Runner
+пересчитывает первую trigger position из известной стартовой Z и MCU-хода;
+между циклами учитывает переназначение координаты recovery и требует
+непрерывный motor epoch. Это общая командная опора Klipper при условии
+отсутствия пропущенных шагов, а не независимое измерение линейкой. Сырые
+trigger/halt также сохраняются. Статистика:
+min/max/median/range/выборочное standard_deviation сопоставимых trigger
+positions и overshoot. Старый `tolerance: 0.5` проверял второй hit одного цикла
+и не доказывает независимую повторяемость; численный порог G2 пока утверждает
+оператор по аппаратным данным. Диапазон 0.5 мм можно рассмотреть как прежний
+ориентир, но не как автоматически принятый допуск. Mesh: median absolute delta, nearest-rank P95, max absolute
 delta и RMS по всем попарным точкам при одинаковой геометрии. Сырые матрицы не округляются.
 
 Manifest для mesh содержит `mesh_profile_persistence_suppressed=1`,

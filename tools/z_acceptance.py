@@ -66,15 +66,14 @@ def mesh_stats(meshes):
 
 def summarize(result):
     runs = result['z_bottom']['raw']
-    valid = [r for r in runs if r.get('result') == 'passed']
+    valid = [r for r in runs if r.get('result') == 'passed' and r.get('acceptance_valid')]
+    result['z_bottom'].update(runs=len(runs), successful_runs=len(valid))
     if valid:
-        travel = stats(r['second_travel_mm'] for r in valid)
-        overshoot = stats(p['overshoot_mm'] for r in valid for p in r['probes'])
-        result['z_bottom'].update(runs=len(runs), successful_runs=len(valid),
-            second_travel=travel, second_travel_median_mm=travel['median'],
-            second_travel_range_mm=travel['range'], overshoot=overshoot,
-            max_overshoot_mm=overshoot['max'],
-            travel_window_pass=all(abs(r['deviation_mm']) <= r['tolerance_mm'] for r in valid))
+        triggers = [r['trigger_position_mm'] for r in valid if r['trigger_position_mm'] is not None]
+        overshoot = stats(r['probes'][0]['overshoot_mm'] for r in valid)
+        result['z_bottom'].update(trigger_positions_mm=triggers,
+            trigger_position=stats(triggers) if triggers else None,
+            overshoot=overshoot, max_overshoot_mm=overshoot['max'])
     eddy = result['eddy_z0']['raw']
     values = [r['z0_mcu_mm'] for r in eddy if r.get('result') == 'passed']
     if values:
@@ -120,6 +119,8 @@ class Run:
     def __init__(self, package, mode, client):
         self.package, self.client = Path(package), client
         self.path = self.package / 'result.json'
+        self.bottom_offset_mm = None
+        self.bottom_motor_epoch = None
         if self.path.exists():
             raise ValueError('Пакет уже содержит result.json; нужен независимый run_id')
         self.result = dict(schema_version=1, mode=mode, hardware_accepted=False,
@@ -175,33 +176,70 @@ class Run:
                 record['state_error'] = str(exc)
             record['ended_at'] = datetime.now(timezone.utc).isoformat()
             self.checkpoint()
-        if 'state_error' in record:
-            raise RuntimeError('После команды недоступно состояние Klipper')
-        if record['after']['webhooks']['state'] != 'ready':
-            raise RuntimeError('Klipper перестал быть ready')
-        if telemetry:
-            sample = record['after']['treed_z_recovery'][telemetry[0]]
-            if (sample == before['treed_z_recovery'].get(telemetry[0])
-                    or sample.get('result') != 'passed'):
-                raise RuntimeError('Нет нового успешного измерения')
+        try:
+            if 'state_error' in record:
+                raise RuntimeError('После команды недоступно состояние Klipper')
+            if record['after']['webhooks']['state'] != 'ready':
+                raise RuntimeError('Klipper перестал быть ready')
+            if telemetry:
+                sample = record['after']['treed_z_recovery'][telemetry[0]]
+                if (sample == before['treed_z_recovery'].get(telemetry[0])
+                        or sample.get('result') != 'passed'):
+                    raise RuntimeError('Нет нового успешного измерения')
+        except BaseException:
+            if stage:
+                self.result['stages'][stage] = 'failed'
+            raise
         return record['after']
 
     def bottom(self, start=None):
         script = 'TREED_Z_RECOVERY_TEST CONFIRM=1'
         if start is not None:
             script += ' START_Z=%.6f' % start
-        self.send(script, 'bottom_reference', ('last_run', 'z_bottom'))
+        after = self.send(script, 'bottom_reference', ('last_run', 'z_bottom'))
         sample = self.result['z_bottom']['raw'][-1]
-        if (len(sample['probes']) != 2 or not sample['tmc_restored']
-                or sample['tmc_before'] != sample['tmc_after']):
+        sample['acceptance_valid'] = False
+        probes = sample.get('probes', [])
+        if (len(probes) != 1 or not sample.get('tmc_restored')
+                or not isinstance(sample.get('tmc_before'), dict) or not sample['tmc_before']
+                or sample.get('tmc_before') != sample.get('tmc_after')):
             self.result['stages']['bottom_reference'] = 'failed'
-            raise ValueError('Z-bottom не подтвердил две пробы и восстановление TMC')
-        probe = sample['probes'][1]
-        travel = probe['trigger_mm'] - probe['start_mm']
-        if (not math.isfinite(travel) or abs(travel - sample['expected_second_travel_mm']) > sample['tolerance_mm']
-                or not math.isclose(travel, sample['second_travel_mm'], abs_tol=1e-8)):
+            raise ValueError('Z-bottom не подтвердил одну пробу и восстановление TMC')
+        probe = probes[0]
+        try:
+            start_mm, trigger, halt = numbers(probe[k] for k in ('start_mm', 'trigger_mm', 'halt_mm'))
+            travel, overshoot = numbers(probe[k] for k in ('travel_mm', 'overshoot_mm'))
+            bottom = numbers([probe['target_mm']])[0]
+        except (KeyError, TypeError, ValueError):
             self.result['stages']['bottom_reference'] = 'failed'
-            raise ValueError('Измеренный второй ход вне окна')
+            raise ValueError('Z-bottom не вернул конечные координаты единственной пробы')
+        if (probe.get('failure_reason') or probe.get('no_movement') is not False
+                or not start_mm < trigger <= halt <= bottom
+                or not math.isclose(travel, trigger - start_mm, abs_tol=1e-8)
+                or not math.isclose(overshoot, halt - trigger, abs_tol=1e-8)):
+            self.result['stages']['bottom_reference'] = 'failed'
+            raise ValueError('Z-bottom вернул противоречивые данные первой пробы')
+        sample['trigger_position_mm'] = None
+        if self.bottom_offset_mm is not None:
+            before = sample.get('before_forced_unknown', {})
+            if ('z' not in before.get('homed_axes', '')
+                    or sample.get('motor_epoch') != self.bottom_motor_epoch
+                    or after['treed_z_recovery']['motor_epoch'] != self.bottom_motor_epoch):
+                self.result['stages']['bottom_reference'] = 'failed'
+                raise ValueError('Потеряна общая координатная опора bottom-серии')
+            try:
+                before_z = numbers([before['position'][2]])[0]
+            except (KeyError, IndexError, TypeError, ValueError):
+                self.result['stages']['bottom_reference'] = 'failed'
+                raise ValueError('Недоступна исходная известная Z bottom-серии')
+            position = before_z + travel + self.bottom_offset_mm
+            if not math.isfinite(position):
+                self.result['stages']['bottom_reference'] = 'failed'
+                raise ValueError('Неконечная позиция первого trigger')
+            sample['trigger_position_mm'] = position
+            self.bottom_offset_mm = position - bottom
+        sample['acceptance_valid'] = True
+        self.checkpoint()
 
     def eddy(self):
         self.send('TREED_EDDY_ACCEPTANCE_HOME CONFIRM=1', telemetry=('last_eddy', 'eddy_z0'))
@@ -232,6 +270,9 @@ class Run:
             initial = self.client.state()
             self.require_idle(initial)
             self.result['initial_state'] = initial
+            if mode == 'bottom' and 'z' in initial['toolhead']['homed_axes']:
+                self.bottom_offset_mm = 0.
+                self.bottom_motor_epoch = initial['treed_z_recovery']['motor_epoch']
             if mode == 'cold-start' and 'z' in initial['toolhead']['homed_axes']:
                 raise ValueError('Cold-start требует неизвестную Z после ручной загрузки')
             if mode == 'bottom':
@@ -405,7 +446,8 @@ def compare(packages):
     return dict(schema_version=1, hardware_accepted=False, boot_ids=boots,
                 packages=[str(p) for p in packages],
                 mesh=mesh_stats([r['mesh']['raw'][0] for r in results]),
-                second_travel=stats(r['z_bottom']['raw'][0]['second_travel_mm'] for r in results),
+                bottom_overshoot=stats(r['z_bottom']['raw'][0]['probes'][0]['overshoot_mm']
+                                       for r in results),
                 z0_note='Абсолютные MCU Z0 между загрузками несопоставимы')
 
 

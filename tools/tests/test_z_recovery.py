@@ -4,6 +4,7 @@
 Z_RECOVERY_KLIPPER_SOURCE позволяет дополнительно проверить закреплённый API.
 """
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -49,7 +50,7 @@ class Config:
 
     def getsection(self, name):
         return Config(self.rig, **{
-            'stepper_z': dict(position_min=-5., position_max=255.,
+            'stepper_z': dict(position_min=-5., position_max=203.,
                               endstop_pin='probe:z_virtual_endstop'),
             'printer': dict(kinematics='corexy'),
         }[name])
@@ -79,7 +80,7 @@ class Rig:
         self.shutdown = False
         self.phase, self.stats, self.paused, self.sd_active = 'idle', 'standby', False, False
         self.manual_active = False
-        self.hits = [(120., .025), (5., .025)]
+        self.hits = [(120., .025)]
         self.moves, self.seeks, self.pauses, self.writes = [], [], [], []
         self.fail_move = None
         self.fields = Fields()
@@ -155,7 +156,7 @@ class Rig:
         if len(self.moves) == self.fail_move:
             raise ValueError('ошибка отхода')
         assert pos[:2] == self.pos[:2] and pos[3] == self.pos[3]
-        assert -5 <= pos[2] <= 255
+        assert -5 <= pos[2] <= 203
         self.pos[:] = pos
 
     def run(self):
@@ -199,13 +200,16 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual('z' in rig.homed, homed)
         self.assertFalse(rig.extra.running)
 
-    def test_two_contacts_and_clearance(self):
+    def test_one_contact_and_clearance(self):
         rig = Rig()
         rig.run()
-        self.assertEqual(rig.pos, [17., 29., 250., 4.])
-        self.assertEqual(rig.seeks, [(-5., 255., 5.), (249.5, 255., 5.)])
-        self.assertEqual([p[2] for p in rig.moves], [250., 250.])
-        self.assertEqual(rig.pauses, [2., 2.])
+        self.assertEqual(rig.pos, [17., 29., 198., 4.])
+        self.assertEqual(rig.seeks, [(-5., 203., 5.)])
+        self.assertEqual([p[2] for p in rig.moves], [198.])
+        self.assertEqual(rig.pauses, [2.])
+        self.assertEqual(len(rig.extra.last_run['probes']), 1)
+        self.assertNotIn('second_travel_mm', rig.extra.last_run)
+        self.assertIsNone(rig.extra.last_run['probes'][0]['failure_reason'])
         rig.endstop.add_stepper.assert_called_once()
         self.restored(rig, True)
 
@@ -256,41 +260,52 @@ class RecoveryTests(unittest.TestCase):
                     rig.run()
                 self.assertFalse(rig.seeks or rig.moves or rig.writes)
 
-    def test_no_trigger_on_either_pass(self):
-        for index in (0, 1):
-            rig = Rig()
-            rig.hits[index] = ValueError('No trigger after full movement')
-            with self.assertRaises(ValueError):
-                rig.run()
-            self.assertTrue(rig.shutdown)
-            self.assertEqual(len(rig.seeks), index + 1)
-            self.assertEqual(len(rig.moves), index)
-            self.restored(rig)
+    def test_no_trigger_fails_without_retry(self):
+        rig = Rig()
+        rig.hits[0] = ValueError('No trigger after full movement')
+        with self.assertRaises(ValueError):
+            rig.run()
+        self.assertTrue(rig.shutdown)
+        self.assertEqual(len(rig.seeks), 1)
+        self.assertFalse(rig.moves)
+        self.assertEqual(rig.extra.last_run['failure_reason'], 'homing_error')
+        self.restored(rig)
 
-    def test_early_late_nonfinite_and_stuck(self):
-        for travel in (0., 1., 4.49, 5.51, float('nan'), float('inf')):
-            with self.subTest(travel=travel):
+    def test_invalid_first_probe_reasons(self):
+        for travel, overshoot, reason in ((0., 0., 'no_movement'),
+                                          (-1., 0., 'trigger_before_start'),
+                                          (209., 0., 'trigger_after_bottom'),
+                                          (120., -.1, 'halt_before_trigger'),
+                                          (208., .1, 'halt_after_bottom'),
+                                          (120., 6., 'overshoot_exceeds_clearance'),
+                                          (float('nan'), 0., 'non_finite_trigger'),
+                                          (float('inf'), 0., 'non_finite_trigger')):
+            with self.subTest(reason=reason, travel=travel):
                 rig = Rig()
-                rig.hits[1] = (travel, 0.)
-                with self.assertRaises(ValueError):
+                rig.hits[0] = (travel, overshoot)
+                with self.assertRaisesRegex(ValueError, reason):
                     rig.run()
-                self.assertEqual(len(rig.moves), 1)
+                self.assertEqual(len(rig.seeks), 1)
+                self.assertFalse(rig.moves)
+                probe = rig.extra.last_run['probes'][0]
+                self.assertEqual(probe['failure_reason'], reason)
+                self.assertEqual(rig.extra.last_run['failure_reason'], reason)
+                json.dumps(rig.extra.last_run, allow_nan=False)
                 self.restored(rig)
 
-    def test_tolerance_boundaries(self):
-        for travel in (4.5, 5.5):
+    def test_first_probe_boundary(self):
+        for travel in (0.001, 208.):
             rig = Rig()
-            rig.hits[1] = (travel, 0.)
+            rig.hits[0] = (travel, 0.)
             rig.run()
             self.restored(rig, True)
 
     def test_retreat_failure_and_shutdown(self):
-        for index in (1, 2):
-            rig = Rig()
-            rig.fail_move = index
-            with self.assertRaises(ValueError):
-                rig.run()
-            self.restored(rig)
+        rig = Rig()
+        rig.fail_move = 1
+        with self.assertRaises(ValueError):
+            rig.run()
+        self.restored(rig)
         rig = Rig()
         rig.toolhead.dwell = lambda _: rig.stop('MCU disconnected')
         with self.assertRaises(ValueError):
@@ -317,8 +332,8 @@ class RecoveryTests(unittest.TestCase):
 
     def test_config_validation(self):
         for params in (dict(speed=float('nan')), dict(current=float('inf')),
-                       dict(max_seek=261), dict(tolerance=2.5), dict(bottom_position=256),
-                       dict(verify_backoff_mm=260), dict(bottom_clearance_mm=260),
+                        dict(max_seek=209), dict(bottom_position=204),
+                        dict(bottom_clearance_mm=208),
                        dict(sgt=64), dict(stallguard_pause=1), dict(current=4)):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 Rig(**params)
@@ -331,9 +346,17 @@ class RecoveryTests(unittest.TestCase):
         self.assertNotIn('FORCE_MOVE', hop)
         self.assertNotIn('SET_KINEMATIC_POSITION', hop)
         self.assertIn('if target_z > current_z', hop)
-        self.assertIn('endstop_pin: probe:z_virtual_endstop', (profile / 'steppers.cfg').read_text(encoding='utf-8'))
+        steppers = (profile / 'steppers.cfg').read_text(encoding='utf-8')
+        self.assertIn('endstop_pin: probe:z_virtual_endstop', steppers)
+        self.assertIn('position_max: 203', steppers)
         self.assertIn('[force_move]', (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8'))
-        self.assertIn('enabled: False', (profile / 'z_recovery.cfg').read_text(encoding='utf-8'))
+        recovery = (profile / 'z_recovery.cfg').read_text(encoding='utf-8')
+        self.assertIn('enabled: False', recovery)
+        self.assertIn('bottom_position: 203', recovery)
+        self.assertIn('max_seek: 208', recovery)
+        self.assertNotIn('verify_backoff_mm', recovery)
+        self.assertNotIn('tolerance:', recovery)
+        self.assertIn('variable_axis_z_max: 203.0', (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8'))
         self.assertIn('z_recovery.cfg]', (ROOT / 'klipper/printer.cfg').read_text(encoding='utf-8'))
         loader = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
         self.assertIn('klipper-host/treed_z_recovery.py; do', loader)
@@ -348,13 +371,13 @@ class RecoveryTests(unittest.TestCase):
         upstream_spec.loader.exec_module(real)
         for missing in (False, True):
             rig = Rig()
-            rig._start = [17., 29., 249.5, 4.]
+            rig._start = [17., 29., 197.5, 4.]
             rig.pos[:] = rig._start
             rig.moving = False
             # Ход 5 мм; остановка на 0.025 мм позже DIAG, цель ещё дальше.
-            start = [46., -12., 249.5]
-            trigger = [46., -12., 254.5]
-            halt = [46., -12., 254.525]
+            start = [46., -12., 197.5]
+            trigger = [46., -12., 202.5]
+            halt = [46., -12., 202.525]
             steppers = []
             for i, name in enumerate(('stepper_x', 'stepper_y', 'stepper_z')):
                 def counter(cmd=None, i=i):
@@ -389,7 +412,7 @@ class RecoveryTests(unittest.TestCase):
                     travel, overshoot = rig.extra._seek()
                     self.assertAlmostEqual(travel, 5.)
                     self.assertAlmostEqual(overshoot, .025)
-                    self.assertAlmostEqual(rig.pos[2], 254.525)
+                    self.assertAlmostEqual(rig.pos[2], 202.525)
             self.assertEqual([call.args[0] for call in rig.printer.send_event.call_args_list],
                              ['homing:homing_move_begin', 'homing:homing_move_end'])
 
