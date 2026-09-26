@@ -311,7 +311,7 @@ TREED_EDDY_Z_OFFSET_AUTOSAVE_DISABLE
 TREED_EDDY_Z_OFFSET_AUTOSAVE_STATUS
 ```
 
-Если autosave включен, `END_PRINT` может применить накопленный live Z-offset к Eddy probe через `Z_OFFSET_APPLY_PROBE` и `SAVE_CONFIG`.
+Autosave включен по умолчанию. `END_PRINT` применяет накопленный live Z-offset к Eddy probe через `Z_OFFSET_APPLY_PROBE` и сохраняет калибровку командой `SAVE_CONFIG`, поэтому поправка используется при следующей печати.
 
 Использовать осторожно: это меняет сохраненную калибровку Eddy. Для одноразового завершения без сохранения offset использовать:
 

@@ -72,6 +72,8 @@ $accel = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_ACCEL"
 $pressure = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_PRESSURE_ADVANCE"
 $retraction = Get-GcodeMacroBlock $uiTune "TREED_UI_SET_RETRACTION"
 $adjustZ = Get-GcodeMacroBlock $uiTune "TREED_UI_ADJUST_Z_OFFSET"
+$eddyAutosaveState = Get-GcodeMacroBlock $probe "_TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE"
+$eddyAutosaveApply = Get-GcodeMacroBlock $probe "_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET"
 
 # Блок 3: State surface и runtime-only guard.
 Assert-Contains $state '(?m)^variable_contract_version:\s*"1\.0"\s*$' "UI tune state must expose contract version"
@@ -122,7 +124,10 @@ Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") '(?s)_TREED_EDDY_CA
 Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") '_TREED_UI_RESET_Z_OFFSET' "CANCEL_PRINT must discard live babystep"
 Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") 'VARIABLE=has_pending VALUE=0' "END_PRINT must clear stale autosave state"
 Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") 'VARIABLE=has_pending VALUE=0' "CANCEL_PRINT must clear pending Eddy autosave"
-Assert-Contains (Get-GcodeMacroBlock $probe "_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET") '(?s)if enabled == 0.*VARIABLE=has_pending VALUE=0' "disabled Eddy autosave must discard pending offset"
+Assert-Contains $eddyAutosaveState '(?m)^variable_enabled:\s*1\s*$' "Eddy autosave must be enabled by default"
+Assert-Contains $eddyAutosaveApply '(?s)if enabled == 0.*VARIABLE=has_pending VALUE=0' "disabled Eddy autosave must discard pending offset"
+Assert-Contains $eddyAutosaveApply '(?m)^\s*Z_OFFSET_APPLY_PROBE\s*$' "Eddy autosave must apply captured babystep to the probe calibration"
+Assert-Contains $eddyAutosaveApply '(?m)^\s*SAVE_CONFIG\s*$' "Eddy autosave must persist the adjusted probe calibration"
 
 # Блок 5: Документация команды, state surface и MVP-исключений.
 foreach ($command in @(
