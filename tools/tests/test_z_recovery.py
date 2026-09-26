@@ -86,7 +86,7 @@ class Rig:
         self.phase, self.stats, self.paused, self.sd_active = 'idle', 'standby', False, False
         self.manual_active = False
         self.hits = [(205., .025)]
-        self.moves, self.seeks, self.pauses, self.writes = [], [], [], []
+        self.moves, self.move_speeds, self.seeks, self.pauses, self.writes = [], [], [], [], []
         self.fail_move = None
         self.fields = Fields()
         self.saved_fields = self.fields.values.copy()
@@ -175,6 +175,7 @@ class Rig:
 
     def move(self, pos, speed):
         self.moves.append(list(pos))
+        self.move_speeds.append(speed)
         if len(self.moves) == self.fail_move:
             raise ValueError('ошибка отхода')
         assert pos[:2] == self.pos[:2] and pos[3] == self.pos[3]
@@ -184,7 +185,7 @@ class Rig:
         self.pos[:] = pos
         self.kin_pos[:] = pos
 
-    def run(self):
+    def run(self, auto_remove=False):
         self.objects['gcode_macro _TREED_OPERATION_STATE'].variables['phase'] = self.phase
         rig = self
 
@@ -213,7 +214,8 @@ class Rig:
                 return 'z_bottom' if self.zero else None
 
         with patch.object(homing, 'HomingMove', Move, create=True):
-            self.extra.cmd_home(self.command)
+            command = self.extra.cmd_park_bottom if auto_remove else self.extra.cmd_home
+            command(self.command)
 
     def finish_eddy(self, z0_physical=0., corrected_z=.25):
         self.extra.cmd_travel_begin(self.command)
@@ -275,6 +277,52 @@ class RecoveryTests(unittest.TestCase):
         rig.homed = 'xyz'
         rig.run()
         self.assertFalse(rig.seeks or rig.moves or rig.writes)
+
+    def test_auto_remove_forces_bottom_and_runs_five_cycles(self):
+        rig = Rig()
+        rig.phase, rig.stats, rig.sd_active = 'auto_remove', 'printing', True
+        rig.homed = 'xyz'
+        rig.kin.max_z_velocity = 100.
+        rig.run(auto_remove=True)
+        self.assertEqual(len(rig.seeks), 1)
+        self.assertEqual([move[2] for move in rig.moves], [198.] + [173., 198.] * 5)
+        self.assertEqual(rig.move_speeds, [5.] + [50.] * 10)
+        self.assertEqual(rig.pos[2], 198.)
+        self.assertEqual(rig.extra.last_run['auto_remove']['cycles'], 5)
+        self.restored(rig, True)
+
+    def test_auto_remove_requires_phase_diag_and_available_travel(self):
+        rig = Rig()
+        rig.kin.max_z_velocity = 100.
+        with self.assertRaises(ValueError):
+            rig.run(auto_remove=True)
+        self.assertFalse(rig.seeks or rig.moves)
+
+        rig = Rig()
+        rig.phase, rig.kin.max_z_velocity = 'auto_remove', 100.
+        rig.hits[0] = ValueError('No trigger after full movement')
+        with self.assertRaises(ValueError):
+            rig.run(auto_remove=True)
+        self.assertFalse(rig.moves)
+
+        rig = Rig()
+        rig.phase, rig.kin.max_z_velocity = 'auto_remove', 100.
+        rig.rail.position_min = 180.
+        with self.assertRaisesRegex(ValueError, 'недостаточно 25 мм'):
+            rig.run(auto_remove=True)
+        self.assertEqual([move[2] for move in rig.moves], [198.])
+        self.restored(rig, True)
+
+    def test_auto_remove_stops_on_move_error(self):
+        rig = Rig()
+        rig.phase, rig.kin.max_z_velocity = 'auto_remove', 100.
+        rig.fail_move = 2
+        with self.assertRaisesRegex(ValueError, 'ошибка отхода'):
+            rig.run(auto_remove=True)
+        self.assertTrue(rig.shutdown)
+        self.assertEqual([move[2] for move in rig.moves], [198., 173.])
+        self.assertEqual(rig.extra.last_run['auto_remove']['cycles'], 0)
+        self.restored(rig, True)
 
     def test_measured_limit_uses_physical_contact_after_eddy(self):
         for contact, start, origin, expected in (
@@ -537,6 +585,9 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn('max_seek: 210', recovery)
         self.assertNotIn('verify_backoff_mm', recovery)
         self.assertNotIn('tolerance:', recovery)
+        printer = (profile / 'printer_base.cfg').read_text(encoding='utf-8')
+        max_z_velocity = float(printer.split('max_z_velocity:')[1].split()[0])
+        self.assertGreaterEqual(max_z_velocity, 50.)
         self.assertIn('variable_axis_z_max: 203.0', (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8'))
         eddy = (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8')
         home = eddy.split('[gcode_macro _TREED_EDDY_HOME_Z]')[1].split('[gcode_macro')[0]
@@ -548,6 +599,15 @@ class RecoveryTests(unittest.TestCase):
         loader = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
         self.assertIn('klipper-host/treed_z_recovery.py; do', loader)
         self.assertEqual(loader.count("'/klippy/extras/treed_z_recovery.py'"), 2)
+        end_print = (profile / 'macros_print_flow.cfg').read_text(encoding='utf-8').split(
+            '[gcode_macro END_PRINT]')[1]
+        ordered = ["VALUE=\"'auto_remove'\"", 'TEMPERATURE_WAIT SENSOR=heater_bed MAXIMUM=40',
+                   'TREED_Z_PARK_BOTTOM', 'M400', 'M84', "VALUE=\"'idle'\""]
+        positions = [end_print.index(value) for value in ordered]
+        self.assertEqual(positions, sorted(positions))
+        cancel = (profile / 'macros_pause_resume.cfg').read_text(encoding='utf-8').split(
+            '[gcode_macro CANCEL_PRINT]')[1].split('[gcode_macro', 1)[0]
+        self.assertNotIn('TREED_Z_PARK_BOTTOM', cancel)
 
     # Блок 3: Реальный HomingMove закреплённого Klipper с моделируемыми MCU-счётчиками.
     @unittest.skipUnless(os.environ.get('Z_RECOVERY_KLIPPER_SOURCE'), 'upstream source not supplied')

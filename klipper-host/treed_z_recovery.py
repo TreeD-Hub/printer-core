@@ -13,6 +13,10 @@ from . import homing
 
 
 class TreedZRecovery:
+    AUTO_REMOVE_DISTANCE = 25.
+    AUTO_REMOVE_SPEED = 50.
+    AUTO_REMOVE_CYCLES = 5
+
     # Блок 1: Отдельные параметры и DIAG, не заменяющий endstop рельса Z.
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -60,6 +64,7 @@ class TreedZRecovery:
         self.printer.lookup_object('gcode').register_command(
             'TREED_Z_HOME_BOTTOM', self.cmd_home)
         gcode = self.printer.lookup_object('gcode')
+        gcode.register_command('TREED_Z_PARK_BOTTOM', self.cmd_park_bottom)
         gcode.register_command('_TREED_Z_TRAVEL_BEGIN', self.cmd_travel_begin)
         gcode.register_command('_TREED_Z_TRAVEL_APPLY', self.cmd_travel_apply)
         gcode.register_command('TREED_Z_RECOVERY_TEST', self.cmd_test)
@@ -116,7 +121,7 @@ class TreedZRecovery:
                                   running=self.running, motor_epoch=self.motor_epoch))
 
     # Блок 2: Допуск до любых изменений координат, тока и движения.
-    def _require_idle(self, gcmd):
+    def _require_idle(self, gcmd, required_phase=None):
         now = self.printer.get_reactor().monotonic()
         if self.printer.is_shutdown() or self.printer.get_state_message()[1] != 'ready':
             raise gcmd.error('Z recovery: Klipper не готов')
@@ -127,10 +132,12 @@ class TreedZRecovery:
         sd_active = self.printer.lookup_object('virtual_sdcard').is_active()
         manual = self.printer.lookup_object('manual_probe', None)
         sgt = self.printer.lookup_object('treed_sgt_executor', None)
-        # virtual_sd уже printing внутри START_PRINT; только preparing допускает этот случай.
-        if (self.running or self.eddy_homing or phase not in ('idle', 'preparing') or paused
+        allowed_phases = (required_phase,) if required_phase else ('idle', 'preparing')
+        # virtual_sd активен внутри START_PRINT и до завершения END_PRINT.
+        if (self.running or self.eddy_homing or phase not in allowed_phases or paused
                 or stats in ('paused', 'error')
-                or ((stats == 'printing' or sd_active) and phase != 'preparing')
+                or ((stats == 'printing' or sd_active)
+                    and phase not in ('preparing', 'auto_remove'))
                 or (manual is not None and manual.get_status(now)['is_active'])
                 or (sgt is not None and sgt.running)):
             raise gcmd.error('Z recovery: печать, пауза или калибровка активна')
@@ -242,13 +249,23 @@ class TreedZRecovery:
         return True
 
     def cmd_home(self, gcmd):
+        self._run_bottom(gcmd, auto_remove=False)
+
+    def cmd_park_bottom(self, gcmd):
+        self._run_bottom(gcmd, auto_remove=True)
+
+    def _run_bottom(self, gcmd, auto_remove):
         self.last_run = dict(timestamp=datetime.now(timezone.utc).isoformat(),
                              start_state=dict(position=self.toolhead.get_position(),
                                               homed_axes=self.kin.get_status(0)['homed_axes']),
                              probes=[], sgt=self.sgt, current=self.current,
-                             motor_epoch=self.motor_epoch, result='running')
+                             motor_epoch=self.motor_epoch,
+                             mode='auto_remove' if auto_remove else 'recovery',
+                             result='running')
         try:
-            self._home(gcmd)
+            self._home(gcmd, auto_remove)
+            if auto_remove:
+                self._auto_remove(gcmd)
             self.last_run['result'] = 'passed' if self.last_run['probes'] else 'skipped'
         except BaseException as exc:
             self.last_run.update(result='failed', error=str(exc))
@@ -259,12 +276,13 @@ class TreedZRecovery:
             self.last_run['end_position'] = [v if math.isfinite(v) else None
                                              for v in self.toolhead.get_position()]
 
-    def _home(self, gcmd):
+    def _home(self, gcmd, auto_remove=False):
         if gcmd.get_command_parameters():
-            raise gcmd.error('TREED_Z_HOME_BOTTOM: параметры задаются в [treed_z_recovery]')
-        self._require_idle(gcmd)
+            command = 'TREED_Z_PARK_BOTTOM' if auto_remove else 'TREED_Z_HOME_BOTTOM'
+            raise gcmd.error('%s: параметры не поддерживаются' % command)
+        self._require_idle(gcmd, 'auto_remove' if auto_remove else None)
         now = self.printer.get_reactor().monotonic()
-        if 'z' in self.kin.get_status(now)['homed_axes']:
+        if not auto_remove and 'z' in self.kin.get_status(now)['homed_axes']:
             gcmd.respond_info('Z recovery: Z уже известна; нижняя опора пропущена')
             return
         if self.speed > min(self.toolhead.max_velocity, self.kin.max_z_velocity):
@@ -336,6 +354,44 @@ class TreedZRecovery:
             raise gcmd.error('Z recovery: мотор Z отключался во время поиска')
         gcmd.respond_info('Z recovery: DIAG найден, временная Z=%.6f; Z0 и ход определит Eddy'
                           % (self.bottom - self.clearance))
+
+    def _auto_remove(self, gcmd):
+        bottom_safe = self.bottom - self.clearance
+        top = bottom_safe - self.AUTO_REMOVE_DISTANCE
+        z_min, z_max = self.kin.rails[2].get_range()
+        if (self.z_travel.get('state') != 'pending_eddy'
+                or not self.last_run['probes']
+                or self.last_run['probes'][-1].get('failure_reason')):
+            raise gcmd.error('Z auto-remove: нижний DIAG не подтверждён')
+        if top < z_min or bottom_safe > z_max:
+            raise gcmd.error('Z auto-remove: недостаточно 25 мм допустимого хода вверх')
+        if self.AUTO_REMOVE_SPEED > min(self.toolhead.max_velocity,
+                                        self.kin.max_z_velocity):
+            raise gcmd.error('Z auto-remove: скорость 50 мм/с превышает текущий лимит Z')
+        if abs(self.toolhead.get_position()[2] - bottom_safe) > 1.e-6:
+            raise gcmd.error('Z auto-remove: исходная нижняя позиция потеряна')
+
+        self.last_run['auto_remove'] = dict(cycles=0, distance=self.AUTO_REMOVE_DISTANCE,
+                                            speed=self.AUTO_REMOVE_SPEED,
+                                            bottom_safe=bottom_safe)
+        self.running = True
+        try:
+            for cycle in range(self.AUTO_REMOVE_CYCLES):
+                for target in (top, bottom_safe):
+                    self._alive()
+                    pos = self.toolhead.get_position()
+                    pos[2] = target
+                    self.toolhead.move(pos, self.AUTO_REMOVE_SPEED)
+                    self.toolhead.wait_moves()
+                    self._alive()
+                self.last_run['auto_remove']['cycles'] = cycle + 1
+        except BaseException:
+            self.printer.invoke_shutdown('Z auto-remove: сбой движения')
+            raise
+        finally:
+            self.running = False
+        if abs(self.toolhead.get_position()[2] - bottom_safe) > 1.e-6:
+            raise gcmd.error('Z auto-remove: итоговая нижняя позиция потеряна')
 
     # Блок 5: Общая MCU-опора DIAG/Eddy и рабочий лимит до следующей потери Z.
     def cmd_travel_begin(self, gcmd):
