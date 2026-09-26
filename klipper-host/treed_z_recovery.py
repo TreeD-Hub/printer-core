@@ -64,6 +64,8 @@ class TreedZRecovery:
         self.printer.lookup_object('gcode').register_command(
             'TREED_Z_HOME_BOTTOM', self.cmd_home)
         gcode = self.printer.lookup_object('gcode')
+        gcode.register_command('TREED_Z_PARK_BOTTOM_MANUAL',
+                               self.cmd_park_bottom_manual)
         gcode.register_command('TREED_Z_PARK_BOTTOM', self.cmd_park_bottom)
         gcode.register_command('_TREED_Z_TRAVEL_BEGIN', self.cmd_travel_begin)
         gcode.register_command('_TREED_Z_TRAVEL_APPLY', self.cmd_travel_apply)
@@ -251,19 +253,23 @@ class TreedZRecovery:
     def cmd_home(self, gcmd):
         self._run_bottom(gcmd, auto_remove=False)
 
+    def cmd_park_bottom_manual(self, gcmd):
+        self._run_bottom(gcmd, auto_remove=False, force=True)
+
     def cmd_park_bottom(self, gcmd):
         self._run_bottom(gcmd, auto_remove=True)
 
-    def _run_bottom(self, gcmd, auto_remove):
+    def _run_bottom(self, gcmd, auto_remove, force=False):
         self.last_run = dict(timestamp=datetime.now(timezone.utc).isoformat(),
                              start_state=dict(position=self.toolhead.get_position(),
                                               homed_axes=self.kin.get_status(0)['homed_axes']),
                              probes=[], sgt=self.sgt, current=self.current,
                              motor_epoch=self.motor_epoch,
-                             mode='auto_remove' if auto_remove else 'recovery',
+                             mode=('auto_remove' if auto_remove else
+                                   'manual_park' if force else 'recovery'),
                              result='running')
         try:
-            self._home(gcmd, auto_remove)
+            self._home(gcmd, auto_remove, force)
             if auto_remove:
                 self._auto_remove(gcmd)
             self.last_run['result'] = 'passed' if self.last_run['probes'] else 'skipped'
@@ -276,13 +282,16 @@ class TreedZRecovery:
             self.last_run['end_position'] = [v if math.isfinite(v) else None
                                              for v in self.toolhead.get_position()]
 
-    def _home(self, gcmd, auto_remove=False):
+    def _home(self, gcmd, auto_remove=False, force=False):
         if gcmd.get_command_parameters():
-            command = 'TREED_Z_PARK_BOTTOM' if auto_remove else 'TREED_Z_HOME_BOTTOM'
+            command = ('TREED_Z_PARK_BOTTOM' if auto_remove else
+                       'TREED_Z_PARK_BOTTOM_MANUAL' if force else
+                       'TREED_Z_HOME_BOTTOM')
             raise gcmd.error('%s: параметры не поддерживаются' % command)
-        self._require_idle(gcmd, 'auto_remove' if auto_remove else None)
+        required_phase = 'auto_remove' if auto_remove else 'idle' if force else None
+        self._require_idle(gcmd, required_phase)
         now = self.printer.get_reactor().monotonic()
-        if not auto_remove and 'z' in self.kin.get_status(now)['homed_axes']:
+        if not auto_remove and not force and 'z' in self.kin.get_status(now)['homed_axes']:
             gcmd.respond_info('Z recovery: Z уже известна; нижняя опора пропущена')
             return
         if self.speed > min(self.toolhead.max_velocity, self.kin.max_z_velocity):

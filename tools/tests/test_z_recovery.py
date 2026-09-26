@@ -185,7 +185,7 @@ class Rig:
         self.pos[:] = pos
         self.kin_pos[:] = pos
 
-    def run(self, auto_remove=False):
+    def run(self, auto_remove=False, manual_park=False):
         self.objects['gcode_macro _TREED_OPERATION_STATE'].variables['phase'] = self.phase
         rig = self
 
@@ -214,7 +214,9 @@ class Rig:
                 return 'z_bottom' if self.zero else None
 
         with patch.object(homing, 'HomingMove', Move, create=True):
-            command = self.extra.cmd_park_bottom if auto_remove else self.extra.cmd_home
+            command = (self.extra.cmd_park_bottom if auto_remove else
+                       self.extra.cmd_park_bottom_manual if manual_park else
+                       self.extra.cmd_home)
             command(self.command)
 
     def finish_eddy(self, z0_physical=0., corrected_z=.25):
@@ -277,6 +279,22 @@ class RecoveryTests(unittest.TestCase):
         rig.homed = 'xyz'
         rig.run()
         self.assertFalse(rig.seeks or rig.moves or rig.writes)
+
+    def test_manual_park_forces_bottom_without_auto_remove(self):
+        rig = Rig()
+        rig.homed = 'xyz'
+        rig.run(manual_park=True)
+        self.assertEqual(len(rig.seeks), 1)
+        self.assertEqual([move[2] for move in rig.moves], [198.])
+        self.assertEqual(rig.extra.last_run['mode'], 'manual_park')
+        self.assertNotIn('auto_remove', rig.extra.last_run)
+        self.restored(rig, True)
+
+        rig = Rig()
+        rig.phase = 'preparing'
+        with self.assertRaises(ValueError):
+            rig.run(manual_park=True)
+        self.assertFalse(rig.seeks or rig.moves)
 
     def test_auto_remove_forces_bottom_and_runs_five_cycles(self):
         rig = Rig()
