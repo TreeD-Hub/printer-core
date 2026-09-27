@@ -16,10 +16,9 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 `rapid_scan`. Сохранённые mesh-профили для обычной печати не загружаются.
 
 Калибровка input shaper выполняется отдельно командой `TREED_SHAPER_CALIBRATE`.
-Параметры `SHAPER` и `SHAPER_ACCEL` в `START_PRINT` отклоняются. Параметры `MESH=load`, `MESH=calibrate`,
-`MESH_METHOD=scan|automatic|manual`, `MESH_PROFILE` и `MESH_MIN`/`MESH_MAX`
-для `START_PRINT` не поддерживаются. Legacy-параметры `MESH=adaptive` и
-`MESH_METHOD=rapid_scan` допустимы, но обычно не нужны.
+Параметры `SHAPER`, `SHAPER_ACCEL`, `MESH`, `MESH_METHOD`, `MESH_PROFILE`,
+`MESH_MIN` и `MESH_MAX` в `START_PRINT` отклоняются. Mesh всегда строится
+штатным способом `adaptive rapid_scan`.
 
 ## Требования к G-code и Moonraker
 

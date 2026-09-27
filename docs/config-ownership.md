@@ -96,7 +96,6 @@ Optional:
 - `TREED_KLIPPER_PREFLIGHT_WAIT_SEC` (default `12`)
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`)
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`)
-- `TREED_EDDY_ENABLED` (legacy `0|1`, default `1`; Eddy required для активного Klipper-профиля, значение `0` не поддерживается)
 - `TREED_EDDY_CANBUS_UUID` (default `95485b93332a`)
 
 Активный профиль `treed_v2_corexy_v1` использует Eddy как обязательный штатный Z-контур:
@@ -108,7 +107,7 @@ Optional:
 
 Fail-fast сценарии:
 - пустой `TREED_MAIN_MCU_CANBUS_UUID` -> fail;
-- `TREED_EDDY_ENABLED=1` и пустой `TREED_EDDY_CANBUS_UUID` -> fail; значение `0` несовместимо с активным профилем.
+- пустой `TREED_EDDY_CANBUS_UUID` -> fail; Eddy обязателен для активного профиля.
 
 ## 5. Что не используется в `treed-v2`
 

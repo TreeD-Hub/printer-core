@@ -3,6 +3,11 @@
 `loader/steps/runtime-bootstrap.sh` копирует эти модули в `klippy/extras`
 закреплённого Klipper. Здесь хранятся расширения для профиля `treed_v2_corexy_v1`.
 
+`treed_filament_motion_sensor.py` расширяет штатный encoder sensor: публикует
+`pulse_count` и совместимое имя объекта `filament_motion_sensor filament_motion`.
+Один счётный импульс — фронт `0→1`; настройка `detection_length` остаётся
+штатным порогом отсутствия движения, а не счётчиком пройденных миллиметров.
+
 `treed_motor_guard.py` запускает G28 X/Y, калибровку шейпера и XY-тест с
 временными лимитами и возвращает их при ошибке без движения.
 

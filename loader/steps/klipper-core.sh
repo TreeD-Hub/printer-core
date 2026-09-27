@@ -163,10 +163,19 @@ fi
 if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
   if [ -f "${TMP_KEEP}/local_overrides.cfg" ]; then
     cp -a "${TMP_KEEP}/local_overrides.cfg" "${CONFIG_DIR}/" || true
+    # Убираем устаревшие переключатели, сохраняя локальное значение Z-hop.
+    sed -i \
+      -e '/^\[include profiles\/treed_v2_corexy_v1\/eddy_force_move_calibration\.cfg\]$/d' \
+      -e '/^[[:space:]]*SET_GCODE_VARIABLE MACRO=_TREED_PAUSE_PARK_CFG VARIABLE=park_y_raw_fallback /d' \
+      -e '/^[[:space:]]*SET_GCODE_VARIABLE MACRO=_TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE VARIABLE=enabled /d' \
+      -e 's/^\([[:space:]]*SET_GCODE_VARIABLE MACRO=\)_TREED_Z_HOP_BEFORE_XY\( VARIABLE=z_hop \)/\1_TREED_EDDY_Z0_CFG\2/' \
+      "${CONFIG_DIR}/local_overrides.cfg"
   fi
 
   if [ -f "${TMP_KEEP}/filament_motion_runtime.cfg" ]; then
     cp -a "${TMP_KEEP}/filament_motion_runtime.cfg" "${CONFIG_DIR}/" || true
+    # Сохраняем локальную чувствительность и переводим старый section на счётчик импульсов.
+    sed -i 's/^\[filament_motion_sensor filament_motion\]$/[treed_filament_motion_sensor filament_motion]/' "${CONFIG_DIR}/filament_motion_runtime.cfg"
     log_info "klipper-core: restored filament_motion_runtime.cfg"
   fi
 

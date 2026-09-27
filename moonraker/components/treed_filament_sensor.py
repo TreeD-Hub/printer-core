@@ -106,7 +106,7 @@ def _render_runtime_config(sensitivity: str) -> str:
         "description: \"Filament sensor: configured encoder sensitivity\"\n"
         f"variable_sensitivity: \"{sensitivity}\"\n"
         "gcode:\n\n"
-        "[filament_motion_sensor filament_motion]\n"
+        "[treed_filament_motion_sensor filament_motion]\n"
         "switch_pin: PG12\n"
         f"detection_length: {detection_length:.1f}\n"
         "extruder: extruder\n"

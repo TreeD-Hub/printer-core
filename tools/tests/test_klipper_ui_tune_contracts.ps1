@@ -124,8 +124,9 @@ Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") '(?s)_TREED_EDDY_CA
 Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") '_TREED_UI_RESET_Z_OFFSET' "CANCEL_PRINT must discard live babystep"
 Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") 'VARIABLE=has_pending VALUE=0' "END_PRINT must clear stale autosave state"
 Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") 'VARIABLE=has_pending VALUE=0' "CANCEL_PRINT must clear pending Eddy autosave"
-Assert-Contains $eddyAutosaveState '(?m)^variable_enabled:\s*1\s*$' "Eddy autosave must be enabled by default"
-Assert-Contains $eddyAutosaveApply '(?s)if enabled == 0.*VARIABLE=has_pending VALUE=0' "disabled Eddy autosave must discard pending offset"
+if ($eddyAutosaveState -match '(?m)^variable_enabled:') { throw 'FAIL: Eddy autosave must not have an enable flag' }
+if ($eddyAutosaveApply -match 'enabled == 0') { throw 'FAIL: Eddy autosave must not have a disabled branch' }
+Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") '(?m)^\s*_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET\s*$' "END_PRINT always captures live Z offset"
 Assert-Contains $eddyAutosaveApply '(?m)^\s*Z_OFFSET_APPLY_PROBE\s*$' "Eddy autosave must apply captured babystep to the probe calibration"
 Assert-Contains $eddyAutosaveApply '(?m)^\s*SAVE_CONFIG\s*$' "Eddy autosave must persist the adjusted probe calibration"
 

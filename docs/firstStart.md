@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 - Octopus Pro: `d372e54bf965`;
 - EBB42: `efaf957ab20f`;
 - Eddy: `95485b93332a`;
-- Eddy обязателен для активного Klipper-профиля (`TREED_EDDY_ENABLED` должен оставаться `1`).
+- Eddy обязателен для активного Klipper-профиля.
 
 ## 4. Что проверить после запуска
 

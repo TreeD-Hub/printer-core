@@ -69,5 +69,4 @@ TREED_Z_PARK_ZERO_EDDY
 `TREED_DEPLOY_MODE=preserve` или `auto`. Режим `clean` может удалить Klipper
 autosave-сегмент, в котором хранится калибровка.
 
-`eddy_force_move_calibration.cfg` для этой процедуры не нужен: `[force_move]`
-уже включён в профильном `probe_eddy_duo.cfg`.
+`[force_move]` включён в профильный `probe_eddy_duo.cfg`.

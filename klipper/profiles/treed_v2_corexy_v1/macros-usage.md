@@ -44,8 +44,6 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220
 | --- | --- | --- |
 | `BED_TEMP` | нет | Целевая температура стола. Обязательна, должна быть `> 0`. |
 | `EXTRUDER_TEMP` | нет | Целевая температура сопла. Обязательна, должна быть выше `min_extrude_temp`. |
-| `MESH` | `adaptive` | Необязательное legacy-значение `adaptive`; остальные режимы отклоняются. |
-| `MESH_METHOD` | `rapid_scan` | Необязательное legacy-значение `rapid_scan`; остальные методы отклоняются. |
 | `ADAPTIVE_MARGIN` | `5` | Отступ adaptive mesh от объектов. |
 | `HOTEND_READY_MARGIN` | `3` | Сколько градусов можно не дождаться до цели сопла перед purge. |
 
@@ -58,7 +56,7 @@ START_PRINT BED_TEMP=60 EXTRUDER_TEMP=220
 6. Включает print-offset рабочей зоны и паркуется на Z=10 мм в передней полосе.
 7. Догревает сопло, выполняет фиксированный `_TREED_LINE_PURGE` и запускает runtime-сессию камеры.
 
-Object labels в G-code и `enable_object_processing` в Moonraker обязательны для adaptive mesh: без polygon-метаданных `START_PRINT` завершится до очистки mesh и прогрева. `MESH=load|none|calibrate`, `MESH_METHOD=scan|automatic|manual`, `MESH_PROFILE`, `MESH_MIN`/`MESH_MAX`, `SHAPER` и `SHAPER_ACCEL` отклоняются. Для сервисного сканирования используйте `TREED_BED_MESH_CALIBRATE_EDDY`. Высота ожидания сопла `park_height` задаётся отдельно от рабочего Z0.
+Object labels в G-code и `enable_object_processing` в Moonraker обязательны для adaptive mesh: без polygon-метаданных `START_PRINT` завершится до очистки mesh и прогрева. Параметры `MESH`, `MESH_METHOD`, `MESH_PROFILE`, `MESH_MIN`/`MESH_MAX`, `SHAPER` и `SHAPER_ACCEL` отклоняются. Для сервисного сканирования используйте `TREED_BED_MESH_CALIBRATE_EDDY`. Высота ожидания сопла `park_height` задаётся отдельно от рабочего Z0.
 
 ### `END_PRINT`
 
@@ -66,12 +64,6 @@ Object labels в G-code и `enable_object_processing` в Moonraker обязат�
 
 ```gcode
 END_PRINT
-```
-
-Опционально можно отключить сохранение live Z-offset для конкретного завершения:
-
-```gcode
-END_PRINT SAVE_Z_OFFSET=0
 ```
 
 Что делает:
@@ -185,7 +177,7 @@ CLEAR_PAUSE
 
 ## 5. Филамент
 
-Когда выбран режим `motion`, encoder сообщает об отсутствии движения, а switch всё ещё видит филамент, обычной паузе предшествует автоматическая прочистка: до пяти подач по `25` мм при `5` мм/с с повышением цели хотэнда и тока экструдера максимум на 20% в безопасных пределах. Первый подтверждённый импульс encoder завершает цикл и возобновляет печать. После пяти неудач исходный ток восстанавливается, хотэнд переводится на `140` °C, печать остаётся на паузе. `RESUME`, `CLEAR_PAUSE` и `CANCEL_PRINT` также прерывают цикл с восстановлением тока.
+Когда выбран режим `motion`, encoder сообщает об отсутствии движения, а switch всё ещё видит филамент, обычной паузе предшествует автоматическая прочистка: до пяти подач по `25` мм при `5` мм/с с повышением цели хотэнда и тока экструдера максимум на 20% в безопасных пределах. Перед каждой попыткой запоминается счётчик энкодера; печать возобновляется только при оценочном продвижении не менее `10` мм за эту попытку (`2,88` мм на счётный импульс). После пяти неудач исходный ток восстанавливается, хотэнд переводится на `140` °C, печать остаётся на паузе. `RESUME`, `CLEAR_PAUSE` и `CANCEL_PRINT` также прерывают цикл с восстановлением тока. Номинал энкодера и порог следует проверить на устройстве.
 
 ### `LOAD_FILAMENT`
 
@@ -303,21 +295,13 @@ TREED_SCREWS_TILT_CALIBRATE
 
 ### Eddy Z-offset autosave
 
-Команды управления:
+Диагностическая команда:
 
 ```gcode
-TREED_EDDY_Z_OFFSET_AUTOSAVE_ENABLE
-TREED_EDDY_Z_OFFSET_AUTOSAVE_DISABLE
 TREED_EDDY_Z_OFFSET_AUTOSAVE_STATUS
 ```
 
-Autosave включен по умолчанию. `END_PRINT` применяет накопленный live Z-offset к Eddy probe через `Z_OFFSET_APPLY_PROBE` и сохраняет калибровку командой `SAVE_CONFIG`, поэтому поправка используется при следующей печати.
-
-Использовать осторожно: это меняет сохраненную калибровку Eddy. Для одноразового завершения без сохранения offset использовать:
-
-```gcode
-END_PRINT SAVE_Z_OFFSET=0
-```
+Autosave работает штатно. `END_PRINT` применяет накопленный live Z-offset к Eddy probe через `Z_OFFSET_APPLY_PROBE` и сохраняет калибровку командой `SAVE_CONFIG`, поэтому поправка используется при следующей печати. Это меняет сохранённую калибровку Eddy.
 
 ## 8. Input shaper
 

@@ -81,7 +81,6 @@
 - `TREED_KLIPPER_PREFLIGHT_INTERVAL_SEC` (default `1`; интервал повторной проверки)
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` (`0|1`, default `0`; при `1` strict UUID-gate через `canbus_query.py`, при `0` query не запускается)
 - `TREED_EBB_CANBUS_UUID` (должен совпадать с активным profile cfg `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB)
-- `TREED_EDDY_ENABLED` (legacy-переменная; для активного Klipper-профиля поддерживается только `1`)
 - `TREED_EDDY_CANBUS_UUID` (должен совпадать с активным profile cfg `95485b93332a`)
 
 ### Firmware build

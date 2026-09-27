@@ -42,7 +42,6 @@ KLIPPY_ENV_DIR="${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}"
 TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-efaf957ab20f}"
-TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
 TREED_KLIPPER_PREFLIGHT="${TREED_KLIPPER_PREFLIGHT:-1}"
 TREED_KLIPPER_PREFLIGHT_WAIT_SEC="${TREED_KLIPPER_PREFLIGHT_WAIT_SEC:-12}"
@@ -64,18 +63,6 @@ CROWSNEST_INSTALL="${TREED_CROWSNEST_INSTALL:-1}"
 CROWSNEST_RECREATE="${TREED_CROWSNEST_RECREATE:-0}"
 CROWSNEST_UPDATE="${TREED_CROWSNEST_UPDATE:-1}"
 TREED_CAMERA_REQUIRED="${TREED_CAMERA_REQUIRED:-0}"
-
-case "${TREED_EDDY_ENABLED}" in
-  1) ;;
-  0)
-    log_error "runtime-bootstrap: TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use a separate Klipper profile before disabling Eddy"
-    exit 1
-    ;;
-  *)
-    log_error "runtime-bootstrap: TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
-    exit 1
-    ;;
-esac
 
 case "${TREED_CAMERA_REQUIRED}" in
   0|1) ;;
@@ -220,7 +207,6 @@ TREED_ALLOW_HARDWARE_NOT_READY=${TREED_ALLOW_HARDWARE_NOT_READY:-0}
 TREED_MAIN_MCU_CANBUS_UUID=${TREED_MAIN_MCU_CANBUS_UUID}
 TREED_CAN_IFACE=${TREED_CAN_IFACE}
 TREED_EBB_CANBUS_UUID=${TREED_EBB_CANBUS_UUID}
-TREED_EDDY_ENABLED=${TREED_EDDY_ENABLED}
 TREED_EDDY_CANBUS_UUID=${TREED_EDDY_CANBUS_UUID}
 KLIPPER_DIR=${KLIPPER_DIR}
 KLIPPY_ENV_DIR=${KLIPPY_ENV_DIR}
@@ -255,7 +241,6 @@ TREED_ALLOW_HARDWARE_NOT_READY="${TREED_ALLOW_HARDWARE_NOT_READY:-0}"
 TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-}"
-TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-}"
 KLIPPER_DIR="${KLIPPER_DIR:-/home/pi/klipper}"
 KLIPPY_ENV_DIR="${KLIPPY_ENV_DIR:-/home/pi/klippy-env}"
@@ -317,18 +302,6 @@ esac
 if [ "${TREED_ALLOW_HARDWARE_NOT_READY}" = "1" ]; then
   TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0
 fi
-case "${TREED_EDDY_ENABLED}" in
-  1) ;;
-  0)
-    log_error "TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use a separate Klipper profile before disabling Eddy"
-    exit 1
-    ;;
-  *)
-    log_error "TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
-    exit 1
-    ;;
-esac
-
 deadline=$((SECONDS + TREED_KLIPPER_PREFLIGHT_WAIT_SEC))
 
 IP_BIN="$(command -v ip || true)"
@@ -621,8 +594,8 @@ motor_guard="${REPO_DIR}/klipper-host/treed_motor_guard.py"
 [ -f "${motor_guard}" ] || { log_error "runtime-bootstrap: missing motor guard"; exit 1; }
 install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${motor_guard}" "${KLIPPER_DIR}/klippy/extras/treed_motor_guard.py"
 
-# SGT и нижняя опора Z: доставка обязательна; аппаратный допуск задаётся в cfg.
-for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py; do
+# SGT, нижняя опора Z и счётчик филамента: доставка обязательна; аппаратный допуск задаётся в cfg.
+for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py klipper-host/treed_filament_motion_sensor.py; do
   [ -f "${REPO_DIR}/${sgt_source}" ] || { log_error "runtime-bootstrap: missing ${sgt_source}"; exit 1; }
   install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${REPO_DIR}/${sgt_source}" \
     "${KLIPPER_DIR}/klippy/extras/${sgt_source##*/}"

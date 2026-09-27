@@ -44,20 +44,6 @@ TREED_FIRMWARE_ARTIFACTS_DIR="${TREED_FIRMWARE_ARTIFACTS_DIR:-${PI_HOME}/treed/f
 TREED_FW_MAIN_CONFIG="${TREED_FW_MAIN_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/main_octopus_pro_f446_can.config}"
 TREED_FW_EBB_CONFIG="${TREED_FW_EBB_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/ebb42_can_stm32g0b1.config}"
 TREED_FW_EDDY_CONFIG="${TREED_FW_EDDY_CONFIG:-${REPO_DIR}/firmware/configs/treed_v2/eddy_can_rp2040.config}"
-TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
-
-case "${TREED_EDDY_ENABLED}" in
-  1) ;;
-  0)
-    log_error "firmware-build: TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use TREED_FIRMWARE_BUILD_ENABLED=0 to skip all firmware builds"
-    exit 1
-    ;;
-  *)
-    log_error "firmware-build: TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
-    exit 1
-    ;;
-esac
-
 for abs_path_var in TREED_KLIPPER_SRC_DIR TREED_FIRMWARE_ARTIFACTS_DIR TREED_FW_MAIN_CONFIG TREED_FW_EBB_CONFIG TREED_FW_EDDY_CONFIG; do
   abs_path_val="$(eval "printf '%s' \"\${${abs_path_var}}\"")"
   case "${abs_path_val}" in
@@ -155,7 +141,6 @@ firmware_inputs_current() {
   grep -Fx "klipper_head=${KLIPPER_HEAD}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "main_config_sha256=${FW_MAIN_SHA}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "ebb_config_sha256=${FW_EBB_SHA}" "${inputs_file}" >/dev/null || return 1
-  grep -Fx "eddy_enabled=${TREED_EDDY_ENABLED}" "${inputs_file}" >/dev/null || return 1
   grep -Fx "eddy_config_sha256=${FW_EDDY_SHA}" "${inputs_file}" >/dev/null || return 1
   head -n 1 "${manifest_file}" \
     | grep -Fx $'target\tartifact\tartifact_sha256\tklipper_commit\tconfig\tconfig_sha256\tdictionary\tdictionary_sha256' >/dev/null \
@@ -210,7 +195,6 @@ run_id=${RUN_ID}
 klipper_src=${TREED_KLIPPER_SRC_DIR}
 klipper_head=${KLIPPER_HEAD}
 build_jobs=${BUILD_JOBS}
-eddy_enabled=${TREED_EDDY_ENABLED}
 EOF
 
 cat > "${INPUTS_FILE}" <<EOF
@@ -219,7 +203,6 @@ main_config=${TREED_FW_MAIN_CONFIG}
 main_config_sha256=${FW_MAIN_SHA}
 ebb_config=${TREED_FW_EBB_CONFIG}
 ebb_config_sha256=${FW_EBB_SHA}
-eddy_enabled=${TREED_EDDY_ENABLED}
 eddy_config=${TREED_FW_EDDY_CONFIG}
 eddy_config_sha256=${FW_EDDY_SHA}
 EOF

@@ -93,12 +93,13 @@ function Get-ConfigNumber {
   return [double]::Parse($match.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
 }
 
-# Блок 2: Загрузка Eddy-профиля и профильного compatibility include.
+# Блок 2: Загрузка Eddy-профиля.
 $RemovedZ0Adjust = "z0" + "_adjust"
 $probeEddy = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg"
 $geometry = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/geometry.cfg"
 $steppers = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/steppers.cfg"
-$forceMoveCompat = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/eddy_force_move_calibration.cfg"
+$macrosCore = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_core.cfg"
+$macrosPause = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg"
 $macrosFlow = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/macros_print_flow.cfg"
 $profileReadme = Read-RepoFile "klipper/profiles/treed_v2_corexy_v1/README.md"
 
@@ -114,6 +115,8 @@ $startAdaptiveMesh = Get-GcodeMacroBlock $macrosFlow "_TREED_START_ADAPTIVE_MESH
 $startPrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_PREP_STATE"
 $startMachinePrep = Get-GcodeMacroBlock $macrosFlow "_TREED_START_MACHINE_PREP"
 $startPrint = Get-GcodeMacroBlock $macrosFlow "START_PRINT"
+$pausePrep = Get-GcodeMacroBlock $macrosPause "_TREED_PAUSE_PREP_STATE"
+$zHop = Get-GcodeMacroBlock $macrosCore "_TREED_Z_HOP_BEFORE_XY"
 
 # Блок 3: Проверка штатного Eddy Z-home без постоянного z0_adjust.
 Assert-Contains $probeEddy '(?ms)^\[force_move\]\s+enable_force_move:\s*True' "Eddy runtime profile must enable SET_KINEMATIC_POSITION"
@@ -121,7 +124,11 @@ Assert-Contains $probeEddy '(?ms)^\[temperature_probe btt_eddy\]\s+sensor_type:\
 Assert-NotContains $probeEddy '(?m)^\[temperature_sensor _btt_eddy_mcu\]\s*$' "Eddy MCU diagnostic temperature must not be exposed as a UI temperature sensor"
 Assert-Contains $profileReadme 'docs/eddy-calibration\.md' "Eddy README must link to the calibration procedure"
 Assert-Contains (Read-RepoFile 'docs/eddy-calibration.md') 'TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4' "Eddy procedure must document temperature drift calibration"
-Assert-NotContains $forceMoveCompat '(?m)^\[force_move\]' "legacy Eddy calibration include must not duplicate runtime force_move section"
+if (Test-Path (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/eddy_force_move_calibration.cfg")) { throw 'FAIL: legacy Eddy include must be removed' }
+Assert-NotContains $macrosCore 'variable_park_y_raw_fallback' "PAUSE has no alternate park coordinate"
+Assert-Contains $pausePrep 'PAUSE: координаты парковки вне пределов осей' "PAUSE rejects invalid park coordinates"
+Assert-Contains $zHop 'printer\["gcode_macro _TREED_EDDY_Z0_CFG"\]\.z_hop' "XY hop uses the Eddy baseline"
+Assert-NotContains $zHop 'fallback_z_hop' "XY hop has no alternate height"
 Assert-Contains $probeEddy '(?m)^\s*y_offset:\s*-30\.0\s*$' "Eddy Y offset must place the sensing point 30mm closer to Y0 than the nozzle at Y245"
 
 Assert-NotContains $probeEddy $RemovedZ0Adjust "Eddy profile must not use fixed base Z adjustment"
@@ -146,8 +153,7 @@ Assert-Contains $reloadZOffset '(?m)^\s*SET_KINEMATIC_POSITION Z=\{z - printer\.
 
 # Блок 4: START_PRINT очищает старую mesh до изменений состояния и строит новую после сервисных движений.
 Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_PREP_STATE \{rawparams\}\s*$' '(?m)^\s*_TREED_START_MACHINE_PREP\s*$' "START_PRINT должен проверить параметры до нагрева"
-Assert-Contains $startPrep 'params\.MESH is defined and params\.MESH\|lower != "adaptive"' "START_PRINT должен отклонить старые mesh-режимы"
-Assert-Contains $startPrep 'params\.MESH_METHOD is defined and params\.MESH_METHOD\|lower != "rapid_scan"' "START_PRINT должен разрешать только rapid_scan"
+Assert-Contains $startPrep 'params\.MESH is defined or params\.MESH_METHOD is defined' "START_PRINT использует только штатный adaptive rapid_scan"
 Assert-Contains $startPrep 'params\.MESH_PROFILE is defined or params\.MESH_MIN is defined or params\.MESH_MAX is defined' "Сервисные mesh-параметры запрещены в START_PRINT"
 Assert-ContainsBefore $startPrep 'objects\|length == 0' '(?m)^\s*BED_MESH_CLEAR\s*$' "Object metadata нужно проверить до очистки mesh"
 Assert-ContainsBefore $startPrep '(?m)^\s*BED_MESH_CLEAR\s*$' '(?m)^\s*SET_GCODE_VARIABLE MACRO=_TREED_START_STATE\b' "Очистка mesh должна предшествовать изменению state"

@@ -45,7 +45,6 @@ fi
 # Блок 6: Контракт V2 для main MCU / CAN / Eddy.
 TREED_MAIN_MCU_CANBUS_UUID="${TREED_MAIN_MCU_CANBUS_UUID:-d372e54bf965}"
 TREED_EBB_CANBUS_UUID="${TREED_EBB_CANBUS_UUID:-efaf957ab20f}"
-TREED_EDDY_ENABLED="${TREED_EDDY_ENABLED:-1}"
 TREED_EDDY_CANBUS_UUID="${TREED_EDDY_CANBUS_UUID:-95485b93332a}"
 TREED_CAN_IFACE="${TREED_CAN_IFACE:-can0}"
 TREED_CAN_BITRATE="${TREED_CAN_BITRATE:-1000000}"
@@ -162,18 +161,6 @@ case "${TREED_EBB_CANBUS_UUID}" in
     ;;
 esac
 profile_locked_value_check "TREED_EBB_CANBUS_UUID" "${TREED_EBB_CANBUS_UUID}" "${TREED_EBB_PROFILE_UUID}" "klipper/profiles/treed_v2_corexy_v1/ebb42_can.cfg"
-
-case "${TREED_EDDY_ENABLED}" in
-  1) ;;
-  0)
-    log_error "check-env: TREED_EDDY_ENABLED=0 is unsupported by treed_v2_corexy_v1; use a separate Klipper profile before disabling Eddy"
-    exit 1
-    ;;
-  *)
-    log_error "check-env: TREED_EDDY_ENABLED must be 0 or 1, got: ${TREED_EDDY_ENABLED}"
-    exit 1
-    ;;
-esac
 
 if [ -z "${TREED_EDDY_CANBUS_UUID}" ]; then
   log_error "check-env: TREED_EDDY_CANBUS_UUID is required for treed_v2_corexy_v1"
