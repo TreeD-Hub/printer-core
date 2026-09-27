@@ -47,11 +47,23 @@ $printFlow = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipp
 $pause = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg") -Raw
 $utils = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_utils.cfg") -Raw
 $startPurge = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "klipper/profiles/treed_v2_corexy_v1/macros_start_purge.cfg") -Raw
+$protocol = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $RepoRoot "contracts/printer-protocol.json") -Raw | ConvertFrom-Json
 
 Assert-Contains $macros '(?m)^\[include macros_ui_contract\.cfg\]\s*$' "macros.cfg must include UI device contract"
 Assert-Contains $contract '(?m)^\[gcode_macro _TREED_UI_CONTRACT\]\s*$' "UI device contract macro must exist"
-Assert-Contains $contract '(?m)^variable_contract_version:\s*"1\.0"\s*$' "contract version must be 1.0"
-Assert-Contains $contract '(?m)^variable_profile:\s*"treed_v2_corexy_v1"\s*$' "contract profile must match active profile"
+# Fixture должен точно повторять опубликованные поля активного профиля.
+Assert-Contains $contract "(?m)^variable_contract_version:\s*`"$([regex]::Escape($protocol.contractVersion))`"\s*$" "protocol version must match active profile"
+Assert-Contains $contract "(?m)^variable_profile:\s*`"$([regex]::Escape($protocol.profile))`"\s*$" "protocol profile must match active profile"
+$publishedCapabilities = @([regex]::Matches($contract, '(?m)^variable_capability_([a-z_]+):\s*([01])\s*$') | ForEach-Object { $_.Groups[1].Value })
+$fixtureCapabilities = @($protocol.capabilities.PSObject.Properties.Name)
+if ((Compare-Object $publishedCapabilities $fixtureCapabilities) -or $fixtureCapabilities.Count -eq 0) {
+  throw "FAIL: protocol capability IDs must match active profile"
+}
+foreach ($name in $fixtureCapabilities) {
+  $value = [int]$protocol.capabilities.$name
+  Assert-Contains $contract "(?m)^variable_capability_${name}:\s*$value\s*$" "protocol capability $name must match active profile"
+}
+Assert-Contains $contract "(?m)^variable_required_macros:\s*`"$([regex]::Escape($protocol.requiredMacros))`"\s*$" "protocol required macros must match active profile"
 
 # Блок 3: Аппаратные лимиты и capability активного профиля.
 Assert-Contains $contract '(?m)^variable_nozzle_max_c:\s*280\.0\s*$' "contract must publish nozzle max temperature"
@@ -60,10 +72,6 @@ foreach ($axis in @("x", "y", "z")) {
   Assert-Contains $contract "(?m)^variable_axis_${axis}_min:" "contract must publish $axis minimum"
   Assert-Contains $contract "(?m)^variable_axis_${axis}_max:" "contract must publish $axis maximum"
 }
-foreach ($capability in @("print", "motion", "thermal", "fan", "filament", "console", "eddy", "shaper", "motion_test", "network", "camera", "system_power", "service_commands")) {
-  Assert-Contains $contract "(?m)^variable_capability_${capability}:\s*[01]\s*$" "contract must publish $capability capability"
-}
-
 # Блок 4: Обязательные safety macro для live UI.
 foreach ($macro in @(
   "_TREED_EDDY_HOME_Z",
