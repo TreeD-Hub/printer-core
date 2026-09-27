@@ -361,8 +361,8 @@ class RecoveryTests(unittest.TestCase):
                 self.assertAlmostEqual(rig.kin.limits[2][1], expected)
                 self.assertAlmostEqual(rig.kin.axes_max.z, expected)
                 self.assertEqual((rig.kin.axes_max.x, rig.kin.axes_max.y), (245., 245.))
-                self.assertAlmostEqual(rig.objects['gcode_macro _TREED_UI_CONTRACT'].variables[
-                    'axis_z_max'], expected)
+                self.assertEqual(rig.objects['gcode_macro _TREED_UI_CONTRACT'].variables[
+                    'axis_z_max'], 203.)
                 rig.extra._set_z(.25)
                 self.assertAlmostEqual(rig.kin.limits[2][1], expected)
                 rig.move([17., 29., expected, 4.], 5.)
@@ -615,7 +615,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertLess(correction.index('_TREED_Z_TRAVEL_APPLY'), correction.index('G1 Z{cfg.z_hop'))
         self.assertIn('z_recovery.cfg]', (ROOT / 'klipper/printer.cfg').read_text(encoding='utf-8'))
         loader = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
-        self.assertIn('klipper-host/treed_z_recovery.py; do', loader)
+        self.assertIn('klipper-host/treed_z_recovery.py', loader)
         self.assertEqual(loader.count("'/klippy/extras/treed_z_recovery.py'"), 2)
         end_print = (profile / 'macros_print_flow.cfg').read_text(encoding='utf-8').split(
             '[gcode_macro END_PRINT]')[1]

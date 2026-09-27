@@ -10,13 +10,14 @@ $ErrorActionPreference = "Stop"
 # - runnable локально без доступа к принтеру и внешним сервисам.
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$bash = "C:\Program Files\Git\bin\bash.exe"
+$gitCommand = Get-Command git -ErrorAction Stop
+$bash = if ($IsWindows) { Join-Path (Split-Path (Split-Path $gitCommand.Source -Parent) -Parent) "bin/bash.exe" } else { (Get-Command bash -ErrorAction Stop).Source }
 if (-not (Test-Path -LiteralPath $bash)) {
   throw "Git Bash is required: $bash"
 }
 
 function Read-RepoFile([string]$Path) {
-  return Get-Content -LiteralPath (Join-Path $repoRoot $Path) -Raw -Encoding UTF8
+  return (Get-Content -LiteralPath (Join-Path $repoRoot $Path) -Raw -Encoding UTF8).Replace("`r`n", "`n")
 }
 
 function Assert-Match([string]$Path, [string]$Pattern, [string]$Message) {
@@ -34,7 +35,8 @@ function Get-Sha256([string]$Path) {
   }
 }
 
-$bashTest = (Join-Path $repoRoot "tools\tests\test_runtime_repo_sync.sh").Replace("\", "/").Replace("C:", "/c")
+$bashTest = (Join-Path $repoRoot "tools\tests\test_runtime_repo_sync.sh").Replace("\", "/")
+if ($IsWindows) { $bashTest = "/$($bashTest[0].ToString().ToLowerInvariant())$($bashTest.Substring(2))" }
 & $bash $bashTest
 if ($LASTEXITCODE -ne 0) {
   throw "runtime repository sync test failed"

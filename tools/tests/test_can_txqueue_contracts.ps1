@@ -5,7 +5,8 @@ $ErrorActionPreference = "Stop"
 # ==========================================
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$bash = "C:\Program Files\Git\bin\bash.exe"
+$gitCommand = Get-Command git -ErrorAction Stop
+$bash = if ($IsWindows) { Join-Path (Split-Path (Split-Path $gitCommand.Source -Parent) -Parent) "bin/bash.exe" } else { (Get-Command bash -ErrorAction Stop).Source }
 if (-not (Test-Path -LiteralPath $bash)) {
   throw "Git Bash is required: $bash"
 }
@@ -43,7 +44,8 @@ if ((Read-RepoFile "loader\steps\can-setup.sh") -notmatch 'TREED_CAN_RESTART_MS=
   throw "FAIL: CAN restart-ms default changed"
 }
 
-$runtimeTest = (Join-Path $repoRoot "tools\tests\test_can_txqueue_runtime.sh").Replace("\", "/").Replace("C:", "/c")
+$runtimeTest = (Join-Path $repoRoot "tools\tests\test_can_txqueue_runtime.sh").Replace("\", "/")
+if ($IsWindows) { $runtimeTest = "/$($runtimeTest[0].ToString().ToLowerInvariant())$($runtimeTest.Substring(2))" }
 & $bash $runtimeTest
 if ($LASTEXITCODE -ne 0) {
   throw "CAN txqueue runtime test failed"
