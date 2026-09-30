@@ -4,6 +4,8 @@
 
 ## Состав
 
+- `test_treed_detection.py` — порог трёх обнаружений, сброс серии, повторы, порядок кадров, смена сессии, параллельные ответы и отказ отмены на реальном Moonraker-компоненте с mock API; также статическая проверка регистрации/защиты макроса. Запуск `python -B tools/tests/test_treed_detection.py`; серверный транспорт и аппаратное выполнение не проверяет.
+
 - `test_z_recovery.py` — одна проба DIAG, измеренный ход до Eddy Z0, ограничение Z, сброс при отказах, восстановление TMC и интеграция cfg; запуск `python -B tools/tests/test_z_recovery.py`. Это офлайн-модель, не аппаратный допуск. С `Z_RECOVERY_KLIPPER_SOURCE` дополнительно проверяет HomingMove, CoreXY и Coord закреплённого Klipper (`extras_homing.py`, `kinematics_corexy.py`, `gcode.py`).
 - `test_clog_recovery.py` — один импульс энкодера за каждую из пяти попыток не подтверждает подачу; проверяет счётчик и порог без устройства. Запуск `python -B tools/tests/test_clog_recovery.py`.
 
