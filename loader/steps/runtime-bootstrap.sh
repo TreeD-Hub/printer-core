@@ -117,6 +117,8 @@ ensure_repo_present() {
       '/klippy/extras/treed_sgt_calibration.py' \
       '/klippy/extras/treed_sgt_executor.py' \
       '/klippy/extras/treed_z_recovery.py' \
+      '/klippy/extras/treed_filament_motion_sensor.py' \
+      '/klippy/extras/__pycache__/treed_filament_motion_sensor.*.pyc' \
       '/klippy/extras/__pycache__/treed_z_recovery.*.pyc' \
       '/klippy/extras/__pycache__/treed_sgt_*.pyc' \
       '/klippy/extras/treed_motor_calibration.py.pre-canonical' \
@@ -137,6 +139,8 @@ ensure_repo_present() {
       '/klippy/extras/treed_sgt_calibration.py' \
       '/klippy/extras/treed_sgt_executor.py' \
       '/klippy/extras/treed_z_recovery.py' \
+      '/klippy/extras/treed_filament_motion_sensor.py' \
+      '/klippy/extras/__pycache__/treed_filament_motion_sensor.*.pyc' \
       '/klippy/extras/__pycache__/treed_z_recovery.*.pyc' \
       '/klippy/extras/__pycache__/treed_sgt_*.pyc' \
       '/klippy/extras/treed_motor_calibration.py.pre-canonical' \
