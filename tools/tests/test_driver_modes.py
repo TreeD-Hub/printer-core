@@ -1,5 +1,6 @@
 """Офлайн-проверка переключения XYZ и обдува; read-only, без MCU."""
 import ast
+from contextlib import nullcontext
 import importlib.util
 import shlex
 from pathlib import Path
@@ -56,10 +57,12 @@ class Printer:
         self.saved = NS(allVariables={})
         self.save_fails = False
         self.commands = {}
+        self.callbacks = []
         self.controller = NS(fan_speed=1., idle_speed=.5, last_on=99,
                              get_status=lambda now: {'speed': .5})
         self.objects = {
             'gcode': NS(register_command=lambda name, fn: self.commands.update({name: fn}),
+                        get_mutex=nullcontext,
                         run_script_from_command=self.save),
             'save_variables': self.saved,
             'controller_fan driver_fan': self.controller,
@@ -89,7 +92,12 @@ class Printer:
         pass
 
     def get_reactor(self):
-        return NS(monotonic=lambda: 1.)
+        return NS(monotonic=lambda: 1., register_callback=self.callbacks.append)
+
+    def run_callbacks(self):
+        callbacks, self.callbacks = self.callbacks, []
+        for callback in callbacks:
+            callback(1.)
 
     def is_shutdown(self):
         return self.shutdown
@@ -140,6 +148,36 @@ class DriverModesTest(unittest.TestCase):
         self.driver = load('treed_driver_mode').load_config(Config(self.printer))
         self.driver.handle_connect()
         self.driver.handle_ready()
+        self.printer.run_callbacks()
+
+    def test_startup_defers_spi_and_blocks_mode_change(self):
+        driver = load('treed_driver_mode').load_config(Config(self.printer))
+        driver.handle_connect()
+        writes = []
+        for item in driver.drivers:
+            original = item.mcu_tmc.set_register
+            def record(reg, bits, original=original):
+                writes.append((reg, bits))
+                original(reg, bits)
+            item.mcu_tmc.set_register = record
+        driver.handle_ready()
+        self.assertEqual(writes, [])
+        self.assertEqual(driver.state, 'applying')
+        with self.assertRaises(ValueError):
+            driver.cmd_set(Command())
+        self.printer.run_callbacks()
+        self.assertEqual(len(writes), 6)
+        self.assertEqual(driver.mode, 'normal')
+        self.assertEqual(driver.state, 'ready')
+
+    def test_startup_failure_shuts_down_after_successful_rollback(self):
+        self.driver.drivers[0].mcu_tmc.failures = 1
+        self.driver.handle_ready()
+        with self.assertLogs(level='ERROR'):
+            self.printer.run_callbacks()
+        self.assertTrue(self.printer.shutdown)
+        self.assertTrue(self.driver.needs_restart)
+        self.assertEqual(self.driver.state, 'fault')
 
     def test_group_apply_and_restore_saved(self):
         self.driver.cmd_set(Command())
@@ -149,6 +187,7 @@ class DriverModesTest(unittest.TestCase):
             self.assertEqual(driver.fields.values['irun'], 17)
             self.assertEqual(driver.fields.values['mres'], 4)
         self.driver.handle_ready()
+        self.printer.run_callbacks()
         self.assertEqual(self.driver.mode, 'quiet')
 
     def test_partial_failure_rolls_back(self):

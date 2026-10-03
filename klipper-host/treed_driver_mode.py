@@ -27,11 +27,25 @@ class TreedDriverMode:
                         for axis in ('x', 'y', 'z')]
 
     def handle_ready(self):
+        # ready запрещает ожидание SPI; отдельный callback допускает ответ MCU.
+        self.state = 'applying'
+        self.printer.get_reactor().register_callback(self.apply_saved_mode)
+
+    def apply_saved_mode(self, eventtime):
+        if self.printer.is_shutdown():
+            return
         mode = self.saved.allVariables.get('driver_mode', 'normal')
         if mode not in ('quiet', 'normal'):
             logging.warning('Режим XYZ: неверное сохранённое значение')
             mode = 'normal'
-        self.apply(mode, persist=False)
+        try:
+            with self.gcode.get_mutex():
+                if not self.printer.is_shutdown():
+                    self.apply(mode, persist=False)
+        except Exception:
+            logging.exception('Режим XYZ: ошибка стартового применения')
+            self.state, self.needs_restart = 'fault', True
+            self.printer.invoke_shutdown('Режим XYZ: стартовое применение не подтверждено')
 
     def get_status(self, eventtime):
         effective = {}
@@ -53,7 +67,7 @@ class TreedDriverMode:
         manual = self.printer.lookup_object('manual_probe', None)
         recovery = self.printer.lookup_object('treed_z_recovery', None)
         sgt = self.printer.lookup_object('treed_sgt_executor', None)
-        if (self.needs_restart or self.printer.is_shutdown()
+        if (self.state != 'ready' or self.needs_restart or self.printer.is_shutdown()
                 or self.printer.get_state_message()[1] != 'ready'
                 or phase != 'idle' or stats in ('printing', 'paused', 'error')
                 or pause.get_status(now)['is_paused'] or pause.pause_command_sent
