@@ -57,6 +57,7 @@
 - `ARMBIAN_ENV_FILE` (для `armbian` backend)
 - `EXTLINUX_FILE` (для `extlinux` backend)
 - `TREED_LOADER_MODE` (`apply|check`, default `apply`; `check` не запускает step-скрипты и только сверяет runtime-состояние)
+- `TREED_LOADER_PROGRESS` (`auto|plain|off`, default `auto`; шкала со спиннером в TTY, текстовый прогресс при перенаправлении, `off` отключает индикатор; только `apply`)
 - `TREED_DEPLOY_MODE` (`auto|clean|preserve`, default `auto`)
 - `TREED_DEPLOY_MODE_EFFECTIVE` (`clean|preserve`)
 - `TREED_DEVICE_STATE` (`fresh|update|recover`)

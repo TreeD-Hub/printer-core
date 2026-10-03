@@ -9,6 +9,7 @@
 - `loader/lib/plymouth.sh`
 - `loader/lib/runtime-manifest.sh`
 - `loader/lib/runtime-repo.sh`
+- `loader/lib/progress.sh`
 
 ## `common.sh`
 
@@ -59,6 +60,15 @@
 ## `runtime-repo.sh`
 
 Синхронизирует управляемые Git checkout к точному commit из runtime manifest. Dirty checkout не сбрасывается; повреждённый или не-Git каталог сохраняется рядом как backup. Известные runtime-файлы можно добавить в локальный `.git/info/exclude`, не меняя upstream checkout.
+
+## `progress.sh`
+
+`progress.sh` подключается оркестратором только перед apply-циклом. Один renderer
+обрабатывает логи и маркеры шагов: анимированная шкала в TTY, текстовый вывод
+в `plain`, итоговые счётчики в обоих режимах. `loader_progress_start`,
+`loader_progress_step`, `loader_progress_step_done`, `loader_progress_stop`
+не запускают шаги. EXIT закрывает поток и дожидается renderer, сохраняя код
+loader. Настройка и ограничения — в [README loader](../README.md#вывод-прогресса-установки).
 
 ## Правила развития библиотеки
 

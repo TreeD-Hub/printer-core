@@ -614,8 +614,17 @@ if [ "${TREED_LOADER_MODE}" = "check" ]; then
 fi
 
 # Блок 20: Основной цикл выполнения шагов по реестру STEPS.
+. "${REPO_DIR}/loader/lib/progress.sh"
+loader_progress_start "${#STEPS[@]}"
+trap 'loader_progress_stop "$?"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+LOADER_STEP_INDEX=0
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"
+  LOADER_STEP_INDEX=$((LOADER_STEP_INDEX + 1))
+  loader_progress_step "${LOADER_STEP_INDEX}" "${step}"
+  step_result="ok"
   script="${REPO_DIR}/loader/steps/${step}.sh"
 
   # Валидация существования step-скрипта:
@@ -624,6 +633,7 @@ for step in "${STEPS[@]}"; do
   if [ ! -f "${script}" ]; then
     if is_optional_step "${step}"; then
       log_warn "Optional step script not found: ${script} (skipping)"
+      loader_progress_step_done skipped
       continue
     fi
     log_error "Required step script not found: ${script}"
@@ -640,11 +650,13 @@ for step in "${STEPS[@]}"; do
     else
       rc=$?
       log_warn "Optional step failed: ${step} rc=${rc} (continuing)"
+      step_result="failed"
     fi
   else
     log_info "Running step: ${step}"
     run_step_script "${script}"
   fi
+  loader_progress_step_done "${step_result}"
 done
 
 # Блок 21: Успешное завершение полного контура provisioning.

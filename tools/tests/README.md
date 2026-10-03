@@ -4,6 +4,8 @@
 
 ## Состав
 
+- `test_loader_progress.py` — настоящий apply-цикл на временных шагах: TTY-шкала/спиннер, сохранение логов, счётчики, required fail-fast/exit status, optional skip/failure и режим `off`. Запуск на Linux/WSL: `python3 -B tools/tests/test_loader_progress.py`; без установки пакетов, сервисов или подключения к устройству.
+
 - `test_light_events.py` — рендер реальных Jinja-макросов: дефолты/сохранение света, wire-событие и guard филамента при печати, паузе и прочистке. Запуск `python -B tools/tests/test_light_events.py` в окружении с Jinja2; без принтера.
 
 - `test_print_cancel.py` — отмена нагрева/охлаждения и остатка макроса, завершение текущего движения, cleanup и сброс сигнала для следующей задачи. Запуск `python -B tools/tests/test_print_cancel.py`; `PRINT_CANCEL_GCODE_SOURCE` задаёт путь к `gcode.py` закреплённого Klipper для проверки на его настоящем диспетчере. Без устройства.
