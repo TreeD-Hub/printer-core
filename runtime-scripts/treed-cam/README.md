@@ -92,6 +92,9 @@ HTTP 401/409/503 не считается готовностью. Каждый о
 - snapshot endpoint задается через `TREED_CAM_SNAPSHOT_URL` (optional),
   fallback: `http://127.0.0.1:8080/?action=snapshot`;
 - optional runtime override-файл: `${PI_HOME}/treed/cam/config/runtime.env`;
+- если `PI_HOME` не задан, домашний каталог определяется из пути установки
+  скриптов `${PI_HOME}/treed/cam/bin`, одинаково для старта сессии и snapshot;
+  имя пользователя `pi` не подставляется, явный `PI_HOME` имеет приоритет;
 - интервал warning-throttle задается `TREED_CAM_SNAPSHOT_WARN_INTERVAL_SEC` (по умолчанию `300` сек);
 - marker-файл сессии хранится в `/tmp` и сбрасывается после reboot;
 - скрипты рассчитаны на fail-safe поведение: не должны валить основной печатный контур.

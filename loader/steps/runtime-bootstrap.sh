@@ -118,6 +118,8 @@ ensure_repo_present() {
       '/klippy/extras/treed_sgt_executor.py' \
       '/klippy/extras/treed_z_recovery.py' \
       '/klippy/extras/treed_filament_motion_sensor.py' \
+      '/klippy/extras/treed_print_cancel.py' \
+      '/klippy/extras/__pycache__/treed_print_cancel.*.pyc' \
       '/klippy/extras/__pycache__/treed_filament_motion_sensor.*.pyc' \
       '/klippy/extras/__pycache__/treed_z_recovery.*.pyc' \
       '/klippy/extras/__pycache__/treed_sgt_*.pyc' \
@@ -140,6 +142,8 @@ ensure_repo_present() {
       '/klippy/extras/treed_sgt_executor.py' \
       '/klippy/extras/treed_z_recovery.py' \
       '/klippy/extras/treed_filament_motion_sensor.py' \
+      '/klippy/extras/treed_print_cancel.py' \
+      '/klippy/extras/__pycache__/treed_print_cancel.*.pyc' \
       '/klippy/extras/__pycache__/treed_filament_motion_sensor.*.pyc' \
       '/klippy/extras/__pycache__/treed_z_recovery.*.pyc' \
       '/klippy/extras/__pycache__/treed_sgt_*.pyc' \
@@ -598,8 +602,8 @@ motor_guard="${REPO_DIR}/klipper-host/treed_motor_guard.py"
 [ -f "${motor_guard}" ] || { log_error "runtime-bootstrap: missing motor guard"; exit 1; }
 install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${motor_guard}" "${KLIPPER_DIR}/klippy/extras/treed_motor_guard.py"
 
-# SGT, нижняя опора Z и счётчик филамента: доставка обязательна; аппаратный допуск задаётся в cfg.
-for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py klipper-host/treed_filament_motion_sensor.py; do
+# SGT, нижняя опора Z, счётчик филамента и прерывание печати: доставка обязательна.
+for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py klipper-host/treed_filament_motion_sensor.py klipper-host/treed_print_cancel.py; do
   [ -f "${REPO_DIR}/${sgt_source}" ] || { log_error "runtime-bootstrap: missing ${sgt_source}"; exit 1; }
   install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${REPO_DIR}/${sgt_source}" \
     "${KLIPPER_DIR}/klippy/extras/${sgt_source##*/}"

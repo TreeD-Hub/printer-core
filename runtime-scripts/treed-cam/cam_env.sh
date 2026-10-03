@@ -11,8 +11,9 @@
 
 # Блок 1: Подгрузка опционального runtime env-файла с пользовательскими override.
 treed_cam_load_runtime_env() {
-  local pi_user="${PI_USER:-pi}"
-  local pi_home="${PI_HOME:-/home/${pi_user}}"
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local pi_home="${PI_HOME:-$(cd "${script_dir}/../../.." && pwd)}"
   local cfg_dir="${TREED_CAM_CONFIG_DIR:-${pi_home}/treed/cam/config}"
   local runtime_env="${TREED_CAM_RUNTIME_ENV:-${cfg_dir}/runtime.env}"
 

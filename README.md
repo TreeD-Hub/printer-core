@@ -1,7 +1,7 @@
 # TreeD Printer Core
 
-Единая точка входа для поддерживаемого runtime `treed-v2`: образ принтера,
-конфигурация Klipper/Moonraker, firmware targets и экранный UI.
+Установка и обслуживание поддерживаемого runtime `treed-v2`: конфигурация
+Klipper/Moonraker, host-расширения Klipper, firmware targets и доставка экранного UI.
 
 ## Поддерживаемая V2-модель
 
@@ -21,7 +21,12 @@ legacy-контур.
 
 Версия проекта хранится в `VERSION`. Совместимые версии Klipper, Moonraker,
 KlipperScreen и Crowsnest, а также версия и checksum Mainsail закреплены в
-`runtime-versions.env`. Loader не выбирает `latest` для runtime-зависимостей.
+`runtime-versions.env`. Loader устанавливает эти компоненты по закреплённым
+ревизиям и release asset.
+
+TreeD Shell доставляется отдельно из артефакта `treed-shell-ui.zip` релизов
+репозитория [TreeD-Hub/printer-ui](https://github.com/TreeD-Hub/printer-ui).
+Настройки источника и загрузки UI описаны в [документации loader](loader/README.md).
 
 Release workflow запускается тегом `vX.Y.Z`, совпадающим с `VERSION`. Имена
 `treed-mainshellos-source.zip` и `treed-mainshellos-release.json` — сохранённые
@@ -37,8 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 
 Loader определяет состояние устройства как `fresh`, `update` или `recover`.
 `TREED_DEPLOY_MODE=auto` выбирает `clean` для `fresh` и `preserve` для
-`update`/`recover`. После `fresh` выполняется перезагрузка; повторные раскладки
-сохраняют runtime-параметры.
+`update`/`recover`. После `fresh` bootstrap по умолчанию перезагружает устройство
+(`TREED_REBOOT_AFTER_FRESH=1`); повторные раскладки сохраняют runtime-параметры
+по [правилам владения конфигами](docs/config-ownership.md).
 
 Для read-only проверки существующего клона запускать loader в режиме `check`:
 
@@ -60,7 +66,39 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 
 Перед каждой печатью `START_PRINT` строит новую adaptive Eddy mesh через
 `rapid_scan`. Сохранённые mesh-профили в обычной печати не загружаются.
+Для adaptive mesh нужны object labels с polygon-координатами в G-code и
+`enable_object_processing` в Moonraker; без них подготовка печати не начинается.
 Подробности — в [потоке печати и mesh](docs/print-flow.md).
+
+Обычный end G-code слайсера:
+
+```gcode
+END_PRINT
+```
+
+По умолчанию автосъём выключен (`AUTO_REMOVE=0`): макрос отключает нагрев,
+обдув и камеру, выполняет retract при допустимой температуре, Z-hop и парковку
+при достоверных координатах, затем отключает моторы. Охлаждения стола не ждёт
+и нижнюю Z-парковку не запускает.
+
+Чтобы включить автосъём для конкретной печати, используйте:
+
+```gcode
+END_PRINT AUTO_REMOVE=1
+```
+
+В этом режиме макрос ждёт охлаждения стола до 40 °C, находит нижнюю опору
+через Z DIAG и выполняет пять циклов Z на 25 мм вверх-вниз при 50 мм/с.
+Флаг действует только на текущий вызов. Допустимы `0` и `1`; другие значения
+отклоняются до выполнения команд. Полный контракт — в
+[методичке по макросам](klipper/profiles/treed_v2_corexy_v1/macros-usage.md#end_print).
+
+Отмена через кнопку UI (`/printer/print/cancel`) или одиночный `CANCEL_PRINT`
+в консоли Moonraker сразу выключает нагрев, прерывает температурные ожидания
+и остаток макроса, затем выполняет штатную отмену. Уже начатая команда
+движения/homing завершается штатно; для немедленного отключения движения
+используется отдельный аварийный стоп. Подробности — в
+[контракте отмены](klipper/profiles/treed_v2_corexy_v1/macros-usage.md#cancel_print).
 
 Ручное сервисное сканирование стола:
 
@@ -77,7 +115,8 @@ TREED_SHAPER_CALIBRATE_FULL ACCEL=25000
 Это сервисная операция; профильное описание — в разделе
 [Input shaper](klipper/profiles/treed_v2_corexy_v1/README.md#калибровка-input-shaper).
 
-Переключение экранного UI и проверка текущего режима:
+Переключение экранного UI и проверка текущего режима
+(`ts` — TreeD Shell, по умолчанию; `ks` — KlipperScreen):
 
 ```bash
 sudo treed-ui ts
@@ -115,13 +154,19 @@ AUTO как следующий шаг вслепую. Полная процед�
 
 - `loader/loader.sh` — entrypoint provisioning; актуальный порядок шагов описан
   в [модели владения конфигами](docs/config-ownership.md).
-- `loader/steps/` — изолированные шаги apply/check.
+- `loader/steps/` — шаги provisioning режима `apply`; `check` выполняется
+  оркестратором без запуска шагов.
 - `klipper/` — канонические конфигурации и профиль `treed_v2_corexy_v1`.
+- `klipper-host/` — доставляемые в `klippy/extras` расширения: нижняя опора и
+  измерение доступного хода Z, защита движений, sensorless-калибровка и датчик филамента.
 - `moonraker/` — базовая конфигурация и компоненты Moonraker.
 - `runtime-scripts/` — устанавливаемые runtime-скрипты.
+- `contracts/` — образец опубликованного контракта Printer Core ↔ UI для проверок совместимости.
 - `mainsail/` — тема и UI-ресурсы Mainsail.
 - `klipperscreen/` — тема KlipperScreen.
+- `plymouth/` — тема загрузочного экрана.
 - `firmware/` — target-конфиги и описание процесса сборки/прошивки.
+- `tools/` — диагностика, сервисные утилиты и проверки контрактов.
 
 Репозиторные конфиги копируются loader-ом через staging в runtime на устройстве.
 Границы владения и локальных overrides описаны в
@@ -130,11 +175,14 @@ AUTO как следующий шаг вслепую. Полная процед�
 ## Документация
 
 - [Установка и переменные окружения](docs/README.md)
+- [Loader: режимы, реестр шагов и настройки](loader/README.md)
 - [Владение runtime-конфигами](docs/config-ownership.md)
 - [Профиль `treed_v2_corexy_v1`](klipper/profiles/treed_v2_corexy_v1/README.md)
+- [Host-расширения Klipper](klipper-host/README.md)
 - [Поток печати и mesh](docs/print-flow.md)
 - [Первичная калибровка Eddy](docs/eddy-calibration.md)
 - [Диагностика камеры](docs/camera.md)
 - [Сервисные тесты движения](docs/service-motion-tests.md)
 - [Сборка и ручная прошивка MCU](firmware/README.md)
 - [Использование макросов профиля](klipper/profiles/treed_v2_corexy_v1/macros-usage.md)
+- [Локальные проверки контрактов](tools/tests/README.md)

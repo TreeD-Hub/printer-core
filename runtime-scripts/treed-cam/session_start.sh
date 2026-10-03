@@ -11,9 +11,9 @@ set -euo pipefail
 # - non-blocking для снимка: ошибка curl не ломает запуск сессии.
 
 # Блок 1: Базовые параметры пользователя и путей.
-PI_USER="${PI_USER:-pi}"
-PI_HOME="${PI_HOME:-/home/${PI_USER}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Loader устанавливает скрипты в ${PI_HOME}/treed/cam/bin; окружение сервиса может не содержать PI_HOME.
+PI_HOME="${PI_HOME:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
 
 # shellcheck source=runtime-scripts/treed-cam/cam_env.sh
 source "${SCRIPT_DIR}/cam_env.sh"
