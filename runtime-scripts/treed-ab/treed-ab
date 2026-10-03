@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Назначение: fail-closed проверка готовности системного A/B-обновления.
+Контур: status только читает; apply отказывает до реализации bundle и health-check.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+# Блок 1: Пути аттестации платформы и конфигурации RAUC.
+
+CAPABILITY = Path(os.environ.get("TREED_AB_CAPABILITY_FILE", "/etc/treed-ab/capability.json"))
+RAUC_CONFIG = Path(os.environ.get("TREED_AB_RAUC_CONFIG", "/etc/rauc/system.conf"))
+
+
+def inspect() -> dict[str, object]:
+    missing = []
+    if not CAPABILITY.is_file():
+        missing.append("platform attestation")
+    if not RAUC_CONFIG.is_file():
+        missing.append("RAUC system configuration")
+    if shutil.which("rauc") is None:
+        missing.append("RAUC executable")
+    if missing:
+        return {
+            "supported": False,
+            "reasonCode": "ab_platform_unverified",
+            "reason": "Обновление системы недоступно: не найдены " + ", ".join(missing) + ".",
+        }
+    try:
+        attestation = json.loads(CAPABILITY.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        attestation = {}
+    try:
+        result = subprocess.run(["rauc", "status"], capture_output=True, text=True,
+                                timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        result = None
+    verified = (
+        isinstance(attestation, dict)
+        and attestation.get("bootloaderVerified") is True
+        and attestation.get("rollbackTested") is True
+        and bool(attestation.get("deviceId"))
+        and result is not None
+        and result.returncode == 0
+    )
+    if not verified:
+        return {
+            "supported": False,
+            "reasonCode": "ab_platform_unverified",
+            "reason": "Обновление системы недоступно: для этой платы не подтверждены загрузчик, слоты A/B и возврат после сбоя.",
+        }
+    # Наличие RAUC и протокола загрузчика само по себе недостаточно: сейчас
+    # нет согласованного подписанного system bundle и проверки после пробной загрузки.
+    return {
+        "supported": False,
+        "reasonCode": "ab_update_backend_incomplete",
+        "reason": "Обновление системы пока недоступно: подписанный A/B-пакет и проверка новой системы ещё не подключены.",
+    }
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[1] == "status":
+        print(json.dumps(inspect(), ensure_ascii=False))
+        return 0
+    if len(argv) == 3 and argv[1] == "apply":
+        print(json.dumps({"accepted": False, **inspect()}, ensure_ascii=False))
+        return 2
+    print("usage: treed-ab status|apply <release>", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ==========================================
-# RUNTIME SCRIPT: TREED UPDATE APPLY
-# ==========================================
-# Назначение:
-# - Атомарно обновляет release bundle `printer-ui` с rollback-копией.
-# - Обновляет checkout `printer-core` и запускает штатный loader.
-# Контур:
-# - root-only, вызывается Moonraker-компонентом через ограниченный sudoers.
+# Назначение: атомарно публикует release bundle printer-ui с rollback-копией.
+# Контур: root-only; запускается фиксированной systemd-службой обновления.
 
 # Блок 1: Параметры и state/log файлы.
 TARGET_ID="${1:-}"
 TARGET_TAG="${2:-}"
 ENV_FILE="${TREED_UPDATE_ENV_FILE:-/etc/default/treed-update}"
-STATE_FILE="${TREED_UPDATE_STATE_FILE:-/tmp/treed-update-state.json}"
-LOG_FILE="${TREED_UPDATE_LOG_FILE:-/tmp/treed-update-apply.log}"
+STATE_FILE="${TREED_UPDATE_STATE_FILE:-/var/lib/treed-update/state.json}"
+LOG_FILE="${TREED_UPDATE_LOG_FILE:-/var/log/treed-update/worker.log}"
 LOCK_FILE="${TREED_UPDATE_LOCK_FILE:-/run/lock/treed-update.lock}"
 
 case "${TARGET_ID}" in
@@ -53,6 +47,8 @@ SHELL_ASSET_NAME="treed-shell-ui.zip"
 SHELL_SERVICE="${TREED_SHELL_SERVICE:-treed-shell.service}"
 SHELL_HTTP_PORT="${TREED_SHELL_HTTP_PORT:-8787}"
 SHELL_START_TIMEOUT="${TREED_SHELL_START_TIMEOUT:-45}"
+UPDATE_STAGED_DIR=""
+UPDATE_TMP_ARCHIVE=""
 mkdir -p "$(dirname "${STATE_FILE}")" "$(dirname "${LOG_FILE}")" "$(dirname "${LOCK_FILE}")"
 exec >>"${LOG_FILE}" 2>&1
 
@@ -61,38 +57,61 @@ write_state() {
   local busy="$2"
   local message="$3"
   local exit_code="${4:-0}"
+  local phase="${5:-${status}}"
+  local rollback_succeeded="${6:-}"
 
-  python3 - "${STATE_FILE}" "${status}" "${busy}" "${message}" "${TARGET_ID}" "${TARGET_TAG}" "${exit_code}" <<'PY'
+  python3 - "${STATE_FILE}" "${status}" "${busy}" "${message}" "${TARGET_ID}" "${TARGET_TAG}" "${exit_code}" "${phase}" "${rollback_succeeded}" <<'PY'
 import json
+import os
 import sys
 from datetime import datetime, timezone
 
-path, status, busy, message, target_id, target_tag, exit_code = sys.argv[1:8]
-payload = {
+path, status, busy, message, target_id, target_tag, exit_code, phase, rollback_succeeded = sys.argv[1:10]
+try:
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, ValueError):
+    payload = {}
+payload.update({
     "status": status,
     "busy": busy == "1",
     "message": message,
     "targetId": target_id,
     "targetTag": target_tag,
+    "resultCode": "updater_failed" if int(exit_code) else None,
     "exitCode": int(exit_code),
+    "phase": phase,
     "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-}
-with open(path, "w", encoding="utf-8") as handle:
+})
+if rollback_succeeded:
+    payload["rollbackSucceeded"] = rollback_succeeded == "true"
+    payload["rollbackFailed"] = rollback_succeeded != "true"
+temporary = path + f".{os.getpid()}.tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, indent=2)
     handle.write("\n")
+os.replace(temporary, path)
 PY
 }
 
 finish() {
   local exit_code="$?"
+  if [ -n "${UPDATE_TMP_ARCHIVE}" ]; then
+    rm -f "${UPDATE_TMP_ARCHIVE}"
+  fi
+  if [ -n "${UPDATE_STAGED_DIR}" ]; then
+    rm -rf "${UPDATE_STAGED_DIR}"
+  fi
+  if [ "${TREED_UPDATE_MANAGED:-0}" = "1" ]; then
+    exit "${exit_code}"
+  fi
   if [ "${exit_code}" -eq 0 ]; then
-    write_state "applied" "0" "Update applied." "0"
+    write_state "applied" "0" "Обновление TreeD UI завершено." "0" "complete"
   else
-    write_state "error" "0" "Update failed. See ${LOG_FILE}." "${exit_code}"
+    write_state "error" "0" "Обновление не выполнено. Проверьте журнал службы." "${exit_code}" "error"
   fi
   exit "${exit_code}"
 }
-trap finish EXIT
 
 # Блок 2: Root/lock/repo guards.
 if [ "${EUID}" -ne 0 ]; then
@@ -100,38 +119,24 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-exec 9>"${LOCK_FILE}"
-if ! flock -n 9; then
-  echo "treed-update: another update is already running" >&2
-  exit 3
+if [ "${TREED_UPDATE_MANAGED:-0}" != "1" ]; then
+  exec 9>"${LOCK_FILE}"
+  if ! flock -n 9; then
+    echo "treed-update: another update is already running" >&2
+    exit 3
+  fi
 fi
+trap finish EXIT
 
 apply_core_update() {
-  local dirty=""
-  if [ ! -d "${REPO_DIR}/.git" ]; then
-    echo "treed-update: repo checkout not found: ${REPO_DIR}" >&2
-    return 1
-  fi
-  if [ ! -f "${REPO_DIR}/install.sh" ]; then
-    echo "treed-update: install.sh not found in ${REPO_DIR}" >&2
-    return 1
-  fi
-
-  cd "${REPO_DIR}"
-  dirty="$(git status --porcelain --untracked-files=all)"
-  if [ -n "${dirty}" ]; then
-    echo "treed-update: printer-core has local changes; refusing to overwrite" >&2
-    printf '%s\n' "${dirty}" >&2
-    return 1
-  fi
-  git fetch --tags --force origin "refs/tags/${TARGET_TAG}:refs/tags/${TARGET_TAG}"
-  git checkout --detach "${TARGET_TAG}"
-  TREED_DEPLOY_MODE=auto TREED_NONINTERACTIVE=1 bash install.sh
+  echo "treed-update: A/B platform and signed system bundle are not verified; refusing system update" >&2
+  return 1
 }
 
 resolve_shell_asset_url() {
   python3 - "${SHELL_RELEASE_API_URL}" "${TARGET_TAG}" "${SHELL_ASSET_NAME}" <<'PY'
 import json
+import re
 import sys
 import urllib.request
 
@@ -146,8 +151,11 @@ for release in releases:
     if release.get("draft") or release.get("prerelease") or release.get("tag_name") != target_tag:
         continue
     for asset in release.get("assets") or []:
+        digest = asset.get("digest")
         if asset.get("name") == asset_name and asset.get("browser_download_url"):
-            print(asset["browser_download_url"])
+            if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                raise SystemExit("release asset has no valid SHA-256 digest")
+            print(asset["browser_download_url"] + "\t" + digest)
             raise SystemExit(0)
 raise SystemExit(f"release asset {asset_name!r} not found for {target_tag!r}")
 PY
@@ -175,27 +183,39 @@ wait_shell_ready() {
 
 apply_shell_update() {
   local archive_url=""
-  local tmp_archive=""
-  local staged_dir="${SHELL_WEB_DIR}.new"
-  local previous_dir="${SHELL_RUNTIME_DIR}/ui.previous"
+  local expected_digest=""
+  local actual_digest=""
+  local rollback_dir=""
+  local operation_id="${TREED_UPDATE_OPERATION_ID:-}"
 
   if [ "${SHELL_WEB_DIR}" != "${SHELL_RUNTIME_DIR}/ui" ]; then
     echo "treed-update: invalid shell web directory: ${SHELL_WEB_DIR}" >&2
     return 1
   fi
+  UPDATE_STAGED_DIR="${SHELL_WEB_DIR}.new"
+  if [[ ! "${operation_id}" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+    operation_id="manual-$$"
+  fi
+  rollback_dir="${SHELL_RUNTIME_DIR}/ui.rollback.${operation_id}"
 
   mkdir -p "${SHELL_RUNTIME_DIR}"
-  archive_url="$(resolve_shell_asset_url)"
-  tmp_archive="$(mktemp "${SHELL_RUNTIME_DIR}/treed-shell-ui.XXXXXX.zip")"
-  curl -fL --connect-timeout 20 --retry 3 --retry-delay 2 -o "${tmp_archive}" "${archive_url}"
-  python3 -m zipfile -t "${tmp_archive}" >/dev/null
+  /usr/local/sbin/treed-update-service phase downloading "Загружаем UI bundle."
+  IFS=$'\t' read -r archive_url expected_digest <<<"$(resolve_shell_asset_url)"
+  UPDATE_TMP_ARCHIVE="$(mktemp "${SHELL_RUNTIME_DIR}/treed-shell-ui.XXXXXX.zip")"
+  curl -fL --connect-timeout 20 --retry 3 --retry-delay 2 -o "${UPDATE_TMP_ARCHIVE}" "${archive_url}"
+  actual_digest="sha256:$(sha256sum "${UPDATE_TMP_ARCHIVE}" | awk '{print $1}')"
+  if [ "${actual_digest}" != "${expected_digest}" ]; then
+    echo "treed-update: UI archive SHA-256 does not match release metadata" >&2
+    return 1
+  fi
+  python3 -m zipfile -t "${UPDATE_TMP_ARCHIVE}" >/dev/null
 
-  rm -rf "${staged_dir}"
-  mkdir -p "${staged_dir}"
-  python3 -m zipfile -e "${tmp_archive}" "${staged_dir}"
-  test -f "${staged_dir}/index.html"
-  test -f "${staged_dir}/treed-shell-ui-manifest.json"
-  python3 - "${staged_dir}/treed-shell-ui-manifest.json" "${TARGET_TAG}" <<'PY'
+  rm -rf "${UPDATE_STAGED_DIR}"
+  mkdir -p "${UPDATE_STAGED_DIR}"
+  python3 -m zipfile -e "${UPDATE_TMP_ARCHIVE}" "${UPDATE_STAGED_DIR}"
+  test -f "${UPDATE_STAGED_DIR}/index.html"
+  test -f "${UPDATE_STAGED_DIR}/treed-shell-ui-manifest.json"
+  python3 - "${UPDATE_STAGED_DIR}/treed-shell-ui-manifest.json" "${TARGET_TAG}" <<'PY'
 import json
 import sys
 
@@ -209,34 +229,67 @@ if manifest.get("mode") != "live":
     raise SystemExit("UI release manifest mode must be live")
 PY
 
-  chown -R "${PI_USER}:${PI_GROUP}" "${staged_dir}"
-  rm -rf "${previous_dir}"
-  if [ -d "${SHELL_WEB_DIR}" ]; then
-    mv "${SHELL_WEB_DIR}" "${previous_dir}"
+  chown -R "${PI_USER}:${PI_GROUP}" "${UPDATE_STAGED_DIR}"
+  chown "${PI_USER}:${PI_GROUP}" "${UPDATE_TMP_ARCHIVE}"
+  if [ -e "${rollback_dir}" ]; then
+    echo "treed-update: rollback path already exists: ${rollback_dir}" >&2
+    return 1
   fi
-  mv "${tmp_archive}" "${SHELL_ARCHIVE_PATH}"
-  chown "${PI_USER}:${PI_GROUP}" "${SHELL_ARCHIVE_PATH}"
-  if ! mv "${staged_dir}" "${SHELL_WEB_DIR}"; then
-    if [ -d "${previous_dir}" ]; then
-      mv "${previous_dir}" "${SHELL_WEB_DIR}"
+  if [ -d "${SHELL_WEB_DIR}" ]; then
+    mv "${SHELL_WEB_DIR}" "${rollback_dir}"
+  fi
+  /usr/local/sbin/treed-update-service phase installing "Устанавливаем UI bundle."
+  if ! mv "${UPDATE_STAGED_DIR}" "${SHELL_WEB_DIR}"; then
+    /usr/local/sbin/treed-update-service phase rolling_back "Восстанавливаем предыдущую версию UI."
+    if [ -d "${rollback_dir}" ] \
+      && mv "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && systemctl restart "${SHELL_SERVICE}" \
+      && wait_shell_ready; then
+      write_state "rolling_back" "1" "Предыдущая версия TreeD UI восстановлена." "1" "rolling_back" "true"
+    elif [ -d "${rollback_dir}" ]; then
+      write_state "rolling_back" "1" "Не удалось восстановить предыдущую версию TreeD UI." "1" "rolling_back" "false"
     fi
     return 1
   fi
 
+  /usr/local/sbin/treed-update-service phase restarting "Перезапускаем интерфейс TreeD."
   if ! systemctl restart "${SHELL_SERVICE}" || ! wait_shell_ready; then
-    rm -rf "${SHELL_WEB_DIR}"
-    if [ -d "${previous_dir}" ]; then
-      mv "${previous_dir}" "${SHELL_WEB_DIR}"
-      if systemctl restart "${SHELL_SERVICE}"; then
-        wait_shell_ready || true
-      fi
+    /usr/local/sbin/treed-update-service phase rolling_back "Новый интерфейс не запустился. Восстанавливаем предыдущую версию."
+    if rm -rf "${SHELL_WEB_DIR}" \
+      && [ -d "${rollback_dir}" ] \
+      && mv "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && systemctl restart "${SHELL_SERVICE}" \
+      && wait_shell_ready; then
+      write_state "rolling_back" "1" "Предыдущая версия TreeD UI восстановлена." "1" "rolling_back" "true"
+    else
+      write_state "rolling_back" "1" "Не удалось проверить восстановление предыдущей версии TreeD UI." "1" "rolling_back" "false"
     fi
     return 1
+  fi
+
+  if ! mv -f "${UPDATE_TMP_ARCHIVE}" "${SHELL_ARCHIVE_PATH}"; then
+    /usr/local/sbin/treed-update-service phase rolling_back "Не удалось сохранить пакет. Восстанавливаем предыдущую версию UI."
+    if rm -rf "${SHELL_WEB_DIR}" \
+      && [ -d "${rollback_dir}" ] \
+      && mv "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && systemctl restart "${SHELL_SERVICE}" \
+      && wait_shell_ready; then
+      write_state "rolling_back" "1" "Предыдущая версия TreeD UI восстановлена." "1" "rolling_back" "true"
+    else
+      write_state "rolling_back" "1" "Не удалось проверить восстановление предыдущей версии TreeD UI." "1" "rolling_back" "false"
+    fi
+    return 1
+  fi
+  if [ -d "${rollback_dir}" ]; then
+    rm -rf "${SHELL_RUNTIME_DIR}/ui.previous" || true
+    if ! mv "${rollback_dir}" "${SHELL_RUNTIME_DIR}/ui.previous"; then
+      echo "treed-update: prior UI kept at ${rollback_dir}" >&2
+    fi
   fi
 }
 
 # Блок 3: Применение выбранного release target.
-write_state "applying" "1" "Applying ${TARGET_ID} ${TARGET_TAG}." "0"
+/usr/local/sbin/treed-update-service phase validating "Проверяем выпуск TreeD."
 case "${TARGET_ID}" in
   printer-ui|treed-shell) apply_shell_update ;;
   printer-core|treed-mainshellos) apply_core_update ;;

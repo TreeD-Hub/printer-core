@@ -45,7 +45,12 @@
   - `POST /server/treed/update/check`
   - `POST /server/treed/update/apply`
 - проверяет release data отдельно для `treed-shell` и `printer-core`;
-- применяет выбранный `targetId`: UI tag `ui-main-<run>-<attempt>` или системный semver tag `vX.Y.Z` через root-side `/usr/local/sbin/treed-update-apply`.
+- `POST /apply` принимает `requestId` (UUID), `targetId`, `targetTag` и быстро передаёт операцию через ограниченную root-команду; клиенты без `requestId` остаются совместимы и получают серверный UUID.
+- идемпотентный root-worker сериализует запросы, сохраняет операцию/историю в `/var/lib/treed-update/state.json` и предоставляет быстрый `GET /status` для восстановления после перезагрузки страницы или службы;
+- `GET /status` оставляет прежние `busy`, `canApply`, `releaseResults` и добавляет `operation`, `latestOperation`, `history`, `status`, `phase`, `progress`, `resultCode`;
+- release check выполняет оба запроса параллельно с таймаутом 7 секунд на источник; firmware inventory остаётся отдельным `GET /firmware`;
+- UI release `ui-main-<run>-<attempt>` обновляется сервисом с readiness check и возвратом на предыдущий bundle при сбое;
+- system release `vX.Y.Z` показывает `capability.supported=false` и точную причину, пока не подключены подписанный пакет, A/B boot backend и проверка после пробной загрузки.
 - раздельно сообщает expected Klipper SHA, host checkout, running Klippy, build checksums и live `mcu_version` каждой платы;
 - сохраняет последнее успешное наблюдение MCU только как `lastKnown.stale=true`, если Klippy/MCU недоступны;
 - сверка `mcu_version` не называется readback или криптографической проверкой прошитого бинарника.

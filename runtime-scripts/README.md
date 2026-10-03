@@ -6,7 +6,8 @@
 
 - `runtime-scripts/treed-cam/*` — runtime-команды камеры TreeD.
 - `runtime-scripts/treed-ui/*` — операторские команды переключения экранного UI.
-- `runtime-scripts/treed-update/*` — root-side применение release update для `printer-core`.
+- `runtime-scripts/treed-update/*` — root-side очередь, persistent operation state и UI bundle update.
+- `runtime-scripts/treed-ab/*` — fail-closed boundary для будущего A/B system updater.
 
 ## Модель деплоя
 
@@ -22,10 +23,11 @@
 - persisted-состояние: `/etc/default/treed-ui`
 
 Для обновлений:
-- источник в репозитории: `runtime-scripts/treed-update/treed-update-apply`
+- источник в репозитории: `runtime-scripts/treed-update/treed-update-service`, `treed-update-apply` и systemd units
 - шаг деплоя: `loader/steps/moonraker-config.sh`
-- путь на устройстве: `/usr/local/sbin/treed-update-apply`
-- persisted-конфиг: `/etc/default/treed-update`
+- команды на устройстве: `/usr/local/sbin/treed-update-service`, `/usr/local/sbin/treed-update-apply`
+- persistent operation state/history: `/var/lib/treed-update/state.json`
+- описание capability системы: `runtime-scripts/treed-ab/README.md`
 
 ## Контракт runtime-скриптов
 
@@ -40,3 +42,4 @@
 - `runtime-scripts/treed-cam/README.md` — подробный контракт и поведение camera-скриптов.
 - `runtime-scripts/treed-ui/README.md` — контракт команды `treed-ui`.
 - `runtime-scripts/treed-update/README.md` — контракт root-side updater.
+- `runtime-scripts/treed-ab/README.md` — контракт fail-closed системного A/B адаптера.

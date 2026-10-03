@@ -47,7 +47,9 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 
 Ветка `treed-v2` не поддерживает RN12/RPi/UART-миграции.
 
-Другие инструкции: [поток печати и mesh](print-flow.md), [калибровка Eddy](eddy-calibration.md), [камера](camera.md), [сервисные тесты движения](service-motion-tests.md).
+Другие инструкции: [справочник макросов принтера](../klipper/profiles/treed_v2_corexy_v1/macros-usage.md), [поток печати и mesh](print-flow.md), [калибровка Eddy](eddy-calibration.md), [камера](camera.md), [сервисные тесты движения](service-motion-tests.md).
 
 [Приёмка Z-bottom/Eddy](z-eddy-acceptance.md): программные проверки, аппаратные
 серии, защита pending autosave и сравнение cold-start пакетов.
+
+[Архитектура обновлений](update-architecture.md): служба обновления, целевой A/B-контур, сохранение данных и условия аппаратной приёмки.

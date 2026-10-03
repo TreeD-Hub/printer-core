@@ -175,30 +175,49 @@ restart_and_verify_moonraker_components() {
 }
 
 deploy_treed_update_command() {
-  local src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
+  local apply_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
+  local service_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-service"
+  local ab_src="${REPO_DIR}/runtime-scripts/treed-ab/treed-ab"
+  local worker_unit_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update.service"
+  local path_unit_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update.path"
+  local recover_unit_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-recover.service"
   local env_file="/etc/default/treed-update"
   local sudoers_file="/etc/sudoers.d/treed-update"
+  local src=""
 
-  if [ ! -f "${src}" ]; then
-    log_error "treed update command not found in repo: ${src}"
-    exit 1
-  fi
-
-  install -m 0755 "${src}" /usr/local/sbin/treed-update-apply
+  # Блок 3.1: Доставка root-службы, submit-команды и fail-closed A/B probe.
+  for src in "${apply_src}" "${service_src}" "${ab_src}" "${worker_unit_src}" "${path_unit_src}" "${recover_unit_src}"; do
+    if [ ! -f "${src}" ]; then
+      log_error "treed update runtime file not found in repo: ${src}"
+      exit 1
+    fi
+  done
+  install -m 0755 "${apply_src}" /usr/local/sbin/treed-update-apply
+  install -m 0755 "${service_src}" /usr/local/sbin/treed-update-service
+  install -m 0755 "${ab_src}" /usr/local/sbin/treed-ab
+  install -m 0644 "${worker_unit_src}" /etc/systemd/system/treed-update.service
+  install -m 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
+  install -m 0644 "${recover_unit_src}" /etc/systemd/system/treed-update-recover.service
+  install -d -m 0755 -o root -g root /var/lib/treed-update /var/log/treed-update
+  systemctl daemon-reload
+  systemctl enable treed-update-recover.service
+  systemctl enable --now treed-update.path
 
   cat > "${env_file}" <<EOF
 TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/printer-core"
 TREED_UPDATE_PI_USER="${PI_USER}"
 TREED_UPDATE_PI_GROUP="${PI_GROUP}"
-TREED_UPDATE_STATE_FILE="/tmp/treed-update-state.json"
-TREED_UPDATE_LOG_FILE="/tmp/treed-update-apply.log"
+TREED_UPDATE_STATE_FILE="/var/lib/treed-update/state.json"
+TREED_UPDATE_LOG_FILE="/var/log/treed-update/worker.log"
+TREED_UPDATE_LOCK_FILE="/run/lock/treed-update.lock"
+TREED_UPDATE_UNIT="treed-update.service"
 TREED_SHELL_RUNTIME_DIR="${PI_HOME}/treed/treed-shell-runtime"
 TREED_SHELL_SERVICE="treed-shell.service"
 EOF
   chmod 0644 "${env_file}"
 
   cat > "${sudoers_file}" <<EOF
-${PI_USER} ALL=(root) NOPASSWD: /usr/local/sbin/treed-update-apply *
+${PI_USER} ALL=(root) NOPASSWD: /usr/local/sbin/treed-update-service submit *
 EOF
   chmod 0440 "${sudoers_file}"
   if command -v visudo >/dev/null 2>&1; then

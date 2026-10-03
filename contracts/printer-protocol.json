@@ -6,6 +6,8 @@
     "motion": 1,
     "thermal": 1,
     "fan": 1,
+    "driver_mode": 1,
+    "driver_fan_mode": 1,
     "filament": 1,
     "filament_sensor_control": 1,
     "filament_encoder_sensitivity": 1,

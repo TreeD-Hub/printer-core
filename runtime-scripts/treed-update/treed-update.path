@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for queued TreeD update operations
+
+[Path]
+PathChanged=/var/lib/treed-update/state.json
+Unit=treed-update.service
+MakeDirectory=yes
+
+[Install]
+WantedBy=multi-user.target

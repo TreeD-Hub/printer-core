@@ -271,7 +271,8 @@ treed-ui status
 - `mainsail-web.sh` required: сначала использует проверенный bundled `mainsail.zip`, а GitHub download оставляет только fallback/recovery; затем публикует web-root и nginx reverse-proxy.
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
-- `moonraker-config.sh` деплоит компонент `[treed_update]`, `/usr/local/sbin/treed-update-apply` и sudoers-правило для раздельного UI/system release update из TreeD Shell.
+- `moonraker-config.sh` деплоит компонент `[treed_update]`, валидированный root-submit `/usr/local/sbin/treed-update-service`, UI worker и fixed systemd/recovery units; operation state/history хранится в `/var/lib/treed-update/state.json`.
+- `moonraker-config.sh` развёртывает `treed-ab`; системный release пока явно disabled, так как signed RAUC bundle и проверенный A/B boot/health path отсутствуют. Текущий core updater не делает Git checkout и не вызывает loader.
 - `moonraker-config.sh` идемпотентно добавляет `treed-shell` в `moonraker.asvc`, чтобы UI мог перезапустить только `treed-shell.service` через штатный Moonraker service endpoint.
 - `verify.sh` production-default fail-closed: `Klippy state=ready`, main MCU, EBBCan, Eddy и свежий MCU journal обязательны; `TREED_ALLOW_HARDWARE_NOT_READY=1` явно включает service/install mode.
 - `verify.sh` проверяет наличие сервисного sensorless-компонента, CLI и cfg, но не проверяет всю include-цепочку или значения sensorless-параметров.

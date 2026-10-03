@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""
+Назначение: принимает, выполняет и восстанавливает операции обновления TreeD.
+Контур: root-only; Moonraker может вызывать только валидированный submit.
+Root-owned queue and worker for persistent TreeD update operations.
+"""
+
+from __future__ import annotations
+
+# Блок 1: Импорты и настройки путей.
+try:
+    import fcntl
+except ImportError:  # Windows test host; production service is Linux-only.
+    fcntl = None
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict
+
+STATE = Path(os.environ.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json"))
+LOCK = Path(os.environ.get("TREED_UPDATE_LOCK_FILE", "/run/lock/treed-update.lock"))
+APPLY = os.environ.get("TREED_UPDATE_APPLY", "/usr/local/sbin/treed-update-apply")
+UNIT = os.environ.get("TREED_UPDATE_UNIT", "treed-update.service")
+TREED_AB = os.environ.get("TREED_AB_COMMAND", "/usr/local/sbin/treed-ab")
+TARGET_RE = {
+    "printer-ui": re.compile(r"^ui-main-[0-9]+-[0-9]+$"),
+    "printer-core": re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
+}
+ACTIVE = {"queued", "validating", "downloading", "installing", "restarting", "verifying", "rolling_back"}
+TERMINAL = {"applied", "error", "rolled_back", "rejected"}
+PHASES = ACTIVE | TERMINAL | {"idle"}
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def read_state() -> Dict[str, Any]:
+    if not STATE.exists():
+        return {"status": "idle", "phase": "idle", "busy": False, "history": []}
+    try:
+        value = json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError("persistent update state is unreadable; refusing to replace it") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("persistent update state has an invalid shape; refusing to replace it")
+    return value
+
+
+def write_state(value: Dict[str, Any]) -> None:
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    temp = STATE.with_name(STATE.name + f".{os.getpid()}.tmp")
+    data = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.fchmod(descriptor, 0o644)
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(descriptor)
+    os.replace(temp, STATE)
+    if os.name != "nt":
+        directory_fd = os.open(STATE.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+
+def acquire(blocking: bool = False):
+    if fcntl is None:
+        raise OSError("TreeD update service requires Linux flock")
+    LOCK.parent.mkdir(parents=True, exist_ok=True)
+    handle = LOCK.open("a+")
+    flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+    try:
+        fcntl.flock(handle.fileno(), flags)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
+def response(state: Dict[str, Any], accepted: bool, duplicate: bool = False) -> Dict[str, Any]:
+    return {
+        "accepted": accepted,
+        "duplicate": duplicate,
+        "operationId": state.get("operationId"),
+        "requestId": state.get("requestId"),
+        "status": state.get("status", "busy"),
+        "phase": state.get("phase", state.get("status", "busy")),
+        "progress": state.get("progress"),
+        "resultCode": state.get("resultCode"),
+        "message": state.get("message", "Другое обновление уже выполняется."),
+        "targetId": state.get("targetId"),
+        "targetTag": state.get("targetTag"),
+    }
+
+
+def submit(request_id: str, target_id: str, target_tag: str) -> int:
+    if os.geteuid() != 0:
+        raise RuntimeError("submit must run as root")
+    if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", request_id):
+        raise ValueError("invalid requestId")
+    if target_id not in TARGET_RE or not TARGET_RE[target_id].fullmatch(target_tag):
+        raise ValueError("invalid update target or release tag")
+    lock = acquire()
+    if lock is None:
+        state = read_state()
+        duplicate = state.get("requestId") == request_id
+        print(json.dumps(response(state, duplicate, duplicate), ensure_ascii=False))
+        return 0 if duplicate else 4
+    try:
+        state = read_state()
+        if state.get("requestId") == request_id:
+            print(json.dumps(response(state, True, True), ensure_ascii=False))
+            return 0
+        if state.get("busy") is True or state.get("status") in ACTIVE:
+            print(json.dumps(response(state, False), ensure_ascii=False))
+            return 4
+        stamp = now()
+        operation = {
+            "operationId": str(uuid.uuid4()), "requestId": request_id,
+            "status": "queued", "phase": "queued", "progress": 0,
+            "resultCode": None, "message": "Обновление поставлено в очередь.",
+            "targetId": target_id, "targetTag": target_tag,
+            "startedAt": stamp, "updatedAt": stamp, "finishedAt": None,
+            "busy": True, "history": state.get("history", [])[-9:],
+        }
+        write_state(operation)
+        try:
+            subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
+        except Exception as error:
+            operation.update(status="error", phase="error", busy=False,
+                             progress=None, resultCode="service_start_failed",
+                             message="Не удалось запустить службу обновлений.",
+                             updatedAt=now(), finishedAt=now())
+            append_history(operation)
+            write_state(operation)
+            print(json.dumps(response(operation, False), ensure_ascii=False))
+            return 1
+        print(json.dumps(response(operation, True), ensure_ascii=False))
+        return 0
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
+
+
+def append_history(state: Dict[str, Any]) -> None:
+    history = state.get("history", [])
+    if not isinstance(history, list):
+        history = []
+    summary = {key: state.get(key) for key in (
+        "operationId", "requestId", "status", "phase", "progress", "resultCode",
+        "message", "targetId", "targetTag", "startedAt", "updatedAt", "finishedAt",
+    )}
+    history = [item for item in history if isinstance(item, dict)
+               and item.get("operationId") != state.get("operationId")]
+    state["history"] = (history + [summary])[-10:]
+
+
+def transition(phase: str, message: str) -> None:
+    if phase not in PHASES:
+        raise ValueError("unsupported operation phase")
+    state = read_state()
+    if state.get("busy") is not True:
+        raise RuntimeError("no active update operation")
+    state.update(status=phase, phase=phase, progress=0 if phase == "queued" else None,
+                 message=message, updatedAt=now())
+    write_state(state)
+
+
+def printer_is_idle() -> bool:
+    request = urllib.request.Request(
+        "http://127.0.0.1:7125/printer/objects/query?print_stats=state",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response_obj:
+            payload = json.load(response_obj)
+    except Exception:
+        return False
+    state = payload.get("result", {}).get("status", {}).get("print_stats", {}).get("state")
+    return isinstance(state, str) and state.lower() not in {"printing", "paused"}
+
+
+def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -> None:
+    stamp = now()
+    state.update(status=status, phase="complete" if status in {"applied", "rolled_back"} else status,
+                 busy=False, progress=100 if status == "applied" else None,
+                 resultCode=result_code, message=message,
+                 updatedAt=stamp, finishedAt=stamp)
+    append_history(state)
+    write_state(state)
+
+
+def system_ab_capability() -> Dict[str, Any]:
+    try:
+        result = subprocess.run([TREED_AB, "status"], capture_output=True, text=True,
+                                timeout=6, check=False)
+        value = json.loads(result.stdout) if result.returncode == 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        value = {}
+    if isinstance(value, dict) and value.get("supported") is False:
+        return value
+    return {
+        "supported": False,
+        "reasonCode": "ab_update_backend_incomplete",
+        "reason": "Обновление системы недоступно: A/B-установка и проверка после загрузки не реализованы.",
+    }
+
+
+def run_worker() -> int:
+    if os.geteuid() != 0:
+        raise RuntimeError("worker must run as root")
+    lock = acquire(blocking=True)
+    try:
+        state = read_state()
+        if state.get("status") not in ACTIVE or state.get("busy") is not True:
+            return 0
+        state.update(status="validating", phase="validating", message="Проверяем состояние принтера.", updatedAt=now())
+        write_state(state)
+        if not printer_is_idle():
+            finish(state, "rejected", "printer_not_idle", "Принтер печатает или его состояние недоступно.")
+            return 1
+        if state.get("targetId") == "printer-core":
+            capability = system_ab_capability()
+            finish(state, "rejected", str(capability.get("reasonCode", "ab_platform_unverified")),
+                   str(capability.get("reason", "Обновление системы недоступно: A/B-платформа не подтверждена.")))
+            return 1
+        transition("downloading", "Загружаем и проверяем UI bundle.")
+        state = read_state()
+        env = dict(os.environ, TREED_UPDATE_MANAGED="1",
+                   TREED_UPDATE_OPERATION_ID=str(state.get("operationId", "")))
+        process = subprocess.run([APPLY, state["targetId"], state["targetTag"]], env=env, check=False)
+        state = read_state()
+        if process.returncode == 0:
+            finish(state, "applied", "ui_updated", "Обновление TreeD UI завершено.")
+            return 0
+        result_code = (
+            "rollback_succeeded" if state.get("rollbackSucceeded")
+            else "rollback_failed" if state.get("rollbackFailed")
+            else "update_failed"
+        )
+        finish(state, "rolled_back" if state.get("rollbackSucceeded") else "error", result_code,
+               "Предыдущая версия TreeD UI восстановлена." if state.get("rollbackSucceeded")
+               else "Обновление не выполнено; проверьте журнал службы.")
+        return process.returncode
+    finally:
+        if lock is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        raise ValueError("usage: treed-update-service submit|run|phase ...")
+    command = argv[1]
+    if command == "submit" and len(argv) == 5:
+        return submit(argv[2], argv[3], argv[4])
+    if command == "run" and len(argv) == 2:
+        return run_worker()
+    if command == "recover" and len(argv) == 2:
+        return recover()
+    if command == "phase" and len(argv) == 4:
+        transition(argv[2], argv[3])
+        return 0
+    raise ValueError("invalid command arguments")
+
+
+def recover() -> int:
+    if os.geteuid() != 0:
+        raise RuntimeError("recovery must run as root")
+    lock = acquire(blocking=True)
+    try:
+        state = read_state()
+        if state.get("busy") is True or state.get("status") in ACTIVE:
+            if state.get("targetId") == "printer-ui" and recover_ui(state):
+                return 0
+            finish(state, "error", "operation_interrupted",
+                   "Обновление прервано до записи результата; проверьте текущую версию перед повтором.")
+        return 0
+    finally:
+        if lock is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+
+def shell_runtime_dir() -> Path:
+    configured = os.environ.get("TREED_SHELL_RUNTIME_DIR")
+    if not configured:
+        env_file = Path(os.environ.get("TREED_UPDATE_ENV_FILE", "/etc/default/treed-update"))
+        try:
+            lines = env_file.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        for line in lines:
+            match = re.fullmatch(r'TREED_SHELL_RUNTIME_DIR="([^"\r\n]+)"', line.strip())
+            if match:
+                configured = match.group(1)
+                break
+    if not configured:
+        pi_home = os.environ.get("TREED_UPDATE_PI_HOME", "/home/pi")
+        configured = str(Path(pi_home) / "treed" / "treed-shell-runtime")
+    runtime = Path(configured)
+    parts = runtime.parts
+    if (not runtime.is_absolute() or ".." in parts or len(parts) != 5
+            or parts[0] != "/" or parts[1] != "home"
+            or parts[3:] != ("treed", "treed-shell-runtime")):
+        raise ValueError("invalid TreeD Shell runtime path")
+    return runtime
+
+
+def wait_shell_ready(runtime: Path) -> bool:
+    service_name = os.environ.get("TREED_SHELL_SERVICE", "treed-shell.service")
+    port = os.environ.get("TREED_SHELL_HTTP_PORT", "8787")
+    deadline = time.monotonic() + 45
+    consecutive = 0
+    while time.monotonic() < deadline:
+        active = subprocess.run(["systemctl", "is-active", "--quiet", service_name],
+                                check=False, timeout=3).returncode == 0
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/index.html", timeout=2):
+                ready = active
+        except Exception:
+            ready = False
+        consecutive = consecutive + 1 if ready else 0
+        if consecutive >= 3:
+            return True
+        time.sleep(1)
+    return False
+
+
+def recover_ui(state: Dict[str, Any]) -> bool:
+    operation_id = state.get("operationId")
+    if not isinstance(operation_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", operation_id):
+        return False
+    try:
+        runtime = shell_runtime_dir()
+    except ValueError:
+        finish(state, "error", "invalid_runtime_path", "Не удалось безопасно определить каталог TreeD UI.")
+        return True
+    rollback = runtime / f"ui.rollback.{operation_id}"
+    current = runtime / "ui"
+    if not rollback.is_dir() or rollback.is_symlink():
+        if current.is_dir() and not current.is_symlink() and ui_manifest_matches(
+            current / "treed-shell-ui-manifest.json", state.get("targetTag")
+        ) and wait_shell_ready(runtime):
+            finish(state, "applied", "ui_updated_recovered",
+                   "После прерывания подтверждена готовность новой версии TreeD UI.")
+            return True
+        return False
+    if current.is_symlink():
+        finish(state, "error", "rollback_failed", "Нельзя безопасно восстановить TreeD UI: текущий каталог является ссылкой.")
+        return True
+    try:
+        if current.exists():
+            shutil.rmtree(current)
+        os.replace(rollback, current)
+    except OSError:
+        finish(state, "error", "rollback_failed", "Не удалось вернуть файлы предыдущей версии TreeD UI.")
+        return True
+    service_name = os.environ.get("TREED_SHELL_SERVICE", "treed-shell.service")
+    try:
+        subprocess.run(["systemctl", "restart", service_name], check=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        finish(state, "error", "rollback_failed", "Файлы восстановлены, но служба TreeD UI не перезапустилась.")
+        return True
+    if not wait_shell_ready(runtime):
+        finish(state, "error", "rollback_failed", "Предыдущие файлы возвращены, но проверка TreeD UI не прошла.")
+        return True
+    finish(state, "rolled_back", "rollback_succeeded", "После прерывания восстановлена предыдущая версия TreeD UI.")
+    return True
+
+
+def ui_manifest_matches(path: Path, expected_tag: Any) -> bool:
+    if not isinstance(expected_tag, str):
+        return False
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    actual_tag = f"ui-main-{manifest.get('runNumber')}-{manifest.get('runAttempt')}"
+    return actual_tag == expected_tag and manifest.get("mode") == "live"
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv))
+    except (OSError, RuntimeError, ValueError) as error:
+        print(json.dumps({"accepted": False, "status": "error", "phase": "error",
+                          "message": str(error)}, ensure_ascii=False))
+        raise SystemExit(1)

@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 # ==========================================
 # Назначение:
 # - фиксирует fail-closed print guard update API;
-# - проверяет оба release target без запуска Moonraker/updater.
+# - проверяет UI print guard и system fail-closed без запуска updater.
 # Контур:
 # - runnable: использует Python smoke-test с fake Klippy API.
 
@@ -24,6 +24,7 @@ import importlib.util
 import pathlib
 import sys
 import tempfile
+import json
 
 repo = pathlib.Path(r"__REPO_ROOT__")
 path = repo / "moonraker" / "components" / "treed_update.py"
@@ -99,6 +100,28 @@ class FakeRequest:
         return self.values.get(key, default)
 
 
+class FakeProcess:
+    returncode = 0
+
+    async def communicate(self):
+        return (json.dumps({
+            "accepted": True,
+            "operationId": "operation-1",
+            "requestId": "request-1",
+            "status": "queued",
+            "phase": "queued",
+            "progress": 0,
+            "message": "Обновление поставлено в очередь.",
+        }).encode("utf-8"), b"")
+
+
+submissions = []
+
+async def fake_create_subprocess_exec(*args, **_kwargs):
+    submissions.append(args)
+    return FakeProcess()
+
+
 def available_status():
     return {
         "releaseResults": [
@@ -110,18 +133,6 @@ def available_status():
 
 async def build_component(temp_dir, print_state):
     component = module.TreeDUpdate(FakeConfig(temp_dir, print_state))
-    component.release_checks = 0
-    component.started = []
-
-    async def check_releases():
-        component.release_checks += 1
-        return available_status()
-
-    async def start_apply(target_id, target_tag):
-        component.started.append((target_id, target_tag))
-
-    component._check_releases = check_releases
-    component._start_apply = start_apply
     return component
 
 
@@ -134,44 +145,44 @@ async def assert_blocked(temp_dir, target_id, target_tag, print_state, status_co
     else:
         raise AssertionError(f"{target_id} must be blocked for print state {print_state!r}")
     assert component.server.klippy.queries == 1
-    assert component.release_checks == 0
-    assert component.started == []
     assert not component.state_file.exists()
 
 
 async def assert_allowed(temp_dir, target_id, target_tag):
     component = await build_component(temp_dir, "standby")
+    component.last_release_results = available_status()["releaseResults"]
     result = await component._handle_apply(FakeRequest(target_id, target_tag))
-    assert component.release_checks == 1
-    assert component.server.klippy.queries == 2
-    assert component.started == [(target_id, target_tag)]
+    assert component.server.klippy.queries == 1
+    assert submissions[-1][-2:] == (target_id, target_tag)
     assert result["busy"] is True
 
 
-async def assert_race_blocked(temp_dir, target_id, target_tag):
-    component = await build_component(temp_dir, ["standby", "printing"])
+async def assert_system_fail_closed(temp_dir):
+    component = await build_component(temp_dir, "standby")
     try:
-        await component._handle_apply(FakeRequest(target_id, target_tag))
+        await component._handle_apply(FakeRequest("printer-core", "v1.2.3"))
     except UpdateError as error:
         assert error.status_code == 409
     else:
-        raise AssertionError("print started during release-check must block update")
-    assert component.release_checks == 1
-    assert component.server.klippy.queries == 2
-    assert component.started == []
+        raise AssertionError("system update must be blocked without verified A/B capability")
+    assert component.server.klippy.queries == 0
     assert not component.state_file.exists()
 
 
 async def main():
-    with tempfile.TemporaryDirectory() as temp:
-        root = pathlib.Path(temp)
-        cases = (("printer-ui", "ui-main-10-1"), ("printer-core", "v1.2.3"))
-        for index, (target_id, target_tag) in enumerate(cases):
+    original_create = asyncio.create_subprocess_exec
+    asyncio.create_subprocess_exec = fake_create_subprocess_exec
+    try:
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            target_id, target_tag = "printer-ui", "ui-main-10-1"
             for print_state in ("printing", "paused"):
-                await assert_blocked(root / f"blocked-{index}-{print_state}", target_id, target_tag, print_state, 409)
-            await assert_blocked(root / f"unavailable-{index}", target_id, target_tag, None, 503)
-            await assert_race_blocked(root / f"race-{index}", target_id, target_tag)
-            await assert_allowed(root / f"allowed-{index}", target_id, target_tag)
+                await assert_blocked(root / f"blocked-{print_state}", target_id, target_tag, print_state, 409)
+            await assert_blocked(root / "unavailable", target_id, target_tag, None, 503)
+            await assert_allowed(root / "allowed", target_id, target_tag)
+            await assert_system_fail_closed(root / "system-blocked")
+    finally:
+        asyncio.create_subprocess_exec = original_create
 
 
 asyncio.run(main())

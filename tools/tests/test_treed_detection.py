@@ -175,7 +175,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                           'printer.print_stats.state == "printing"',
                           'gcode_macro _TREED_OPERATION_STATE', 'phase == "printing"'):
             self.assertIn(condition, guard)
-        self.assertIn("\n    CANCEL_PRINT\n  {% endif %}", guard)
+        self.assertIn("\n    CANCEL_PRINT REASON=spaghetti\n  {% endif %}", guard)
         pause = (ROOT / "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg").read_text(encoding="utf-8")
         self.assertIn("VARIABLE=generation", pause)
 

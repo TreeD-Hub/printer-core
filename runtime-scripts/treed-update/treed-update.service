@@ -1,0 +1,22 @@
+[Unit]
+Description=TreeD update worker
+After=network-online.target moonraker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+Environment=TREED_UPDATE_STATE_FILE=/var/lib/treed-update/state.json
+Environment=TREED_UPDATE_LOCK_FILE=/run/lock/treed-update.lock
+Environment=TREED_UPDATE_APPLY=/usr/local/sbin/treed-update-apply
+EnvironmentFile=-/etc/default/treed-update
+ExecStart=/usr/local/sbin/treed-update-service run
+ExecStopPost=/usr/local/sbin/treed-update-service recover
+TimeoutStartSec=30min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Запускается только вызовом submit; постоянное enable не требуется.

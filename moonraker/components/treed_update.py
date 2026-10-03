@@ -21,6 +21,7 @@ import logging
 import re
 import subprocess
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,8 +81,8 @@ class TreeDUpdate:
             "shell_manifest_path",
             "/home/pi/treed/treed-shell-runtime/ui/treed-shell-ui-manifest.json",
         ))
-        self.state_file = Path(config.get("state_file", "/tmp/treed-update-state.json"))
-        self.log_file = Path(config.get("log_file", "/tmp/treed-update-apply.log"))
+        self.state_file = Path(config.get("state_file", "/var/lib/treed-update/state.json"))
+        self.log_file = Path(config.get("log_file", "/var/log/treed-update/worker.log"))
         self.runtime_manifest_path = Path(config.get(
             "runtime_manifest_path",
             str(self.repo_path / "runtime-versions.env"),
@@ -95,7 +96,10 @@ class TreeDUpdate:
             "firmware_observation_file",
             "/tmp/treed-firmware-observed.json",
         ))
-        self.apply_command = config.get("apply_command", "/usr/bin/sudo -n /usr/local/sbin/treed-update-apply")
+        self.submit_command = config.get(
+            "submit_command",
+            "/usr/bin/sudo -n /usr/local/sbin/treed-update-service submit",
+        )
         self.shell_release_api_url = config.get(
             "printer_ui_release_api_url",
             config.get(
@@ -103,6 +107,7 @@ class TreeDUpdate:
                 "https://api.github.com/repos/TreeD-Hub/printer-ui/releases",
             ),
         )
+        self.shell_asset_name = config.get("shell_asset_name", "treed-shell-ui.zip")
         self.core_release_api_url = config.get(
             "printer_core_release_api_url",
             config.get(
@@ -138,60 +143,75 @@ class TreeDUpdate:
         )
 
     async def _handle_status(self, _web_request: object) -> Dict[str, Any]:
-        # Блок 4: Локальный статус без сетевого refresh.
-        return await self._with_firmware(self._build_status(None))
+        # Блок 4: Локальный статус без сети и медленного firmware inventory.
+        return self._build_status(None)
 
     async def _handle_check(self, _web_request: object) -> Dict[str, Any]:
-        # Блок 5: Refresh release data из GitHub Releases API.
-        return await self._with_firmware(await self._check_releases())
+        # Блок 5: Параллельный refresh release data с ограниченным временем ответа.
+        return await self._check_releases()
 
     async def _handle_firmware_status(self, _web_request: object) -> Dict[str, Any]:
         return await self._firmware_status()
 
     async def _handle_apply(self, web_request: object) -> Dict[str, Any]:
-        # Блок 6: Запуск update для явно выбранного release target.
+        # Блок 6: Быстрая передача запроса независимой root-службе.
         requested_target_id = _request_optional_string(web_request, "targetId") or "printer-core"
         target_id = _normalize_target_id(requested_target_id)
         if target_id is None:
-            raise self.server.error(f"unknown update target: {requested_target_id}")
-
-        await self._ensure_apply_allowed()
-        current_status = await self._check_releases()
-        target = _find_release(current_status["releaseResults"], target_id)
-        if target is None:
-            raise self.server.error(f"unknown update target: {requested_target_id}")
+            raise self.server.error(f"Неизвестная цель обновления: {requested_target_id}")
 
         requested_tag = _request_optional_string(web_request, "targetTag")
-        target_tag = requested_tag or target.get("latestTag")
+        request_id = _request_optional_string(web_request, "requestId") or str(uuid.uuid4())
+        if re.fullmatch(
+            r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}",
+            request_id,
+        ) is None:
+            raise self.server.error("requestId должен быть UUID", 400)
+
+        target = _find_release(self.last_release_results or [], target_id)
+        target_tag = requested_tag or (target.get("latestTag") if target else None)
         target_pattern = UI_TAG_RE if target_id == "printer-ui" else TAG_RE
         if not isinstance(target_tag, str) or target_pattern.match(target_tag) is None:
-            raise self.server.error("targetTag does not match the selected update target")
+            raise self.server.error("Тег выпуска не соответствует выбранной цели обновления.")
+        if target_id == "printer-core" and not self._ab_capability().get("supported"):
+            capability = self._ab_capability()
+            raise self.server.error(str(capability["reason"]), 409)
 
-        if target.get("status") != "available":
-            return await self._with_firmware(
-                self._build_status(f"Обновление {target_id} не требуется.")
-            )
-
-        state = self._read_state()
-        if state.get("busy") is True:
-            return await self._with_firmware(
-                self._build_status("Обновление уже выполняется.")
-            )
-
-        # Release-check может быть долгим: закрываем гонку со стартом печати.
         await self._ensure_apply_allowed()
-        self._write_state({
-            "status": "queued",
-            "busy": True,
-            "message": f"Queued update {target_tag}.",
+
+        command = [*self.submit_command.split(), request_id, target_id, target_tag]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=3)
+        except OSError as error:
+            LOGGER.exception("treed_update: cannot contact update service")
+            raise self.server.error("Не удалось передать обновление службе TreeD.", 503) from error
+        except asyncio.TimeoutError as error:
+            LOGGER.warning("treed_update: submit response timed out; operation remains queryable")
+            raise self.server.error("Проверяем состояние операции обновления.", 504) from error
+        response = _read_json_payload(stdout)
+        if process.returncode not in (0, 4) or response is None:
+            LOGGER.error("treed_update: submit failed: %s", stderr.decode("utf-8", "replace")[-1000:])
+            raise self.server.error("Не удалось передать обновление службе TreeD.", 503)
+
+        response.update({
+            "available": True,
+            "busy": response.get("status") in {
+                "queued", "validating", "downloading", "installing",
+                "restarting", "verifying", "rolling_back",
+            },
+            "canApply": False,
             "targetId": target_id,
             "targetTag": target_tag,
-            "exitCode": 0,
+            "releaseResults": self.last_release_results or [],
+            "logPath": str(self.log_file),
         })
-        await self._start_apply(target_id, target_tag)
-        return await self._with_firmware(
-            self._build_status(f"Запущено обновление {target_tag}.")
-        )
+        # POST возвращает подтверждение приема и не ждёт release API/firmware inventory.
+        return response
 
     async def _with_firmware(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         payload["firmware"] = await self._firmware_status()
@@ -349,7 +369,7 @@ class TreeDUpdate:
             )
         except Exception as error:
             raise self.server.error(
-                "printer state is unavailable; update apply is blocked",
+                "Состояние принтера недоступно; обновление заблокировано.",
                 503,
             ) from error
 
@@ -361,12 +381,12 @@ class TreeDUpdate:
         )
         if not print_state:
             raise self.server.error(
-                "printer state is unavailable; update apply is blocked",
+                "Состояние принтера недоступно; обновление заблокировано.",
                 503,
             )
         if print_state in {"printing", "paused"}:
             raise self.server.error(
-                "updates are unavailable during active print",
+                "Обновление недоступно во время печати или паузы.",
                 409,
             )
 
@@ -374,8 +394,9 @@ class TreeDUpdate:
         # Блок 7: Проверка обоих release targets.
         targets = self._build_targets()
         release_results: List[Dict[str, Any]] = []
-        for target in targets:
-            release_results.append(await self._check_target(target))
+        release_results = list(await asyncio.gather(
+            *(self._check_target(target) for target in targets)
+        ))
         self.last_release_results = release_results
         available_count = sum(result.get("status") == "available" for result in release_results)
         error_count = sum(result.get("status") == "error" for result in release_results)
@@ -407,20 +428,40 @@ class TreeDUpdate:
         message: Optional[str],
     ) -> Dict[str, Any]:
         state = self._read_state()
+        capability = self._ab_capability()
         is_busy = state.get("busy") is True
         for release in release_results:
             release["canApply"] = release.get("status") == "available" and not is_busy
+            if release.get("id") == "printer-core":
+                release["capability"] = capability
+                release["canApply"] = release["canApply"] and capability.get("supported") is True
         can_apply = any(release.get("canApply") is True for release in release_results)
 
         return {
             "available": True,
             "busy": is_busy,
             "canApply": can_apply,
-            "message": message or str(state.get("message") or "Update status ready."),
+            "message": message or str(state.get("message") or "Состояние обновлений готово."),
             "targetId": _normalize_target_id(state.get("targetId")),
             "targetTag": state.get("targetTag"),
+            "operationId": state.get("operationId"),
+            "requestId": state.get("requestId"),
+            "status": state.get("status", "idle"),
+            "phase": state.get("phase", "idle"),
+            "progress": state.get("progress"),
+            "resultCode": state.get("resultCode"),
+            "operation": _operation_snapshot(state),
+            "latestOperation": _operation_snapshot(state),
+            "history": state.get("history", []) if isinstance(state.get("history"), list) else [],
             "logPath": str(self.log_file),
             "releaseResults": release_results,
+        }
+
+    def _ab_capability(self) -> Dict[str, Any]:
+        return {
+            "supported": False,
+            "reasonCode": "ab_update_backend_incomplete",
+            "reason": "Обновление системы недоступно: не подтверждены A/B-платформа, подписанный пакет и проверка новой системы.",
         }
 
     def _build_targets(self) -> List[ReleaseTarget]:
@@ -472,6 +513,17 @@ class TreeDUpdate:
             if latest_tag is None:
                 return _result(target, None, None, "unknown", "Подходящий release не найден.")
 
+            if target.id == "printer-ui" and not _has_verified_ui_asset(
+                releases, latest_tag, self.shell_asset_name
+            ):
+                return _result(
+                    target,
+                    latest_tag,
+                    latest_tag,
+                    "unknown",
+                    "В выпуске нет UI bundle с контрольной суммой SHA-256.",
+                )
+
             if target.version_scheme == "tag":
                 status = "available" if target.current_version != latest_tag else "latest"
                 message = "Доступен новый UI bundle." if status == "available" else "Установлен последний UI bundle."
@@ -494,36 +546,17 @@ class TreeDUpdate:
             return _result(target, latest_tag, latest_version, status, message)
         except Exception as err:
             LOGGER.exception("treed_update: release check failed for %s", target.id)
-            return _result(target, None, None, "error", str(err))
-
-    async def _start_apply(self, target_id: str, target_tag: str) -> None:
-        command = [*self.apply_command.split(), target_id, target_tag]
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        await asyncio.sleep(0.2)
-        if process.returncode is not None and process.returncode != 0:
-            self._write_state({
-                "status": "error",
-                "busy": False,
-                "message": "Failed to start updater command.",
-                "targetId": target_id,
-                "targetTag": target_tag,
-                "exitCode": process.returncode,
-            })
-            raise self.server.error("failed to start treed update")
+            return _result(target, None, None, "error", "Не удалось проверить выпуск. Повторите попытку позже.")
 
     def _read_state(self) -> Dict[str, Any]:
         if not self.state_file.is_file():
             return {
                 "status": "idle",
                 "busy": False,
-                "message": "Update idle.",
+                "message": "Обновления не запускались.",
+                "phase": "idle",
                 "targetTag": None,
-                "exitCode": 0,
+                "history": [],
             }
         try:
             state = json.loads(self.state_file.read_text(encoding="utf-8"))
@@ -531,24 +564,47 @@ class TreeDUpdate:
             LOGGER.exception("treed_update: failed to read state")
             return {
                 "status": "error",
-                "busy": False,
-                "message": "Update state is unreadable.",
+                "busy": True,
+                "message": "Не удалось прочитать состояние обновления.",
+                "phase": "error",
+                "resultCode": "state_unreadable",
                 "targetTag": None,
-                "exitCode": 1,
+                "history": [],
             }
-        return state if isinstance(state, dict) else {}
-
-    def _write_state(self, state: Dict[str, Any]) -> None:
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        self.state_file.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        if not isinstance(state, dict):
+            return {
+                "status": "error",
+                "phase": "error",
+                "busy": True,
+                "message": "Состояние обновления повреждено; запуск заблокирован.",
+                "resultCode": "state_invalid",
+                "history": [],
+            }
+        return state
 
 
 # Блок 9: Pure helpers firmware status.
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _read_json_payload(raw: bytes) -> Optional[Dict[str, Any]]:
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _operation_snapshot(state: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    operation_id = state.get("operationId")
+    if not isinstance(operation_id, str):
+        return None
+    fields = (
+        "operationId", "requestId", "status", "phase", "progress", "resultCode",
+        "message", "targetId", "targetTag", "startedAt", "updatedAt", "finishedAt",
+    )
+    return {key: state.get(key) for key in fields}
 
 
 def _read_env_manifest(path: Path) -> Dict[str, str]:
@@ -751,7 +807,7 @@ def _fetch_releases(api_url: str) -> List[Dict[str, Any]]:
             "User-Agent": "printer-core-update",
         },
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(request, timeout=7) as response:
         body = json.load(response)
     if not isinstance(body, list):
         raise ValueError("GitHub Releases returned invalid payload")
@@ -766,6 +822,25 @@ def _find_latest_tag(releases: List[Dict[str, Any]], tag_prefix: str) -> Optiona
         if isinstance(tag_name, str) and tag_name.startswith(tag_prefix):
             return tag_name
     return None
+
+
+def _has_verified_ui_asset(
+    releases: List[Dict[str, Any]], tag: str, asset_name: str
+) -> bool:
+    for release in releases:
+        if release.get("tag_name") != tag or release.get("draft") or release.get("prerelease"):
+            continue
+        for asset in release.get("assets") or []:
+            digest = asset.get("digest") if isinstance(asset, dict) else None
+            if (
+                isinstance(asset, dict)
+                and asset.get("name") == asset_name
+                and isinstance(asset.get("browser_download_url"), str)
+                and isinstance(digest, str)
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", digest)
+            ):
+                return True
+    return False
 
 
 def _normalize_semver(value: str) -> Optional[str]:

@@ -61,7 +61,7 @@ Assert-Before $pause '(?m)^\s*_TREED_OPERATION_REQUIRE OP=resume\s*$' '(?m)^\s*_
 Assert-Before $pauseExec '_TREED_OPERATION_REQUIRE OP=pause' '(?m)^\s*PAUSE_BASE\s*$' "direct pause helper must not bypass admission"
 Assert-Before $resumeExec '_TREED_OPERATION_REQUIRE OP=resume' '(?m)^\s*G1 E50 F600\s*$' "direct resume helper must not bypass admission"
 Assert-Before $filament '_TREED_OPERATION_REQUIRE OP=filament' '_FILAMENT_SENSOR_GUARD_START DURATION=' "filament admission must precede sensor changes and extrusion"
-Assert-Before $m600 '(?m)^\s*PAUSE\s*$' '(?m)^\s*M400\s*$' "M600 must finish parking before checking temperature"
+Assert-Before $m600 '(?m)^\s*PAUSE REASON=filament_change\s*$' '(?m)^\s*M400\s*$' "M600 must finish filament-change parking before checking temperature"
 Assert-Before $m600 '(?m)^\s*M400\s*$' '(?m)^\s*_TREED_M600_UNLOAD UNLOAD_TEMP=' "M600 must invoke unload helper after parking"
 if ($m600 -match 'can_extrude|M109|UNLOAD_FILAMENT LENGTH=') { throw "FAIL: M600 must defer temperature check and unload to its helper" }
 Assert-Before $m600Unload 'if not printer\.extruder\.can_extrude' '(?m)^\s*M109 S\{unload_temp\}\s*$' "M600 helper must read current temperature before heating"

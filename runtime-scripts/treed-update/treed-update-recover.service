@@ -1,0 +1,21 @@
+[Unit]
+Description=Recover interrupted TreeD update operation state
+DefaultDependencies=no
+After=local-fs.target treed-shell.service
+Before=moonraker.service
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+Environment=TREED_UPDATE_STATE_FILE=/var/lib/treed-update/state.json
+Environment=TREED_UPDATE_LOCK_FILE=/run/lock/treed-update.lock
+EnvironmentFile=-/etc/default/treed-update
+ExecStart=/usr/local/sbin/treed-update-service recover
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
