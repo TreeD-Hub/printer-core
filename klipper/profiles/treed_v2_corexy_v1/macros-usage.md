@@ -5,6 +5,11 @@
 
 ## 1. Как вызывать макросы
 
+Режимы XYZ и обдува задаются независимо командами
+`TREED_UI_SET_DRIVER_MODE MODE=quiet|normal` и
+`TREED_UI_SET_DRIVER_FAN_MODE MODE=quiet|normal`.
+[Допуск, сохранение и тихие профили](ui-driver-modes-contract.md).
+
 Макросы вызываются из консоли Mainsail/Fluidd/KlipperScreen или через Moonraker `printer.gcode.script`.
 
 Пример для консоли:

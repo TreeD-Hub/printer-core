@@ -14,6 +14,7 @@
 5. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
 6. `profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg`
 7. `profiles/treed_v2_corexy_v1/steppers.cfg`
+   Затем `profiles/treed_v2_corexy_v1/driver_mode.cfg` — runtime-режим XYZ.
 8. `profiles/treed_v2_corexy_v1/z_recovery.cfg`
 9. `profiles/treed_v2_corexy_v1/motion_guard.cfg`
 10. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
@@ -41,6 +42,9 @@
 Контракт UI live-тюнинга описан в `ui-runtime-tune-contract.md`: публичные `TREED_UI_*` команды, диапазоны, ошибки и Moonraker state surface.
 
 Методичка по ручному и UI-использованию макросов профиля: `macros-usage.md`.
+
+[Независимые режимы XYZ и обдува](ui-driver-modes-contract.md): команды,
+Moonraker-состояние, сохранение и обязательная аппаратная приёмка тихих профилей.
 
 `ui.cfg` подключает обязательный `[treed_print_cancel]`; loader доставляет
 `klipper-host/treed_print_cancel.py` вместе с остальными host-расширениями.

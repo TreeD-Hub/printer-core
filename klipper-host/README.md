@@ -3,6 +3,10 @@
 `loader/steps/runtime-bootstrap.sh` копирует эти модули в `klippy/extras`
 закреплённого Klipper. Здесь хранятся расширения для профиля `treed_v2_corexy_v1`.
 
+`treed_driver_mode.py` управляет режимом TMC5160 XYZ, с допуском и групповым откатом.
+`treed_driver_fan_mode.py` меняет профиль штатного controller_fan без сброса автоматики.
+[Команды, сохранение и аппаратный допуск](../klipper/profiles/treed_v2_corexy_v1/ui-driver-modes-contract.md).
+
 `treed_print_cancel.py` подключается секцией `[treed_print_cancel]` в `ui.cfg`.
 Штатный `/printer/print/cancel` и одиночный `CANCEL_PRINT` через Moonraker
 сигнализируют отмену до ожидания G-code mutex: нагрев выключается, SD-чтение

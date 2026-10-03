@@ -114,6 +114,8 @@ ensure_repo_present() {
   if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
     runtime_repo_add_excludes "${repo_dir}" \
       '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/treed_driver_*.py' \
+      '/klippy/extras/__pycache__/treed_driver_*.pyc' \
       '/klippy/extras/treed_sgt_calibration.py' \
       '/klippy/extras/treed_sgt_executor.py' \
       '/klippy/extras/treed_z_recovery.py' \
@@ -138,6 +140,8 @@ ensure_repo_present() {
   if [ "${repo_dir}" = "${KLIPPER_DIR}" ]; then
     runtime_repo_add_excludes "${repo_dir}" \
       '/klippy/extras/treed_motor_*.py' \
+      '/klippy/extras/treed_driver_*.py' \
+      '/klippy/extras/__pycache__/treed_driver_*.pyc' \
       '/klippy/extras/treed_sgt_calibration.py' \
       '/klippy/extras/treed_sgt_executor.py' \
       '/klippy/extras/treed_z_recovery.py' \
@@ -602,8 +606,8 @@ motor_guard="${REPO_DIR}/klipper-host/treed_motor_guard.py"
 [ -f "${motor_guard}" ] || { log_error "runtime-bootstrap: missing motor guard"; exit 1; }
 install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${motor_guard}" "${KLIPPER_DIR}/klippy/extras/treed_motor_guard.py"
 
-# SGT, нижняя опора Z, счётчик филамента и прерывание печати: доставка обязательна.
-for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py klipper-host/treed_filament_motion_sensor.py klipper-host/treed_print_cancel.py; do
+# SGT, Z, филамент, отмена и режимы драйверов/обдува: доставка обязательна.
+for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py klipper-host/treed_filament_motion_sensor.py klipper-host/treed_print_cancel.py klipper-host/treed_driver_mode.py klipper-host/treed_driver_fan_mode.py; do
   [ -f "${REPO_DIR}/${sgt_source}" ] || { log_error "runtime-bootstrap: missing ${sgt_source}"; exit 1; }
   install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${REPO_DIR}/${sgt_source}" \
     "${KLIPPER_DIR}/klippy/extras/${sgt_source##*/}"

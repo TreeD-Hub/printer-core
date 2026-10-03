@@ -100,6 +100,11 @@ TMP_KEEP=""
 if [ "${DEPLOY_MODE}" = "preserve" ]; then
   TMP_KEEP="$(mktemp -d)"
 
+  # Настройки режимов и калибровки принадлежат принтеру, а не staging.
+  if [ -f "${CONFIG_DIR}/treed_variables.cfg" ]; then
+    cp -a "${CONFIG_DIR}/treed_variables.cfg" "${TMP_KEEP}/" || { log_error "klipper-core: cannot preserve treed_variables.cfg"; exit 1; }
+  fi
+
   if [ -e "${CONFIG_DIR}/local_overrides.cfg" ]; then
     cp -a "${CONFIG_DIR}/local_overrides.cfg" "${TMP_KEEP}/" || true
     log_info "klipper-core: preserve mode, saving local_overrides.cfg"
@@ -130,7 +135,7 @@ if [ "${DEPLOY_MODE}" = "preserve" ]; then
     fi
   fi
 
-  if [ ! -e "${TMP_KEEP}/local_overrides.cfg" ] && [ ! -e "${TMP_KEEP}/filament_motion_runtime.cfg" ] && [ ! -e "${TMP_KEEP}/printer_save_config.block" ]; then
+  if [ ! -e "${TMP_KEEP}/local_overrides.cfg" ] && [ ! -e "${TMP_KEEP}/filament_motion_runtime.cfg" ] && [ ! -e "${TMP_KEEP}/printer_save_config.block" ] && [ ! -e "${TMP_KEEP}/treed_variables.cfg" ]; then
     log_info "klipper-core: preserve mode, no local runtime overrides found"
   fi
 else
@@ -161,6 +166,9 @@ fi
 # Блок 7: Возврат preserve-override и финальная нормализация runtime.
 # Возврат локальных runtime-overrides только в режиме preserve.
 if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
+  if [ -f "${TMP_KEEP}/treed_variables.cfg" ]; then
+    cp -a "${TMP_KEEP}/treed_variables.cfg" "${CONFIG_DIR}/" || { log_error "klipper-core: cannot restore treed_variables.cfg (${TMP_KEEP})"; exit 1; }
+  fi
   if [ -f "${TMP_KEEP}/local_overrides.cfg" ]; then
     cp -a "${TMP_KEEP}/local_overrides.cfg" "${CONFIG_DIR}/" || true
     # Убираем устаревшие переключатели, сохраняя локальное значение Z-hop.

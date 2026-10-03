@@ -69,6 +69,9 @@ Runtime:
 
 Локальные runtime-overrides:
 - `${PI_HOME}/printer_data/config/local_overrides.cfg`
+- `${PI_HOME}/printer_data/config/treed_variables.cfg` — штатный `save_variables`,
+  включая режимы XYZ и обдува. `klipper-core.sh` сохраняет его в `preserve`
+  с явной ошибкой при сбое копирования; `clean` сбрасывает настройки.
 
 CAN-host слой:
 - `/etc/default/treed-can-setup`

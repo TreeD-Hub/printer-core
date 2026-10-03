@@ -2,6 +2,10 @@
 
 Каталог `loader/steps/` содержит атомарные этапы provisioning. Порядок и тип шага (`required`/`optional`) задаются в `loader/loader.sh`.
 
+`runtime-bootstrap.sh` обязательно доставляет `treed_driver_mode.py` и
+`treed_driver_fan_mode.py`. `klipper-core.sh` сохраняет `treed_variables.cfg`
+в режиме `preserve` с fail-fast при ошибке копирования; `clean` сбрасывает его.
+
 ## Порядок выполнения
 
 | # | Шаг | Тип | Назначение |
