@@ -1,7 +1,6 @@
 """Проверка путей камеры в изолированной установке; без сервисов и устройства."""
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 import unittest
