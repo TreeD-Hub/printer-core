@@ -13,7 +13,6 @@
 
 Содержит навыки Codex:
 
-- `treed-mainshellos-audit` — project-specific аудитный skill.
 - `comment-style` — универсальный skill форматирования/проверки комментариев.
 - `readme-coverage` — универсальный skill покрытия README.
 

@@ -185,6 +185,7 @@
 - скачивает release asset `treed-shell-ui.zip`;
 - проверяет и распаковывает UI bundle в `${TREED_SHELL_WEB_DIR}`;
 - пишет kiosk launcher в `${TREED_SHELL_RUNTIME_DIR}/start-treed-shell-kiosk.sh`;
+- добавляет хеш `index.html` к URL киоска, чтобы Chromium не открывал прошлую страницу из кэша после замены bundle;
 - создает `treed-shell.service`;
 - ставит команду `/usr/local/sbin/treed-ui` и symlink `/usr/local/bin/treed-ui`.
 

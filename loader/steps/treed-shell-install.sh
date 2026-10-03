@@ -395,6 +395,10 @@ case "\${CHROMIUM_RENDERING}" in
     ;;
 esac
 
+# Хеш entrypoint меняет ключ кэша Chromium после замены UI bundle.
+UI_INDEX_HASH=\$(sha256sum "\${UI_DIR}/index.html")
+URL="\${URL}?ui=\${UI_INDEX_HASH%% *}"
+
 "\${BROWSER}" \${CHROMIUM_FLAGS} \\
   --window-size="\${WINDOW_SIZE}" \\
   --window-position="\${WINDOW_POSITION}" \\
