@@ -461,10 +461,44 @@ _TREED_SERVICE_COMMANDS
 ### Обычная печать из слайсера
 
 ```gcode
-START_PRINT BED_TEMP=[first_layer_bed_temperature] EXTRUDER_TEMP=[first_layer_temperature]
+START_PRINT BED_TEMP=[first_layer_bed_temperature] EXTRUDER_TEMP=[first_layer_temperature] TOTAL_LAYER=[total_layer_count]
 ; печатный G-code
 END_PRINT
 ```
+
+### Текущий слой в OrcaSlicer и TreeD UI
+
+В настройках принтера OrcaSlicer → Machine G-code:
+
+- В существующую строку `START_PRINT` добавить `TOTAL_LAYER=[total_layer_count]`,
+  сохранив остальные параметры и object labels для adaptive mesh.
+- В `Layer change G-code` (после смены слоя) добавить:
+
+```gcode
+SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num}
+```
+
+В актуальном OrcaSlicer `layer_num` в этом поле начинается с `1`:
+[переменные слайсера](https://github.com/OrcaSlicer/OrcaSlicer/wiki/built_in_placeholders_variables).
+Перед печатью проверить экспорт: первая команда должна содержать `CURRENT_LAYER=1`,
+последняя — номер последнего слоя. Для старой версии, экспортирующей первый слой
+как `0`, использовать `{layer_num + 1}`. Не добавлять `+1` к уже единичной нумерации.
+При печати объектов по очереди сверить экспортированный счётчик со всей задачей.
+
+`START_PRINT` проверяет `TOTAL_LAYER` до нагрева и движения и публикует `0 / N`
+на подготовке. Параметр необязателен: без него используется ранее переданный
+`SET_PRINT_STATS_INFO TOTAL_LAYER=...`; если числа слоёв нет, Klipper публикует
+неизвестные значения. `TOTAL_LAYER=0` явно очищает оба поля.
+Пауза и возобновление сохраняют счётчик; новая SD-задача сбрасывает предыдущий.
+Источник UI — `print_stats.info.current_layer` и `print_stats.info.total_layer`
+через Moonraker, согласно [контракту Klipper](https://www.klipper3d.org/Status_Reference.html#print_stats).
+Высота Z и процент выполнения не используются для вычисления слоя.
+
+Уже нарезанные файлы без этих команд нужно перенарезать. Комментарии
+`;LAYER_CHANGE` сами по себе не обновляют `print_stats`. Если в файле есть только
+`TOTAL_LAYER`, значение останется `0 / N` и не будет означать текущий слой модели.
+Изменения профиля и UI нужно доставить штатным обновлением; настройка слайсера
+не обновляет конфиги устройства автоматически.
 
 ### Ручная загрузка филамента
 

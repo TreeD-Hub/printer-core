@@ -43,6 +43,10 @@
 
 Методичка по ручному и UI-использованию макросов профиля: `macros-usage.md`.
 
+Фактические слои печати: `START_PRINT ... TOTAL_LAYER=N` и штатный
+`SET_PRINT_STATS_INFO CURRENT_LAYER=N` на каждой смене слоя.
+[Настройка OrcaSlicer и Moonraker-контракт](macros-usage.md#текущий-слой-в-orcaslicer-и-treed-ui).
+
 [Независимые режимы XYZ и обдува](ui-driver-modes-contract.md): команды,
 Moonraker-состояние, сохранение и обязательная аппаратная приёмка тихих профилей.
 

@@ -1,4 +1,4 @@
-"""Read-only: рендер контрактов света, событий и допуска филамента; без устройства."""
+"""Read-only: рендер контрактов света, событий, слоёв и допуска; без устройства."""
 import configparser
 from pathlib import Path
 import unittest
@@ -19,6 +19,29 @@ def render(filename, section, printer, **params):
 
 # Блок 2: Дефолты, сохранение независимых флагов, проверка входа и guard.
 class LightEventTests(unittest.TestCase):
+    def render_start(self, total_layer=None, **params):
+        printer = {
+            "print_stats": {"info": {"total_layer": total_layer}},
+            "configfile": {"settings": {"extruder": {
+                "min_extrude_temp": 170, "max_extrude_cross_section": 5}}},
+            "exclude_object": {"objects": [{"polygon": [[10, 10], [20, 20]]}]},
+        }
+        return render("macros_print_flow.cfg", "gcode_macro _TREED_START_PREP_STATE",
+                      printer, BED_TEMP="60", EXTRUDER_TEMP="220", **params)
+
+    def test_start_initializes_layers_and_preserves_native_slicer_total(self):
+        for saved_total, params, expected in [
+                (None, {"TOTAL_LAYER": "218"}, 218),
+                (96, {}, 96), (None, {}, 0), (96, {"TOTAL_LAYER": "0"}, 0)]:
+            with self.subTest(saved_total=saved_total, params=params):
+                result = self.render_start(saved_total, **params)
+                self.assertIn(f"SET_PRINT_STATS_INFO TOTAL_LAYER={expected} CURRENT_LAYER=0", result)
+
+    def test_start_rejects_invalid_layer_count_before_commands(self):
+        for value in ["-1", "1.5", "nan", "inf", "", "bad", "1\nG28"]:
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, "TOTAL_LAYER"):
+                self.render_start(TOTAL_LAYER=value)
+
     def test_changed_templates_compile(self):
         for filename in ["service_fans.cfg", "macros_events.cfg", "macros_print_flow.cfg",
                          "macros_pause_resume.cfg", "filament_sensor.cfg", "gcode_features.cfg", "macros_camera.cfg"]:
