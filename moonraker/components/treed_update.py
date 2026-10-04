@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -71,6 +72,20 @@ GIT_VERSION_RE = re.compile(r"(?:^|-)g([0-9a-fA-F]{7,40})(-dirty)?$")
 PLAIN_SHA_RE = re.compile(r"^([0-9a-fA-F]{7,40})(-dirty)?$")
 
 
+def _atomic_write_config(path: Path, data: bytes) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 class TreeDUpdate:
     def __init__(self, config: ConfigHelper) -> None:
         # Блок 3: Конфиг путей, release API и публичных endpoints.
@@ -88,6 +103,9 @@ class TreeDUpdate:
         ))
         self.state_file = Path(config.get("state_file", "/var/lib/treed-update/state.json"))
         self.log_file = Path(config.get("log_file", "/var/log/treed-update/worker.log"))
+        overrides_path = config.get("local_overrides_path", None)
+        self.local_overrides_path = Path(overrides_path) if overrides_path else None
+        self.settings_lock = asyncio.Lock()
         self.runtime_manifest_path = Path(config.get(
             "runtime_manifest_path",
             str(self.repo_path / "runtime-versions.env"),
@@ -146,6 +164,12 @@ class TreeDUpdate:
             self._handle_firmware_status,
             wrap_result=False,
         )
+        self.server.register_endpoint(
+            "/server/treed/settings/reset",
+            ["POST"],
+            self._handle_reset_overrides,
+            wrap_result=False,
+        )
 
     async def _handle_status(self, _web_request: object) -> Dict[str, Any]:
         # Блок 4: Локальный статус без сети и медленного firmware inventory.
@@ -159,6 +183,47 @@ class TreeDUpdate:
         return await self._firmware_status()
 
     async def _handle_apply(self, web_request: object) -> Dict[str, Any]:
+        async with self.settings_lock:
+            return await self._submit_update(web_request)
+
+    async def _handle_reset_overrides(self, web_request: object) -> Dict[str, Any]:
+        # Сброс явно подтверждается пользователем и затрагивает только локальный override.
+        if getattr(web_request, "get")("confirm", False) is not True:
+            raise self.server.error("Подтвердите сброс локальных настроек.", 400)
+        async with self.settings_lock:
+            path = self.local_overrides_path
+            if path is None:
+                raise self.server.error("Путь локальных настроек не настроен.", 501)
+            await self._ensure_apply_allowed()
+            if self._build_status(None)["busy"]:
+                raise self.server.error("Дождитесь завершения обновления.", 409)
+            if path.is_symlink() or (path.exists() and not path.is_file()):
+                raise self.server.error("Локальные настройки должны быть обычным файлом.", 409)
+            backup = None
+            try:
+                if path.exists():
+                    backup = path.with_name(f"{path.name}.{uuid.uuid4().hex}.bak")
+                    _atomic_write_config(backup, path.read_bytes())
+                # Пустой override возвращает значения установленного профиля.
+                _atomic_write_config(path, b"")
+            except OSError as error:
+                raise self.server.error("Не удалось сохранить копию или сбросить настройки.", 500) from error
+            restart_required = True
+            try:
+                await self.klippy_apis.run_gcode("TURN_OFF_HEATERS")
+                await self.klippy_apis.do_restart("RESTART")
+                restart_required = False
+            except Exception:
+                LOGGER.exception("treed_update: settings reset needs Klipper restart")
+            return {
+                "reset": True,
+                "backupPath": str(backup) if backup else None,
+                "restartRequired": restart_required,
+                "message": "Настройки сброшены. Перезапустите Klipper для применения."
+                if restart_required else "Настройки сброшены. Klipper перезапускается.",
+            }
+
+    async def _submit_update(self, web_request: object) -> Dict[str, Any]:
         # Блок 6: Быстрая передача запроса независимой root-службе.
         requested_target_id = _request_optional_string(web_request, "targetId") or "printer-core"
         target_id = _normalize_target_id(requested_target_id)
@@ -182,7 +247,10 @@ class TreeDUpdate:
             capability = self._core_capability()
             raise self.server.error(str(capability["reason"]), 409)
 
-        await self._ensure_apply_allowed()
+        cancel_paused_print = getattr(web_request, "get")("cancelPausedPrint", False) is True
+        if cancel_paused_print and self._build_status(None)["busy"]:
+            raise self.server.error("Другое обновление уже выполняется.", 409)
+        await self._ensure_apply_allowed(cancel_paused_print=cancel_paused_print)
 
         command = [*self.submit_command.split(), request_id, target_id, target_tag]
         try:
@@ -365,7 +433,7 @@ class TreeDUpdate:
             "mcus": mcus,
         }
 
-    async def _ensure_apply_allowed(self) -> None:
+    async def _ensure_apply_allowed(self, *, cancel_paused_print: bool = False) -> None:
         # Apply fail-closed: updater не запускается без достоверного print state.
         try:
             objects = await self.klippy_apis.query_objects(
@@ -384,11 +452,19 @@ class TreeDUpdate:
             if isinstance(print_stats, dict)
             else ""
         )
-        if not print_state:
+        if print_state not in {"standby", "complete", "cancelled", "error", "printing", "paused"}:
             raise self.server.error(
                 "Состояние принтера недоступно; обновление заблокировано.",
                 503,
             )
+        if print_state == "paused" and cancel_paused_print:
+            # Отмена допустима только после отдельного подтверждения в UI.
+            try:
+                await self.klippy_apis.run_gcode("CANCEL_PRINT")
+            except Exception as error:
+                raise self.server.error("Не удалось отменить печать перед обновлением.", 409) from error
+            await self._ensure_apply_allowed()
+            return
         if print_state in {"printing", "paused"}:
             raise self.server.error(
                 "Обновление недоступно во время печати или паузы.",
@@ -446,6 +522,7 @@ class TreeDUpdate:
             "available": True,
             "busy": is_busy,
             "canApply": can_apply,
+            "canResetOverrides": self.local_overrides_path is not None and not is_busy,
             "message": message or str(state.get("message") or "Состояние обновлений готово."),
             "targetId": _normalize_target_id(state.get("targetId")),
             "targetTag": state.get("targetTag"),

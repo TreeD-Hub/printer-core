@@ -105,8 +105,12 @@ if [ "${DEPLOY_MODE}" = "preserve" ]; then
     cp -a "${CONFIG_DIR}/treed_variables.cfg" "${TMP_KEEP}/" || { log_error "klipper-core: cannot preserve treed_variables.cfg"; exit 1; }
   fi
 
-  if [ -e "${CONFIG_DIR}/local_overrides.cfg" ]; then
-    cp -a "${CONFIG_DIR}/local_overrides.cfg" "${TMP_KEEP}/" || true
+  if [ -e "${CONFIG_DIR}/local_overrides.cfg" ] || [ -L "${CONFIG_DIR}/local_overrides.cfg" ]; then
+    if [ ! -f "${CONFIG_DIR}/local_overrides.cfg" ] || [ -L "${CONFIG_DIR}/local_overrides.cfg" ]; then
+      log_error "klipper-core: local_overrides.cfg must be a regular file; refusing to rebuild runtime"
+      exit 1
+    fi
+    cp -a "${CONFIG_DIR}/local_overrides.cfg" "${TMP_KEEP}/" || { log_error "klipper-core: cannot preserve local_overrides.cfg"; exit 1; }
     log_info "klipper-core: preserve mode, saving local_overrides.cfg"
   fi
 
@@ -170,7 +174,7 @@ if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
     cp -a "${TMP_KEEP}/treed_variables.cfg" "${CONFIG_DIR}/" || { log_error "klipper-core: cannot restore treed_variables.cfg (${TMP_KEEP})"; exit 1; }
   fi
   if [ -f "${TMP_KEEP}/local_overrides.cfg" ]; then
-    cp -a "${TMP_KEEP}/local_overrides.cfg" "${CONFIG_DIR}/" || true
+    cp -a "${TMP_KEEP}/local_overrides.cfg" "${CONFIG_DIR}/" || { log_error "klipper-core: cannot restore local_overrides.cfg (${TMP_KEEP})"; exit 1; }
     # Убираем устаревшие переключатели, сохраняя локальное значение Z-hop.
     sed -i \
       -e '/^\[include profiles\/treed_v2_corexy_v1\/eddy_force_move_calibration\.cfg\]$/d' \

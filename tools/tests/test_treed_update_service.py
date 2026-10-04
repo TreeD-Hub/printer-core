@@ -29,6 +29,39 @@ class FakeLock:
 
 
 class UpdateServiceTests(unittest.TestCase):
+    def test_override_copy_failure_aborts_before_runtime_rebuild(self):
+        git = shutil.which("git")
+        bash = str(Path(git).parents[1] / "bin/bash.exe") if sys.platform == "win32" and git else shutil.which("bash")
+        if not bash or not Path(bash).is_file():
+            self.skipTest("Bash недоступен для проверки сохранения override")
+        loader = (ROOT / "loader/steps/klipper-core.sh").read_text(encoding="utf-8")
+        block = loader.split("# Блок 4:", 1)[1].split("# Блок 5:", 1)[0].split("\n", 1)[1]
+        # Достижение следующего блока означает разрешение на полную раскладку runtime.
+        for fails in (False, True):
+            with self.subTest(copy_fails=fails), tempfile.TemporaryDirectory() as temp:
+                config = Path(temp) / "config"
+                config.mkdir()
+                override = config / "local_overrides.cfg"
+                override.write_bytes(b"[extruder]\npressure_advance: 0.123\n")
+                prelude = 'set -e\nTMPDIR="$PWD"\nDEPLOY_MODE=preserve\nCONFIG_DIR=./config\nlog_info() { :; }\nlog_error() { :; }\n'
+                if fails:
+                    prelude += 'cp() { return 1; }\n'
+                script = prelude + block + '\ntouch rebuild_allowed\n'
+                result = subprocess.run([bash, "-c", script], cwd=temp, capture_output=True)
+                self.assertEqual(result.returncode, 1 if fails else 0, result.stderr)
+                self.assertEqual((Path(temp) / "rebuild_allowed").exists(), not fails)
+                self.assertEqual(override.read_bytes(), b"[extruder]\npressure_advance: 0.123\n")
+
+    def test_printer_guard_ignores_stale_flags_but_rejects_active_and_unknown_jobs(self):
+        for state, expected in ((" CANCELLED ", True), ("complete", True), ("standby", True),
+                                ("error", True), ("paused", False), ("printing", False),
+                                ("unknown", False), ("", False), (None, False)):
+            payload = {"result": {"status": {"print_stats": {"state": state},
+                                            "pause_resume": {"is_paused": True}}}}
+            with self.subTest(state=state), \
+                 patch.object(service.urllib.request, "urlopen", return_value=io.BytesIO(json.dumps(payload).encode())):
+                self.assertEqual(service.printer_is_idle(), expected)
+
     def test_path_unit_watches_state_file_without_creating_a_directory(self):
         config = configparser.ConfigParser()
         config.read(SERVICE_PATH.with_name("treed-update.path"), encoding="utf-8")

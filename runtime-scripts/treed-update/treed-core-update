@@ -363,8 +363,12 @@ def phase(name, message):
     subprocess.run(["/usr/local/sbin/treed-update-service", "phase", name, message], check=True, timeout=10)
 
 
-def request_json(path):
-    with urllib.request.urlopen("http://127.0.0.1:7125" + path, timeout=3) as response:
+def request_json(path, data=None):
+    request = "http://127.0.0.1:7125" + path
+    if data is not None:
+        request = urllib.request.Request(request, data=json.dumps(data).encode("utf-8"),
+                                         headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=3) as response:
         return json.load(response)["result"]
 
 
@@ -382,16 +386,25 @@ def idle():
     if not ready():
         return False
     try:
-        status = request_json("/printer/objects/query?print_stats=state&extruder=target&heater_bed=target")["status"]
+        status = request_json("/printer/objects/query?print_stats=state")["status"]
         state = status["print_stats"]["state"]
-        return (state in {"standby", "complete", "cancelled", "error"}
-                and status["extruder"]["target"] == 0 and status["heater_bed"]["target"] == 0)
+        return isinstance(state, str) and state.strip().lower() in {"standby", "complete", "cancelled", "error"}
     except (OSError, ValueError, KeyError):
         return False
 
 
 def services(action):
     subprocess.run(["systemctl", action, "moonraker.service", "klipper.service"], check=True, timeout=45)
+
+
+def stop_heating():
+    # Обновление само выключает оставшийся нагрев, затем подтверждает результат.
+    request_json("/printer/gcode/script", {"script": "TURN_OFF_HEATERS"})
+    status = request_json("/printer/objects/query?print_stats=state&extruder=target&heater_bed=target")["status"]
+    state = status["print_stats"]["state"]
+    if (not isinstance(state, str) or state.strip().lower() not in {"standby", "complete", "cancelled", "error"}
+            or status["extruder"]["target"] != 0 or status["heater_bed"]["target"] != 0):
+        raise ValueError("Не подтверждена остановка печати и нагрева перед обновлением")
 
 
 def wait_ready():
@@ -536,8 +549,11 @@ def apply(tag, operation, env):
         check_compatibility(manifest, env)
         uid, gid = owner(env)
         if not idle():
-            raise ValueError("Core update требует готового принтера без печати, паузы и активного нагрева")
+            raise ValueError("Core update требует готового принтера без активной печати или паузы")
         prepare(manifest, payload, env, journal)
+    if not idle():
+        raise ValueError("Принтер начал печать во время подготовки обновления")
+    stop_heating()
     try:
         phase("installing", "Устанавливаем компоненты TreeD; локальные настройки сохраняются.")
         services("stop")

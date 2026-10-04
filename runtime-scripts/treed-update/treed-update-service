@@ -192,7 +192,8 @@ def printer_is_idle() -> bool:
     except Exception:
         return False
     state = payload.get("result", {}).get("status", {}).get("print_stats", {}).get("state")
-    return isinstance(state, str) and state.lower() not in {"printing", "paused"}
+    # Источник допуска — текущее задание, а не остаточные флаги PAUSE/CANCEL.
+    return isinstance(state, str) and state.strip().lower() in {"standby", "complete", "cancelled", "error"}
 
 
 def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -> None:

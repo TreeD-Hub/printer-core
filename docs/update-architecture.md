@@ -44,7 +44,15 @@ source-only release не предлагает применимое обновл�
 Worker вызывает `treed-core-update apply <tag> <operationId>` под общим lock.
 Updater проверяет SHA-256 GitHub Release asset, ZIP, manifest, разрешённые
 назначения и текущие upstream SHA/отсутствие tracked изменений. Перед остановкой
-служб требуются Klipper `ready`, отсутствие печати/паузы и нулевые heater targets.
+служб требуются Klipper `ready` и отсутствие активной печати/паузы по `print_stats.state`.
+Завершённое или отменённое задание и остаточные флаги макросов не блокируют update.
+При активной паузе UI предлагает отменить печать и обновиться. Только после
+подтверждения POST apply содержит `cancelPausedPrint: true`; Moonraker выполняет
+`CANCEL_PRINT`, повторно проверяет состояние задания и затем передаёт запрос worker.
+Без подтверждения активная пауза блокирует обновление; печатающее задание нельзя
+отменить этим параметром.
+После проверки пакета updater сам отправляет `TURN_OFF_HEATERS` и проверяет нулевые
+heater targets перед остановкой служб; ждать остывания не требуется.
 Установка заменяет отдельные управляемые файлы; неизвестные файлы не удаляются.
 Удаление допускается только для файлов предыдущего ownership manifest.
 Локальные правки управляемых файлов блокируют update; перенесите настройки в
@@ -54,6 +62,16 @@ Updater проверяет SHA-256 GitHub Release asset, ZIP, manifest, разр
 `filament_motion_runtime.cfg`, `moonraker/generated`, снимки и пользовательские
 данные не входят в package payload. Устройство сохраняет вычисленные loader
 updater-секции Mainsail/Crowsnest, шаблоны рендерятся с его `PI_HOME`/`PI_USER`.
+
+`POST /server/treed/settings/reset` с JSON `{"confirm": true}` сбрасывает только
+`local_overrides.cfg` по пути `local_overrides_path` из `[treed_update]`.
+Перед атомарной заменой пустым файлом сохраняется копия рядом:
+`local_overrides.cfg.<uuid>.bak`. Ошибка создания копии отменяет сброс.
+Значения возвращаются к установленному профилю; `SAVE_CONFIG`, `treed_variables.cfg`
+и настройки датчика филамента сохраняются. Endpoint запрещён при активной печати,
+паузе, неизвестном состоянии задания и выполняющемся обновлении. После сброса
+выключается нагрев и запрашивается `RESTART`; `restartRequired: true` в ответе
+означает, что файл уже сброшен, но перезапуск нужно выполнить вручную.
 
 До первой замены сохраняются fsync before-images и journal в
 `/var/lib/treed-update/core/<operationId>`. Записи отдельных файлов атомарны;
