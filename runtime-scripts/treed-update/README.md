@@ -39,8 +39,12 @@ The Moonraker sudoers rule allows only the validated `submit` subcommand. No rea
 ## Release and verification
 
 Build: `python3 runtime-scripts/treed-update/treed-core-update build . OUTPUT/treed-core-runtime.zip`.
-The release workflow builds this artifact when `VERSION` changes on `treed-v2`
-or a matching `vX.Y.Z` tag is pushed. Runtime stack pins may stay unchanged
+The release workflow builds this artifact on pushes to `treed-v2` or manual runs,
+using version `0.<run_number>.<run_attempt>` and tag `v0.<run_number>.<run_attempt>`,
+as in the UI workflow. It stamps the job checkout and source asset `VERSION`
+without committing to the branch; runtime and release manifests share that version.
+Manual `vX.Y.Z` tags must still match the committed `VERSION`.
+PRs do not need a version bump. Runtime stack pins may stay unchanged
 when only TreeD components change. See [update architecture](../../docs/update-architecture.md).
 
 Addressed checks: `python -B tools/tests/test_treed_core_update.py`,
