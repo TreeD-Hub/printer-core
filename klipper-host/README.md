@@ -5,9 +5,10 @@
 
 `treed_driver_mode.py` управляет режимом TMC5160 XYZ, с допуском и групповым откатом.
 `treed_driver_fan_mode.py` включает обдув по нагрузке и защитному таймеру,
-меняет мощность в проверенном диапазоне. Пин и timer принадлежат controller_fan;
+предоставляет обычный и тихий пресеты и регулировку мощности от `off_below`
+до обычной активной скорости. Пин и timer принадлежат controller_fan;
 его callback заменяется до `klippy:ready` для закреплённого Klipper ce7002bed.
-[Команды, сохранение и аппаратный допуск](../klipper/profiles/treed_v2_corexy_v1/ui-driver-modes-contract.md).
+[Команды, сохранение и диапазоны мощности](../klipper/profiles/treed_v2_corexy_v1/ui-driver-modes-contract.md).
 
 `treed_print_cancel.py` подключается секцией `[treed_print_cancel]` в `ui.cfg`.
 Штатный `/printer/print/cancel` и одиночный `CANCEL_PRINT` через Moonraker

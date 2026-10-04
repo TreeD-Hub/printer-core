@@ -1,13 +1,13 @@
 """Обдув драйверов по нагрузке; required, адаптер controller_fan ce7002bed.
 
 Штатный controller_fan владеет пином и таймером; extra задаёт критерий нагрузки.
-Снижение мощности доступно только в аппаратно проверенном диапазоне.
+Мощность регулируется от порога включения вентилятора до обычной скорости.
 """
 import math
 
 
 class TreedDriverFanMode:
-    # Блок 1: Проверяемые скорости и защитный предел времени без охлаждения.
+    # Блок 1: Пресеты скоростей и защитный предел времени без охлаждения.
     def __init__(self, config):
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
@@ -21,13 +21,13 @@ class TreedDriverFanMode:
         self.load_reason = 'idle'
         fan_config = config.getsection('controller_fan driver_fan')
         minimum = fan_config.getfloat('off_below', 0.)
-        self.quiet = (config.getfloat('quiet_active_speed', None),
-                      config.getfloat('quiet_idle_speed', None))
-        self.validated = config.getboolean('quiet_validated', False)
-        if self.validated and (any(v is None or not math.isfinite(v) for v in self.quiet)
+        self.min_power = max(.01, minimum)
+        active = config.getfloat('quiet_active_speed', min(.8, self.normal[0]))
+        self.quiet = (active, config.getfloat('quiet_idle_speed', min(.4, self.normal[1], self.normal[0])))
+        if (any(v is None or not math.isfinite(v) for v in self.quiet)
                 or not 0 < self.quiet[1] <= self.quiet[0] <= self.normal[0]
                 or self.quiet[1] > self.normal[1] or min(self.quiet) < minimum):
-            raise config.error('Тихий обдув: нужны проверенные скорости выше off_below, не выше обычных')
+            raise config.error('Тихий обдув: скорости должны быть не ниже off_below и не выше обычных')
         self.mode, self.state, self.message = 'normal', 'ready', None
         # Подмена до klippy:ready: штатный handle_ready зарегистрирует этот callback.
         self.controller.callback = self.callback
@@ -45,7 +45,7 @@ class TreedDriverFanMode:
         self.mode = mode
 
     def available_modes(self):
-        return ['normal', 'quiet'] if self.validated else ['normal']
+        return ['normal', 'quiet']
 
     def get_status(self, eventtime):
         return dict(contract_version='1.0', mode=self.mode, state=self.state,
@@ -55,8 +55,7 @@ class TreedDriverFanMode:
                     idle_speed=self.controller.idle_speed,
                     power_control=True, min_power=self.minimum_power(), max_power=self.normal[0],
                     load_reason=self.load_reason, load_delay=self.load_delay,
-                    message=self.message if self.validated else
-                    'Тихий обдув требует настройки скоростей и quiet_validated=True')
+                    message=self.message)
 
     # Блок 2: Нагрузка определяется операцией и временем удержания, а не нагревом.
     def callback(self, eventtime):
@@ -100,9 +99,9 @@ class TreedDriverFanMode:
             self.controller.fan.set_speed(speed)
         return eventtime + 1.
 
-    # Блок 3: Мощность меняется в допущенном диапазоне, таймер нагрузки не сбрасывается.
+    # Блок 3: Мощность меняется в рабочем диапазоне, таймер нагрузки не сбрасывается.
     def minimum_power(self):
-        return self.quiet[0] if self.validated else self.normal[0]
+        return self.min_power
 
     def valid_power(self, power):
         return power is None or (type(power) in (int, float) and math.isfinite(power)
@@ -117,10 +116,10 @@ class TreedDriverFanMode:
         mode = gcmd.get('MODE')
         params = set(gcmd.get_command_parameters())
         if 'MODE' not in params or params - {'MODE', 'POWER'} or mode not in self.available_modes():
-            raise gcmd.error('Обдув драйверов: MODE=quiet|normal; тихий профиль должен быть проверен')
+            raise gcmd.error('Обдув драйверов: MODE=quiet|normal [POWER=проценты]')
         power = gcmd.get_float('POWER') / 100. if 'POWER' in params else None
         if not self.valid_power(power):
-            raise gcmd.error('Обдув драйверов: POWER вне аппаратно проверенного диапазона')
+            raise gcmd.error('Обдув драйверов: POWER вне диапазона вентилятора')
         if self.printer.is_shutdown() or self.printer.get_state_message()[1] != 'ready':
             raise gcmd.error('Обдув драйверов: Klipper не готов')
         previous_speeds = (self.controller.fan_speed, self.controller.idle_speed)

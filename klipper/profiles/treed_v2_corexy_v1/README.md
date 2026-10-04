@@ -48,7 +48,7 @@
 [Настройка OrcaSlicer и Moonraker-контракт](macros-usage.md#текущий-слой-в-orcaslicer-и-treed-ui).
 
 [Независимые режимы XYZ и обдува](ui-driver-modes-contract.md): команды,
-Moonraker-состояние, сохранение и обязательная аппаратная приёмка тихих профилей.
+Moonraker-состояние, сохранение, диапазоны мощности обдува и проверка режима XYZ.
 
 `ui.cfg` подключает обязательный `[treed_print_cancel]`; loader доставляет
 `klipper-host/treed_print_cancel.py` вместе с остальными host-расширениями.
