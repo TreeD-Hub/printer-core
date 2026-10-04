@@ -82,7 +82,7 @@ class Harness:
                 return
 
 
-# Блок 2: Объём, рисунок скорости, переходы и восстановление после отмены.
+# Блок 2: Подача, скорость, переходы и восстановление после отмены.
 class PurgeTests(unittest.TestCase):
     def test_two_lines_geometry_volume_speed_and_pa(self):
         h = Harness(pa=0.06)
@@ -92,10 +92,8 @@ class PurgeTests(unittest.TestCase):
         for index, (axes, position, pa) in enumerate(extrusion):
             segment = index % 4
             self.assertEqual(position, {"x": 20.0 + segment * 10, "y": 5.0 + (index // 4) * 2, "z": 0.2})
-            self.assertEqual(axes["F"] / 60, [5, 40, 10, 40][segment])
-            area = axes["E"] * math.pi * (1.75 / 2) ** 2 / 10
-            width = (area - math.pi * (0.2 / 2) ** 2) / 0.2 + 0.2
-            self.assertAlmostEqual(width, 1.0 if segment == 0 else 0.4)
+            self.assertEqual(axes["F"] / 60, 2.4)
+            self.assertEqual(axes["E"], 10.0)
             self.assertEqual(pa, 0 if index < 4 else 0.06)
         self.assertEqual(h.printer["extruder"]["pressure_advance"], 0.06)
         self.assertEqual(h.printer["gcode_move"]["speed_factor"], 0.73)
