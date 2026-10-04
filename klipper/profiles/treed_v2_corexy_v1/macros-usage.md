@@ -21,10 +21,10 @@
 
 ## 1. Как вызывать макросы
 
-Режимы XYZ и обдува задаются независимо командами
-`TREED_UI_SET_DRIVER_MODE MODE=quiet|normal` и
-`TREED_UI_SET_DRIVER_FAN_MODE MODE=quiet|normal`.
-[Допуск, сохранение и тихие профили](ui-driver-modes-contract.md).
+Режим XYZ задаётся командой `TREED_UI_SET_DRIVER_MODE MODE=quiet|normal`.
+Обдув драйверов работает только на 100%; `TREED_UI_SET_DRIVER_FAN_MODE MODE=normal`
+сбрасывает старую сохранённую настройку мощности.
+[Допуск, сохранение и режимы драйверов](ui-driver-modes-contract.md).
 
 Макросы вызываются из консоли Mainsail/Fluidd/KlipperScreen или через Moonraker `printer.gcode.script`.
 
@@ -705,12 +705,11 @@ TREED_LIGHT_SETTINGS STARTUP=0 PRINT_START=1
 | --- | --- |
 | `TREED_UI_SET_DRIVER_MODE MODE=normal` | Обычный режим TMC5160 XYZ — spreadCycle. |
 | `TREED_UI_SET_DRIVER_MODE MODE=quiet` | Тихий режим XYZ — stealthChop; экструдер не переключается. |
-| `TREED_UI_SET_DRIVER_FAN_MODE MODE=normal` | Обычный профиль обдува драйверов. |
-| `TREED_UI_SET_DRIVER_FAN_MODE MODE=quiet` | Тихий профиль обдува: 80% при нагрузке, 40% при охлаждении. |
+| `TREED_UI_SET_DRIVER_FAN_MODE MODE=normal` | Обдув драйверов на 100% при нагрузке и последующем охлаждении. |
 
 Публичные макросы передают параметры host-расширениям `treed_driver_mode` и `treed_driver_fan_mode`; они выполняют проверки, применение и сохранение режима. Для XYZ нужен готовый принтер вне печати, паузы, прочистки и сервисных операций. Режимы сохраняются через `save_variables`; перезапуск для обычного переключения не нужен.
 
-Оба профиля обдува доступны без дополнительного флага. Параметр `POWER=15..100` задаёт мощность при нагрузке независимо от пресета. UI получает доступные режимы и границы мощности из состояния устройства. Полный контракт ошибок, отката и сохранения: [режимы XYZ и обдува](ui-driver-modes-contract.md).
+Для этого подключения `MODE=quiet` и `POWER` отклоняются: при меньшем PWM вентиляторы не вращаются. UI получает единственный доступный режим и признак отсутствия регулировки из состояния устройства. Полный контракт ошибок, отката и сохранения: [режимы XYZ и обдува](ui-driver-modes-contract.md).
 
 ## 16. Что сохраняется между запусками
 

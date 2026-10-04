@@ -58,8 +58,8 @@ class Printer:
         self.save_fails = False
         self.commands = {}
         self.callbacks = []
-        self.controller = NS(fan_speed=1., idle_speed=.5, last_on=99,
-                             get_status=lambda now: {'speed': .5})
+        self.controller = NS(fan_speed=1., idle_speed=1., last_on=99,
+                             get_status=lambda now: {'speed': 1.})
         self.motors_enabled = False
         self.fan_output = []
         self.controller.stepper_names = ['stepper_x', 'stepper_y', 'stepper_z']
@@ -315,34 +315,45 @@ class DriverModesTest(unittest.TestCase):
     def fan(self, **values):
         return load('treed_driver_fan_mode').load_config(Config(self.printer, **values))
 
-    def test_fan_quiet_is_available_without_flags(self):
+    def test_fan_runs_only_at_full_power_and_resets_saved_quiet(self):
         fan = self.fan()
-        self.assertEqual(fan.available_modes(), ['normal', 'quiet'])
-        self.assertEqual(fan.get_status(1)['min_power'], .15)
+        self.assertEqual(fan.available_modes(), ['normal'])
+        self.assertFalse(fan.get_status(1)['power_control'])
+        self.assertEqual(fan.get_status(1)['min_power'], 1.)
         self.assertIsNone(fan.get_status(1)['message'])
-        fan.cmd_set(Command())
-        self.assertEqual(self.printer.controller.fan_speed, .8)
-        self.assertEqual(self.printer.controller.idle_speed, .4)
         self.printer.saved.allVariables['driver_fan_mode'] = 'quiet'
         fan.handle_ready()
-        self.assertEqual(fan.mode, 'quiet')
+        self.assertEqual(fan.mode, 'normal')
+        self.assertEqual(self.printer.controller.fan_speed, 1.)
+        self.assertEqual(self.printer.controller.idle_speed, 1.)
+        self.assertIsNotNone(fan.get_status(1)['message'])
+        self.printer.saved.allVariables['driver_fan_mode'] = {'mode': 'normal', 'power': .9}
+        fan.handle_ready()
+        self.assertEqual(self.printer.controller.fan_speed, 1.)
 
     def test_fan_preserves_automation_and_restores_on_save_failure(self):
         fan = self.fan()
-        fan.cmd_set(Command())
+        fan.cmd_set(Command('normal'))
         self.assertEqual(self.printer.controller.last_on, 99)
-        self.assertEqual(self.printer.controller.fan_speed, .8)
-        self.assertEqual(self.printer.saved.allVariables['driver_fan_mode'], 'quiet')
+        self.assertEqual(self.printer.controller.fan_speed, 1.)
+        self.assertEqual(self.printer.saved.allVariables['driver_fan_mode'], 'normal')
         self.printer.save_fails = True
         with self.assertRaises(ValueError):
             fan.cmd_set(Command('normal'))
-        self.assertEqual(fan.mode, 'quiet')
-        self.assertEqual(self.printer.controller.idle_speed, .4)
+        self.assertEqual(fan.mode, 'normal')
+        self.assertEqual(self.printer.controller.idle_speed, 1.)
 
-    def test_invalid_fan_speeds(self):
-        for active, idle in ((None, None), (.1, .1), (.8, .9), (float('nan'), .4), (1.1, .4)):
+    def test_legacy_fan_overrides_cannot_lower_power(self):
+        for active, idle in ((.8, .4), (.1, .1)):
+            self.printer.controller.fan_speed = active
+            self.printer.controller.idle_speed = idle
+            fan = self.fan(quiet_active_speed=active, quiet_idle_speed=idle)
+            self.assertEqual((fan.controller.fan_speed, fan.controller.idle_speed), (1., 1.))
+        for mode in ('quiet', 'bad'):
             with self.assertRaises(ValueError):
-                self.fan(quiet_active_speed=active, quiet_idle_speed=idle)
+                fan.cmd_set(Command(mode))
+        with self.assertRaises(ValueError):
+            fan.cmd_set(Command('normal', POWER='90'))
 
     def test_manual_fan_delay_and_hold_protection(self):
         fan = self.fan()
@@ -386,9 +397,9 @@ class DriverModesTest(unittest.TestCase):
                 self.printer.motors_enabled = False
                 fan.callback(2.)
                 self.assertEqual(fan.load_reason, 'cooldown')
-                self.assertEqual(self.printer.fan_output, [1., .5])
+                self.assertEqual(self.printer.fan_output, [1.])
                 fan.callback(121.)
-                self.assertEqual(self.printer.fan_output, [1., .5, 0.])
+                self.assertEqual(self.printer.fan_output, [1., 0.])
 
     def test_print_stats_and_unknown_phase_start_fan(self):
         fan = self.fan()
@@ -410,31 +421,14 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(fan.load_reason, 'calibrating')
         self.assertEqual(self.printer.fan_output, [1.])
 
-    def test_fan_power_range_persistence_and_rollback(self):
+    def test_fan_old_power_setting_is_not_restored(self):
         fan = self.fan()
-        fan.cmd_set(Command('normal', POWER='90'))
-        self.assertEqual(self.printer.controller.fan_speed, .9)
+        self.printer.saved.allVariables['driver_fan_mode'] = {'mode': 'normal', 'power': .15}
         fan.handle_ready()
-        self.assertEqual(self.printer.controller.fan_speed, .9)
-        self.printer.save_fails = True
-        with self.assertRaises(ValueError):
-            fan.cmd_set(Command('quiet', POWER='85'))
-        self.assertEqual(self.printer.controller.fan_speed, .9)
-        self.assertEqual(self.printer.controller.idle_speed, .5)
-        self.printer.save_fails = False
-        for power in ('0', '14', '101', 'nan', 'inf'):
-            with self.assertRaises(ValueError):
-                fan.cmd_set(Command('normal', POWER=power))
-        self.printer.controller.fan_speed = 1.
-        self.printer.controller.idle_speed = .5
-        fan = self.fan()
-        fan.cmd_set(Command('normal', POWER='15'))
-        fan.handle_ready()
-        self.assertEqual(self.printer.controller.fan_speed, .15)
-        self.assertEqual(self.printer.controller.idle_speed, .15)
-        fan.cmd_set(Command('quiet', POWER='60'))
-        self.assertEqual(self.printer.controller.fan_speed, .6)
-        self.assertEqual(self.printer.controller.idle_speed, .4)
+        self.assertEqual(self.printer.controller.fan_speed, 1.)
+        self.assertEqual(self.printer.controller.idle_speed, 1.)
+        fan.cmd_set(Command('normal'))
+        self.assertEqual(self.printer.saved.allVariables['driver_fan_mode'], 'normal')
 
     def test_delivery_contract(self):
         bootstrap = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
