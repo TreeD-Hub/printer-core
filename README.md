@@ -28,7 +28,13 @@ TreeD Shell доставляется отдельно из артефакта `t
 репозитория [TreeD-Hub/printer-ui](https://github.com/TreeD-Hub/printer-ui).
 Настройки источника и загрузки UI описаны в [документации loader](loader/README.md).
 
-Release workflow запускается тегом `vX.Y.Z`, совпадающим с `VERSION`. Имена
+Core обновляется через тот же виджет настроек пакетом `treed-core-runtime.zip`:
+конфиги, host-модули и скрипты TreeD с сохранением локальных данных и откатом.
+Для первого включения новый updater доставляется loader, после успешного verify
+фиксируется baseline. [Контракт и границы обновления](docs/update-architecture.md).
+
+Release workflow запускается после изменения `VERSION` в `treed-v2` (merge PR),
+тегом `vX.Y.Z`, совпадающим с `VERSION`, или вручную. Имена
 `treed-mainshellos-source.zip` и `treed-mainshellos-release.json` — сохранённые
 **legacy compatibility asset names** для совместимости релизного процесса.
 

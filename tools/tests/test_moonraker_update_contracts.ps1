@@ -164,7 +164,7 @@ async def assert_system_fail_closed(temp_dir):
     except UpdateError as error:
         assert error.status_code == 409
     else:
-        raise AssertionError("system update must be blocked without verified A/B capability")
+        raise AssertionError("core update must be blocked without an installed runtime updater and baseline")
     assert component.server.klippy.queries == 0
     assert not component.state_file.exists()
 

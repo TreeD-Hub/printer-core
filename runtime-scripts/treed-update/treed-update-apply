@@ -129,7 +129,9 @@ fi
 trap finish EXIT
 
 apply_core_update() {
-  echo "treed-update: A/B platform and signed system bundle are not verified; refusing system update" >&2
+  # Core выполняется отдельной командой worker: прежний shell entrypoint не
+  # может обойти durable journal и выдать UI-результат для другого target.
+  echo "treed-update: use the managed core worker with an operationId" >&2
   return 1
 }
 

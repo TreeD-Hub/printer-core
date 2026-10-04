@@ -1433,6 +1433,12 @@ fi
 print_runtime_summary
 
 if [ "${fail}" -eq 0 ]; then
+  # Блок 13.1: Версия и ownership baseline фиксируются после успешного verify.
+  if [ "${TREED_ALLOW_HARDWARE_NOT_READY:-0}" = "0" ]; then
+    /usr/local/sbin/treed-core-update baseline "${REPO_DIR}"
+  else
+    log_warn "verify: core update baseline skipped without hardware readiness"
+  fi
   if [ "${VERIFY_DIAGNOSTIC_FAILS}" -eq 0 ]; then
     log_info "verify: all ${ok} checks passed"
   else

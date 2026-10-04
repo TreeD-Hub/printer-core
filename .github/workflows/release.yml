@@ -2,6 +2,10 @@ name: Release
 
 on:
   push:
+    branches:
+      - treed-v2
+    paths:
+      - VERSION
     tags:
       - "v*.*.*"
   workflow_dispatch:
@@ -10,7 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-core
   cancel-in-progress: false
 
 jobs:
@@ -21,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate version
         shell: bash
@@ -53,6 +59,12 @@ jobs:
           set -euo pipefail
           python3 -m py_compile moonraker/components/*.py
 
+      - name: Runtime updater checks
+        run: |
+          python3 -B tools/tests/test_treed_core_update.py
+          python3 -B tools/tests/test_treed_update_service.py
+          python3 -B tools/tests/test_treed_update_component.py
+
       - name: Run contract checks
         shell: pwsh
         run: |
@@ -68,6 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          python3 runtime-scripts/treed-update/treed-core-update build . dist/treed-core-runtime.zip
           git archive --format=zip --output="dist/treed-mainshellos-source.zip" HEAD
           python3 - <<'PY'
           import json
@@ -99,6 +112,7 @@ jobs:
             echo "Tag: ${EXPECTED_TAG}"
             echo "Commit: ${GITHUB_SHA}"
             echo "Assets:"
+            echo "- treed-core-runtime.zip (TreeD configs, host modules and scripts; preserves local data)"
             echo "- treed-mainshellos-source.zip"
             echo "- treed-mainshellos-release.json"
           } > release-notes.md
@@ -109,9 +123,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "${EXPECTED_TAG}" \
-            dist/treed-mainshellos-source.zip \
-            dist/treed-mainshellos-release.json \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "printer-core ${MAIN_SHELL_VERSION}" \
-            --notes-file release-notes.md
+          if git rev-parse --verify "${EXPECTED_TAG}^{commit}" >/dev/null 2>&1; then
+            if [[ "$(git rev-parse "${EXPECTED_TAG}^{commit}")" != "${GITHUB_SHA}" ]]; then
+              echo "Version ${EXPECTED_TAG} already belongs to another commit; bump VERSION in the PR" >&2
+              exit 1
+            fi
+          fi
+          if gh release view "${EXPECTED_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            IS_DRAFT="$(gh release view "${EXPECTED_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq '.isDraft')"
+            if [[ "${IS_DRAFT}" != "true" ]]; then
+              gh release view "${EXPECTED_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' > published-assets.txt
+              for asset in treed-core-runtime.zip treed-mainshellos-source.zip treed-mainshellos-release.json; do
+                grep -Fxq "${asset}" published-assets.txt || {
+                  echo "Published release ${EXPECTED_TAG} is incomplete; refusing to overwrite immutable assets" >&2
+                  exit 1
+                }
+              done
+              echo "Release ${EXPECTED_TAG} already exists; immutable assets are preserved"
+              exit 0
+            fi
+            gh release upload "${EXPECTED_TAG}" dist/treed-core-runtime.zip \
+              dist/treed-mainshellos-source.zip dist/treed-mainshellos-release.json \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${EXPECTED_TAG}" \
+              dist/treed-core-runtime.zip \
+              dist/treed-mainshellos-source.zip \
+              dist/treed-mainshellos-release.json \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --draft \
+              --title "printer-core ${MAIN_SHELL_VERSION}" \
+              --notes-file release-notes.md
+          fi
+          gh release edit "${EXPECTED_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false

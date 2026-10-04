@@ -177,6 +177,7 @@ restart_and_verify_moonraker_components() {
 deploy_treed_update_command() {
   local apply_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
   local service_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-service"
+  local core_src="${REPO_DIR}/runtime-scripts/treed-update/treed-core-update"
   local ab_src="${REPO_DIR}/runtime-scripts/treed-ab/treed-ab"
   local worker_unit_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update.service"
   local path_unit_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update.path"
@@ -185,8 +186,8 @@ deploy_treed_update_command() {
   local sudoers_file="/etc/sudoers.d/treed-update"
   local src=""
 
-  # Блок 3.1: Доставка root-службы, submit-команды и fail-closed A/B probe.
-  for src in "${apply_src}" "${service_src}" "${ab_src}" "${worker_unit_src}" "${path_unit_src}" "${recover_unit_src}"; do
+  # Блок 3.1: Root-worker, runtime updater TreeD и отдельный fail-closed A/B probe.
+  for src in "${apply_src}" "${service_src}" "${core_src}" "${ab_src}" "${worker_unit_src}" "${path_unit_src}" "${recover_unit_src}"; do
     if [ ! -f "${src}" ]; then
       log_error "treed update runtime file not found in repo: ${src}"
       exit 1
@@ -194,6 +195,7 @@ deploy_treed_update_command() {
   done
   install -m 0755 "${apply_src}" /usr/local/sbin/treed-update-apply
   install -m 0755 "${service_src}" /usr/local/sbin/treed-update-service
+  install -m 0755 "${core_src}" /usr/local/sbin/treed-core-update
   install -m 0755 "${ab_src}" /usr/local/sbin/treed-ab
   install -m 0644 "${worker_unit_src}" /etc/systemd/system/treed-update.service
   install -m 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
@@ -220,11 +222,14 @@ deploy_treed_update_command() {
   cat > "${env_file}" <<EOF
 TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/printer-core"
 TREED_UPDATE_PI_USER="${PI_USER}"
+TREED_UPDATE_PI_HOME="${PI_HOME}"
 TREED_UPDATE_PI_GROUP="${PI_GROUP}"
 TREED_UPDATE_STATE_FILE="/var/lib/treed-update/state.json"
 TREED_UPDATE_LOG_FILE="/var/log/treed-update/worker.log"
 TREED_UPDATE_LOCK_FILE="/run/lock/treed-update.lock"
 TREED_UPDATE_UNIT="treed-update.service"
+TREED_CORE_KLIPPER_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
+TREED_CORE_MOONRAKER_DIR="${MOONRAKER_RUNTIME_DIR}"
 TREED_SHELL_RUNTIME_DIR="${PI_HOME}/treed/treed-shell-runtime"
 TREED_SHELL_SERVICE="treed-shell.service"
 EOF

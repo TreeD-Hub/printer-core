@@ -72,6 +72,7 @@ class UpdateServiceTests(unittest.TestCase):
         root = Path(self.temp.name)
         service.STATE = root / "state.json"
         service.LOCK = root / "lock"
+        service.LOG = root / "worker.log"
         service.fcntl = types.SimpleNamespace(LOCK_EX=1, LOCK_NB=2, LOCK_UN=4,
                                                flock=lambda *_args: None)
         self.root = root
@@ -163,7 +164,7 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertEqual(state["resultCode"], "service_start_failed")
         self.assertFalse(state["busy"])
 
-    def test_system_update_fails_closed_without_verified_ab_backend(self):
+    def test_core_worker_uses_managed_runtime_package_and_persists_result(self):
         operation = {
             "operationId": "operation-3", "requestId": "11111111-1111-4111-8111-111111111111",
             "targetId": "printer-core", "targetTag": "v1.2.3", "status": "queued",
@@ -173,18 +174,38 @@ class UpdateServiceTests(unittest.TestCase):
         with patch.object(service.os, "geteuid", return_value=0, create=True), \
              patch.object(service, "acquire", return_value=FakeLock()), \
              patch.object(service, "printer_is_idle", return_value=True), \
-             patch.object(service, "system_ab_capability", return_value={
-                 "supported": False,
-                 "reasonCode": "ab_platform_unverified",
-                 "reason": "Обновление системы недоступно: платформа не подтверждена.",
-             }), \
-             patch.object(service.subprocess, "run") as apply:
-            self.assertEqual(service.run_worker(), 1)
+             patch.object(service.subprocess, "run", return_value=types.SimpleNamespace(
+                 returncode=0, stdout=json.dumps({"status": "applied", "resultCode": "core_updated",
+                                                 "message": "Core установлен."}))) as apply:
+            self.assertEqual(service.run_worker(), 0)
         state = json.loads(service.STATE.read_text(encoding="utf-8"))
-        self.assertEqual(state["status"], "rejected")
-        self.assertEqual(state["resultCode"], "ab_platform_unverified")
+        self.assertEqual(state["status"], "applied")
+        self.assertEqual(state["resultCode"], "core_updated")
         self.assertFalse(state["busy"])
-        apply.assert_not_called()
+        self.assertEqual(apply.call_args.args[0], [service.CORE_APPLY, "apply", "v1.2.3", "operation-3"])
+
+    def test_core_recovery_records_rollback_from_independent_installer(self):
+        service.write_state({"operationId": "operation-3", "targetId": "printer-core",
+                             "targetTag": "v1.2.3", "status": "installing", "busy": True})
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service.subprocess, "run", return_value=types.SimpleNamespace(
+                 returncode=1, stdout=json.dumps({"status": "rolled_back", "resultCode": "rollback_succeeded",
+                                                 "message": "Core восстановлен."}))) as command:
+            self.assertEqual(service.recover(), 0)
+        self.assertEqual(command.call_args.args[0], [service.CORE_APPLY, "recover", "operation-3"])
+        self.assertEqual(service.read_state()["status"], "rolled_back")
+
+    def test_core_resume_recovers_instead_of_overwriting_interrupted_transaction(self):
+        service.write_state({"operationId": "operation-3", "targetId": "printer-core",
+                             "targetTag": "v1.2.3", "status": "installing", "busy": True})
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service, "run_core", return_value=1) as command, \
+             patch.object(service, "printer_is_idle") as idle:
+            self.assertEqual(service.run_worker(), 1)
+        self.assertTrue(command.call_args.kwargs["recovery"])
+        idle.assert_not_called()
 
     def test_reboot_recovery_marks_interrupted_operation_without_claiming_rollback(self):
         operation = {

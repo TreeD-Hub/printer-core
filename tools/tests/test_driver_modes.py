@@ -66,7 +66,9 @@ class Printer:
                         run_script_from_command=self.save),
             'save_variables': self.saved,
             'controller_fan driver_fan': self.controller,
-            'toolhead': NS(wait_moves=lambda: None),
+            'toolhead': NS(wait_moves=lambda: None, max_velocity=600., max_accel=25000.,
+                           square_corner_velocity=9., min_cruise_ratio=.5,
+                           set_max_velocities=self.set_max_velocities),
             'gcode_macro _TREED_OPERATION_STATE': NS(variables={'phase': 'idle'}),
             'print_stats': NS(get_status=lambda now: {'state': self.stats}),
             'pause_resume': NS(get_status=lambda now: {'is_paused': False}, pause_command_sent=False),
@@ -74,6 +76,14 @@ class Printer:
         }
         for axis in 'xyz':
             self.objects['tmc5160 stepper_' + axis] = NS(fields=Fields(), mcu_tmc=MCU())
+
+    def set_max_velocities(self, velocity, accel, scv, cruise_ratio):
+        toolhead = self.objects['toolhead']
+        names = ('max_velocity', 'max_accel', 'square_corner_velocity', 'min_cruise_ratio')
+        for name, value in zip(names, (velocity, accel, scv, cruise_ratio)):
+            if value is not None:
+                setattr(toolhead, name, value)
+        return tuple(getattr(toolhead, name) for name in names)
 
     def save(self, script):
         if self.save_fails:
@@ -197,6 +207,58 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(self.driver.mode, 'normal')
         self.assertFalse(self.printer.shutdown)
         self.assertTrue(all(d.mcu_tmc.hardware['GCONF'] == 0 for d in self.driver.drivers))
+        self.assertEqual(self.driver.motion_limits(), (600., 25000., 9., .5))
+        self.assertIsNone(self.driver.normal_limits)
+
+    def test_quiet_caps_commands_and_normal_restores_snapshot(self):
+        toolhead = self.driver.toolhead
+        toolhead.set_max_velocities(550., 22000., 8., .4)
+        self.driver.cmd_set(Command())
+        self.assertEqual(self.driver.motion_limits(), (350., 15000., 8., .4))
+        # SET_VELOCITY_LIMIT / сервис задают все поля, M204 — только ACCEL.
+        toolhead.set_max_velocities(900., 40000., 500., None)
+        self.assertEqual(self.driver.motion_limits(), (350., 15000., 350., .4))
+        toolhead.set_max_velocities(None, 30000., None, None)
+        self.assertEqual(toolhead.max_accel, 15000.)
+        self.driver.cmd_set(Command())
+        self.driver.cmd_set(Command('normal'))
+        self.assertEqual(self.driver.motion_limits(), (550., 22000., 8., .4))
+        toolhead.set_max_velocities(600., 25000., None, None)
+        self.assertEqual(toolhead.max_velocity, 600.)
+
+    def test_quiet_preserves_lower_limits(self):
+        self.driver.toolhead.set_max_velocities(200., 4000., 5., None)
+        self.driver.cmd_set(Command())
+        self.assertEqual(self.driver.motion_limits(), (200., 4000., 5., .5))
+        self.driver.toolhead.set_max_velocities(100., 2000., None, None)
+        self.assertEqual(self.driver.motion_limits(), (100., 2000., 5., .5))
+
+    def test_saved_quiet_on_startup_caps_motion(self):
+        printer = Printer()
+        printer.saved.allVariables['driver_mode'] = 'quiet'
+        driver = load('treed_driver_mode').load_config(Config(printer))
+        driver.handle_connect()
+        driver.handle_ready()
+        printer.run_callbacks()
+        self.assertEqual(driver.motion_limits(), (350., 15000., 9., .5))
+        driver.cmd_set(Command('normal'))
+        self.assertEqual(driver.motion_limits(), (600., 25000., 9., .5))
+
+    def test_save_failure_restores_limits_in_both_directions(self):
+        self.printer.save_fails = True
+        with self.assertRaises(ValueError):
+            self.driver.cmd_set(Command())
+        self.assertEqual(self.driver.motion_limits(), (600., 25000., 9., .5))
+        self.assertIsNone(self.driver.normal_limits)
+        self.printer.save_fails = False
+        self.driver.cmd_set(Command())
+        self.printer.save_fails = True
+        with self.assertRaises(ValueError):
+            self.driver.cmd_set(Command('normal'))
+        self.assertEqual(self.driver.mode, 'quiet')
+        self.assertEqual(self.driver.motion_limits(), (350., 15000., 9., .5))
+        self.driver.toolhead.set_max_velocities(900., 40000., None, None)
+        self.assertEqual(self.driver.motion_limits(), (350., 15000., 9., .5))
 
     def test_rollback_failure_requires_restart(self):
         self.driver.drivers[1].mcu_tmc.failures = 2

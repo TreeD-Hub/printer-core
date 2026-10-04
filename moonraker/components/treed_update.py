@@ -3,7 +3,7 @@ MOONRAKER COMPONENT: TREED UPDATE
 =================================
 Назначение:
 - Предоставляет TreeD Printer UI endpoints проверки и применения обновлений.
-- Разделяет UI bundle `printer-ui` и системный runtime `printer-core`.
+- Разделяет UI bundle `printer-ui` и пакет компонентов TreeD `printer-core`.
 - Сверяет manifest/build с live-версиями required MCU без прошивки.
 Контур:
 - check/status безопасны и read-only;
@@ -18,6 +18,7 @@ import csv
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
 import urllib.request
@@ -77,6 +78,10 @@ class TreeDUpdate:
         self.klippy_apis = self.server.lookup_component("klippy_apis")
         self.repo_path = Path(config.get("repo_path", "/home/pi/treed/printer-core"))
         self.version_file = Path(config.get("version_file", str(self.repo_path / "VERSION")))
+        self.core_manifest_path = Path(config.get(
+            "core_manifest_path", "/var/lib/treed-update/core-manifest.json"))
+        self.core_update_command = Path(config.get(
+            "core_update_command", "/usr/local/sbin/treed-core-update"))
         self.shell_manifest_path = Path(config.get(
             "shell_manifest_path",
             "/home/pi/treed/treed-shell-runtime/ui/treed-shell-ui-manifest.json",
@@ -173,8 +178,8 @@ class TreeDUpdate:
         target_pattern = UI_TAG_RE if target_id == "printer-ui" else TAG_RE
         if not isinstance(target_tag, str) or target_pattern.match(target_tag) is None:
             raise self.server.error("Тег выпуска не соответствует выбранной цели обновления.")
-        if target_id == "printer-core" and not self._ab_capability().get("supported"):
-            capability = self._ab_capability()
+        if target_id == "printer-core" and not self._core_capability().get("supported"):
+            capability = self._core_capability()
             raise self.server.error(str(capability["reason"]), 409)
 
         await self._ensure_apply_allowed()
@@ -428,7 +433,7 @@ class TreeDUpdate:
         message: Optional[str],
     ) -> Dict[str, Any]:
         state = self._read_state()
-        capability = self._ab_capability()
+        capability = self._core_capability()
         is_busy = state.get("busy") is True
         for release in release_results:
             release["canApply"] = release.get("status") == "available" and not is_busy
@@ -457,11 +462,16 @@ class TreeDUpdate:
             "releaseResults": release_results,
         }
 
-    def _ab_capability(self) -> Dict[str, Any]:
+    def _core_capability(self) -> Dict[str, Any]:
+        manifest = _read_json_dict(self.core_manifest_path)
+        if (self.core_update_command.is_file() and os.access(self.core_update_command, os.X_OK)
+                and manifest.get("kind") == "treed-core-runtime" and manifest.get("schema") == 1
+                and _normalize_semver(str(manifest.get("version", ""))) is not None):
+            return {"supported": True, "kind": "treed-core-runtime"}
         return {
             "supported": False,
-            "reasonCode": "ab_update_backend_incomplete",
-            "reason": "Обновление системы недоступно: не подтверждены A/B-платформа, подписанный пакет и проверка новой системы.",
+            "reasonCode": "core_runtime_updater_missing",
+            "reason": "Обновление компонентов TreeD недоступно: сначала установите runtime updater и baseline через loader.",
         }
 
     def _build_targets(self) -> List[ReleaseTarget]:
@@ -485,6 +495,9 @@ class TreeDUpdate:
         ]
 
     def _read_core_version(self) -> str:
+        manifest = _read_json_dict(self.core_manifest_path)
+        if manifest.get("kind") == "treed-core-runtime" and manifest.get("schema") == 1:
+            return str(manifest.get("version") or "unknown")
         if not self.version_file.is_file():
             return "unknown"
         version = self.version_file.read_text(encoding="utf-8").strip()
@@ -513,15 +526,16 @@ class TreeDUpdate:
             if latest_tag is None:
                 return _result(target, None, None, "unknown", "Подходящий release не найден.")
 
-            if target.id == "printer-ui" and not _has_verified_ui_asset(
-                releases, latest_tag, self.shell_asset_name
+            asset_name = self.shell_asset_name if target.id == "printer-ui" else "treed-core-runtime.zip"
+            if not _has_verified_ui_asset(
+                releases, latest_tag, asset_name
             ):
                 return _result(
                     target,
                     latest_tag,
                     latest_tag,
                     "unknown",
-                    "В выпуске нет UI bundle с контрольной суммой SHA-256.",
+                    "В выпуске нет подходящего пакета с контрольной суммой SHA-256.",
                 )
 
             if target.version_scheme == "tag":

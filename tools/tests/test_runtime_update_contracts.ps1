@@ -99,7 +99,7 @@ if ($loader.IndexOf('"runtime-bootstrap"') -ge $loader.IndexOf('"firmware-build"
 
 Assert-Match "loader\steps\runtime-bootstrap.sh" 'ensure_repo_present "\$\{KLIPPER_DIR\}".*"Klipper"' "Klipper uses exact managed sync"
 Assert-Match "loader\steps\runtime-bootstrap.sh" 'ensure_repo_present "\$\{MOONRAKER_DIR\}".*"Moonraker"' "Moonraker uses exact managed sync"
-Assert-Match "runtime-scripts\treed-update\treed-update-apply" 'A/B platform and signed system bundle are not verified' "system updater fails closed without a verified A/B release"
+Assert-Match "runtime-scripts\treed-update\treed-update-apply" 'use the managed core worker with an operationId' "legacy shell command cannot bypass the core journal"
 Assert-Match "runtime-scripts\treed-update\treed-update-service" 'fcntl\.flock' "update submit and worker share a process lock"
 Assert-Match "runtime-scripts\treed-update\treed-update-service" 'operationId.*requestId' "operation state contains stable operation and request identifiers"
 Assert-Match "runtime-scripts\treed-ab\treed-ab" '"supported": False' "A/B adapter keeps system updates unavailable"

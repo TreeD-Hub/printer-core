@@ -16,6 +16,7 @@ Environment=TREED_UPDATE_STATE_FILE=/var/lib/treed-update/state.json
 Environment=TREED_UPDATE_LOCK_FILE=/run/lock/treed-update.lock
 EnvironmentFile=-/etc/default/treed-update
 ExecStart=/usr/local/sbin/treed-update-service recover
+TimeoutStartSec=5min
 StandardOutput=journal
 StandardError=journal
 

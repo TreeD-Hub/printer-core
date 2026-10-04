@@ -50,7 +50,7 @@
 - `GET /status` оставляет прежние `busy`, `canApply`, `releaseResults` и добавляет `operation`, `latestOperation`, `history`, `status`, `phase`, `progress`, `resultCode`;
 - release check выполняет оба запроса параллельно с таймаутом 7 секунд на источник; firmware inventory остаётся отдельным `GET /firmware`;
 - UI release `ui-main-<run>-<attempt>` обновляется сервисом с readiness check и возвратом на предыдущий bundle при сбое;
-- system release `vX.Y.Z` показывает `capability.supported=false` и точную причину, пока не подключены подписанный пакет, A/B boot backend и проверка после пробной загрузки.
+- core release `vX.Y.Z` требует `treed-core-runtime.zip` с SHA-256, установленный `treed-core-update` и ownership baseline. Он обновляет наши конфиги, модули и скрипты с rollback; версия читается из подтверждённого runtime manifest. Системное A/B обновление остаётся отдельным недоступным контуром.
 - раздельно сообщает expected Klipper SHA, host checkout, running Klippy, build checksums и live `mcu_version` каждой платы;
 - сохраняет последнее успешное наблюдение MCU только как `lastKnown.stale=true`, если Klippy/MCU недоступны;
 - сверка `mcu_version` не называется readback или криптографической проверкой прошитого бинарника.
