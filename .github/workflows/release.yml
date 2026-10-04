@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - treed-v2
-    paths:
-      - VERSION
     tags:
       - "v*.*.*"
   workflow_dispatch:
@@ -28,11 +26,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate version
+      - name: Resolve release version
         shell: bash
         run: |
           set -euo pipefail
-          MAIN_SHELL_VERSION="$(tr -d '[:space:]' < VERSION)"
+          # Как в UI: номер запуска и попытка задают версию сборки без коммита.
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            MAIN_SHELL_VERSION="$(tr -d '[:space:]' < VERSION)"
+          else
+            MAIN_SHELL_VERSION="0.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          fi
           if [[ ! "${MAIN_SHELL_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "VERSION must be semver x.y.z, got '${MAIN_SHELL_VERSION}'" >&2
             exit 1
@@ -42,6 +45,8 @@ jobs:
             echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${EXPECTED_TAG}" >&2
             exit 1
           fi
+          # Builder читает VERSION; меняется только рабочий checkout этого job.
+          printf '%s\n' "${MAIN_SHELL_VERSION}" > VERSION
           echo "MAIN_SHELL_VERSION=${MAIN_SHELL_VERSION}" >> "${GITHUB_ENV}"
           echo "EXPECTED_TAG=${EXPECTED_TAG}" >> "${GITHUB_ENV}"
 
@@ -85,7 +90,18 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import zipfile
           from datetime import datetime, timezone
+          from pathlib import Path
+
+          # В source asset записываем ту же версию, что в runtime и manifest.
+          source = Path("dist/treed-mainshellos-source.zip")
+          stamped = source.with_suffix(".tmp")
+          with zipfile.ZipFile(source) as original, zipfile.ZipFile(stamped, "w") as output:
+              for entry in original.infolist():
+                  data = Path("VERSION").read_bytes() if entry.filename == "VERSION" else original.read(entry)
+                  output.writestr(entry, data)
+          stamped.replace(source)
 
           manifest = {
               "name": "printer-core",
@@ -125,7 +141,7 @@ jobs:
           set -euo pipefail
           if git rev-parse --verify "${EXPECTED_TAG}^{commit}" >/dev/null 2>&1; then
             if [[ "$(git rev-parse "${EXPECTED_TAG}^{commit}")" != "${GITHUB_SHA}" ]]; then
-              echo "Version ${EXPECTED_TAG} already belongs to another commit; bump VERSION in the PR" >&2
+              echo "Version ${EXPECTED_TAG} already belongs to another commit; use a new workflow run or tag" >&2
               exit 1
             fi
           fi
