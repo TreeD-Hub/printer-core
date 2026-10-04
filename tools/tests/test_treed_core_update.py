@@ -61,6 +61,7 @@ class CoreUpdateTests(unittest.TestCase):
         self.phase = self.stack.enter_context(patch.object(core, "phase"))
         self.services = self.stack.enter_context(patch.object(core, "services"))
         self.stack.enter_context(patch.object(core, "idle", return_value=True))
+        self.stop_heating = self.stack.enter_context(patch.object(core, "stop_heating"))
         self.wait = self.stack.enter_context(patch.object(core, "wait_ready", return_value=True))
         self.stack.enter_context(patch.object(core, "owner", return_value=(
             getattr(os, "getuid", lambda: 0)(), getattr(os, "getgid", lambda: 0)())))
@@ -72,6 +73,13 @@ class CoreUpdateTests(unittest.TestCase):
         for key, data in self.old.items():
             self.assertEqual(core.destination(key, self.locations).read_bytes(), data, key)
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.1.0")
+
+    def test_heater_shutdown_failure_does_not_stop_services_or_replace_files(self):
+        self.stop_heating.side_effect = ValueError("heater still active")
+        with self.assertRaisesRegex(ValueError, "heater still active"):
+            self.apply()
+        self.services.assert_not_called()
+        self.assert_restored()
 
     # Блок 2: Успех и сохранность принадлежащего принтеру состояния.
     def test_apply_preserves_save_config_overrides_generated_data_and_unknown_files(self):
@@ -362,6 +370,34 @@ class CoreGitOwnershipTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError, f"Изменены исходники установленного {name}"):
                             core.check_compatibility(manifest, env)
                         tracked.write_text("original\n", encoding="utf-8")
+
+
+class PrinterUpdateGuardTests(unittest.TestCase):
+    def test_cancelled_job_with_stale_pause_and_heat_is_idle(self):
+        status = {"print_stats": {"state": " CANCELLED "}, "pause_resume": {"is_paused": True},
+                  "extruder": {"target": 140}, "heater_bed": {"target": 60}}
+        with patch.object(core, "ready", return_value=True), \
+             patch.object(core, "request_json", return_value={"status": status}):
+            self.assertTrue(core.idle())
+
+    def test_paused_print_and_unknown_state_are_not_idle(self):
+        for state in ("printing", "paused", "unknown", None, ""):
+            with self.subTest(state=state), patch.object(core, "ready", return_value=True), \
+                 patch.object(core, "request_json", return_value={"status": {"print_stats": {"state": state}}}):
+                self.assertFalse(core.idle())
+
+    def test_shutdown_heaters_requires_zero_targets_and_inactive_job(self):
+        for state, nozzle, bed in (("cancelled", 0, 0), ("cancelled", 140, 0),
+                                   ("cancelled", 0, 60), ("printing", 0, 0), ("paused", 0, 0)):
+            status = {"print_stats": {"state": state}, "extruder": {"target": nozzle}, "heater_bed": {"target": bed}}
+            with self.subTest(state=state, nozzle=nozzle, bed=bed), \
+                 patch.object(core, "request_json", side_effect=["ok", {"status": status}]) as request:
+                if state == "cancelled" and nozzle == bed == 0:
+                    core.stop_heating()
+                else:
+                    with self.assertRaises(ValueError):
+                        core.stop_heating()
+                self.assertEqual(request.call_args_list[0].args, ("/printer/gcode/script", {"script": "TURN_OFF_HEATERS"}))
 
 
 if __name__ == "__main__":

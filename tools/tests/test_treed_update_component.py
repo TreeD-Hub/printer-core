@@ -42,7 +42,8 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
-        self.api = NS(query_objects=AsyncMock(return_value={"print_stats": {"state": "standby"}}))
+        self.api = NS(query_objects=AsyncMock(return_value={"print_stats": {"state": "standby"}}),
+                      run_gcode=AsyncMock(), do_restart=AsyncMock())
         self.endpoints = {}
         self.server = NS(
             lookup_component=lambda _name: self.api,
@@ -57,9 +58,111 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
             "submit_command": "/usr/bin/sudo -n /usr/local/sbin/treed-update-service submit",
             "version_file": str(root / "VERSION"),
             "shell_manifest_path": str(root / "ui-manifest.json"),
+            "local_overrides_path": str(root / "local_overrides.cfg"),
         }
         config = NS(get_server=lambda: self.server, get=lambda key, default=None: values.get(key, default))
         self.component = module.TreeDUpdate(config)
+
+    async def test_cancelled_job_is_allowed_despite_stale_pause_flags(self):
+        self.api.query_objects.return_value = {
+            "print_stats": {"state": " CANCELLED "},
+            "pause_resume": {"is_paused": True},
+            "gcode_macro _TREED_OPERATION_STATE": {"phase": "paused"},
+        }
+        await self.component._ensure_apply_allowed()
+
+    async def test_active_or_unknown_jobs_remain_blocked(self):
+        for state in ("printing", "paused", "unknown", "", None):
+            with self.subTest(state=state):
+                self.api.query_objects.return_value = {"print_stats": {"state": state}}
+                with self.assertRaises(ApiError):
+                    await self.component._ensure_apply_allowed()
+
+    async def test_confirmed_paused_update_cancels_and_verifies_before_submission(self):
+        self.api.query_objects.side_effect = [
+            {"print_stats": {"state": "paused"}}, {"print_stats": {"state": "cancelled"}},
+        ]
+        async def make_process(*args, **kwargs):
+            self.api.run_gcode.assert_awaited_once_with("CANCEL_PRINT")
+            self.assertEqual(self.api.query_objects.await_count, 2)
+            return NS(returncode=0, communicate=AsyncMock(return_value=(b'{"status":"queued"}', b"")))
+        with patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(side_effect=make_process)):
+            result = await self.component._handle_apply(Request(
+                targetId="printer-ui", targetTag="ui-main-123-1", cancelPausedPrint=True))
+        self.assertTrue(result["busy"])
+
+    async def test_paused_update_never_submits_without_confirmation_or_confirmed_stop(self):
+        for confirmation, following_state in ((False, "cancelled"), ("true", "cancelled"),
+                                               (True, "paused"), (True, "printing")):
+            with self.subTest(confirmation=confirmation, following_state=following_state):
+                self.api.run_gcode.reset_mock()
+                self.api.query_objects.side_effect = [
+                    {"print_stats": {"state": "paused"}}, {"print_stats": {"state": following_state}},
+                ]
+                with patch.object(asyncio, "create_subprocess_exec", new=AsyncMock()) as submit:
+                    with self.assertRaises(ApiError):
+                        await self.component._handle_apply(Request(
+                            targetId="printer-ui", targetTag="ui-main-123-1", cancelPausedPrint=confirmation))
+                submit.assert_not_awaited()
+                self.assertEqual(self.api.run_gcode.await_count, 1 if confirmation is True else 0)
+
+    async def test_confirmation_cannot_cancel_a_printing_job_or_another_update(self):
+        self.api.query_objects.return_value = {"print_stats": {"state": "printing"}}
+        with self.assertRaises(ApiError):
+            await self.component._handle_apply(Request(
+                targetId="printer-ui", targetTag="ui-main-123-1", cancelPausedPrint=True))
+        self.component.state_file.write_text(json.dumps({"busy": True, "status": "installing"}), encoding="utf-8")
+        self.api.query_objects.return_value = {"print_stats": {"state": "paused"}}
+        with self.assertRaises(ApiError):
+            await self.component._handle_apply(Request(
+                targetId="printer-ui", targetTag="ui-main-123-1", cancelPausedPrint=True))
+        self.api.run_gcode.assert_not_awaited()
+
+    async def test_reset_backs_up_only_override_and_restarts_klipper(self):
+        path = self.component.local_overrides_path
+        path.write_bytes(b"[extruder]\npressure_advance: 0.123\n")
+        calibration = path.parent / "printer.cfg"
+        calibration.write_bytes(b"#*# SAVE_CONFIG\n#*# calibrated data\n")
+        result = await self.component._handle_reset_overrides(Request(confirm=True))
+        self.assertEqual(path.read_bytes(), b"")
+        self.assertEqual(Path(result["backupPath"]).read_bytes(), b"[extruder]\npressure_advance: 0.123\n")
+        self.assertEqual(calibration.read_bytes(), b"#*# SAVE_CONFIG\n#*# calibrated data\n")
+        self.assertFalse(result["restartRequired"])
+        self.api.run_gcode.assert_awaited_once_with("TURN_OFF_HEATERS")
+        self.api.do_restart.assert_awaited_once_with("RESTART")
+
+    async def test_reset_requires_confirmation_idle_job_and_idle_updater(self):
+        path = self.component.local_overrides_path
+        path.write_bytes(b"custom\n")
+        with self.assertRaises(ApiError):
+            await self.component._handle_reset_overrides(Request(confirm="true"))
+        self.api.query_objects.return_value = {"print_stats": {"state": "paused"}}
+        with self.assertRaises(ApiError):
+            await self.component._handle_reset_overrides(Request(confirm=True))
+        self.api.query_objects.return_value = {"print_stats": {"state": "cancelled"}}
+        self.component.state_file.write_text(json.dumps({"busy": True, "status": "installing"}), encoding="utf-8")
+        with self.assertRaises(ApiError):
+            await self.component._handle_reset_overrides(Request(confirm=True))
+        self.assertEqual(path.read_bytes(), b"custom\n")
+        self.api.do_restart.assert_not_awaited()
+
+    async def test_failed_backup_leaves_override_untouched(self):
+        path = self.component.local_overrides_path
+        path.write_bytes(b"custom\n")
+        with patch.object(module, "_atomic_write_config", side_effect=OSError("disk full")):
+            with self.assertRaises(ApiError):
+                await self.component._handle_reset_overrides(Request(confirm=True))
+        self.assertEqual(path.read_bytes(), b"custom\n")
+        self.api.do_restart.assert_not_awaited()
+
+    async def test_reset_reports_persisted_change_when_restart_fails(self):
+        self.component.local_overrides_path.write_bytes(b"custom\n")
+        self.api.do_restart.side_effect = RuntimeError("restart failed")
+        with self.assertLogs(module.LOGGER, level="ERROR"):
+            result = await self.component._handle_reset_overrides(Request(confirm=True))
+        self.assertTrue(result["reset"])
+        self.assertTrue(result["restartRequired"])
+        self.assertTrue(Path(result["backupPath"]).is_file())
 
     async def test_legacy_apply_without_request_id_returns_fast_accepted_operation(self):
         async def make_process(*args, **_kwargs):
