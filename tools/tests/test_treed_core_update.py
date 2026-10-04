@@ -4,6 +4,7 @@
 
 # Блок 1: Реальный installer в изолированном runtime.
 import contextlib
+import configparser
 import io
 import json
 import os
@@ -73,6 +74,91 @@ class CoreUpdateTests(unittest.TestCase):
         for key, data in self.old.items():
             self.assertEqual(core.destination(key, self.locations).read_bytes(), data, key)
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.1.0")
+
+    def seed_pid_calibration(self, extruder_already_saved=False):
+        extruder = b"[extruder]\ncontrol: pid\npid_Kp: 11.818\npid_Ki: 0.435\npid_Kd: 80.218\n"
+        bed = b"[heater_bed]\ncontrol: pid\npid_Kp: 62.937\npid_Ki: 1.165\npid_Kd: 849.647\n"
+        def commented(block):
+            return block.replace(b"control:", b"#control:").replace(b"pid_", b"#pid_")
+        saved_extruder = b"#*# [extruder]\n#*# control = pid\n#*# pid_kp = 12.0\n#*# pid_ki = 0.5\n#*# pid_kd = 81.0\n"
+        saved_bed = b"#*# [heater_bed]\n#*# control = pid\n#*# pid_kp = 63.0\n#*# pid_ki = 1.2\n#*# pid_kd = 850.0\n"
+        include = b"[include profiles/treed_v2_corexy_v1/macros.cfg]\n\n"
+        before = include + (commented(extruder) if extruder_already_saved else extruder) + bed + b"\n" + core.MARKER + b"\n"
+        if extruder_already_saved:
+            before += saved_extruder
+        calibrated = include + commented(extruder) + commented(bed) + b"\n" + core.MARKER + b"\n" + saved_extruder + saved_bed
+        self.old["config/printer.cfg"] = calibrated
+        (self.locations["config"] / "printer.cfg").write_bytes(calibrated)
+        self.payload["config/printer.cfg"] = include + extruder.replace(b"11.818", b"20.0") + bed.replace(b"62.937", b"70.0")
+        for row in self.previous["files"]:
+            if row["path"] == "config/printer.cfg":
+                row["runtimeSha256"] = core.content_hash(row["path"], before)
+        core.write_json(core.manifest_path(self.env), self.previous)
+        return before, calibrated
+
+    def test_pid_save_config_is_not_treated_as_manual_edits_and_calibration_wins(self):
+        _before, calibrated = self.seed_pid_calibration()
+        self.assertEqual(self.apply()["status"], "applied")
+        installed = (self.locations["config"] / "printer.cfg").read_bytes()
+        body, saved = installed.split(core.MARKER, 1)
+        self.assertEqual(saved, calibrated.split(core.MARKER, 1)[1])
+        settings = configparser.RawConfigParser()
+        settings.read_string(body.decode())
+        self.assertFalse(settings.has_option("extruder", "control"))
+        self.assertFalse(settings.has_option("heater_bed", "pid_kp"))
+        settings.read_string("\n".join(line[4:] for line in saved.decode().splitlines() if line.startswith("#*# ")))
+        self.assertEqual(settings.getfloat("extruder", "pid_kp"), 12.0)
+        self.assertEqual(settings.getfloat("heater_bed", "pid_kp"), 63.0)
+        self.assertIn(b"#pid_Kp: 20.0", body)
+        self.assertIn(b"#pid_Kp: 70.0", body)
+
+    def test_new_bed_calibration_is_compatible_with_manifest_after_extruder_calibration(self):
+        self.seed_pid_calibration(extruder_already_saved=True)
+        self.assertEqual(self.apply()["status"], "applied")
+
+    def test_pid_save_config_just_before_service_stop_is_preserved(self):
+        before, calibrated = self.seed_pid_calibration()
+        path = self.locations["config"] / "printer.cfg"
+        path.write_bytes(before)
+        def stop(action):
+            if action == "stop":
+                path.write_bytes(calibrated)
+        self.services.side_effect = stop
+        self.assertEqual(self.apply()["status"], "applied")
+        self.assertEqual(path.read_bytes().split(core.MARKER, 1)[1], calibrated.split(core.MARKER, 1)[1])
+
+    def test_manual_printer_edits_remain_rejected_after_pid_save_config(self):
+        self.seed_pid_calibration()
+        path = self.locations["config"] / "printer.cfg"
+        path.write_bytes(path.read_bytes().replace(b"macros.cfg", b"changed.cfg"))
+        with self.assertRaisesRegex(ValueError, "Локально изменён"):
+            self.apply()
+        self.services.assert_not_called()
+
+    def test_commented_pid_values_cannot_hide_manual_changes(self):
+        self.seed_pid_calibration()
+        path = self.locations["config"] / "printer.cfg"
+        path.write_bytes(path.read_bytes().replace(b"#pid_Kp: 11.818", b"#pid_Kp: 99.0"))
+        with self.assertRaisesRegex(ValueError, "Локально изменён"):
+            self.apply()
+        self.services.assert_not_called()
+
+    def test_pid_comments_without_matching_autosave_fields_remain_rejected(self):
+        _before, calibrated = self.seed_pid_calibration()
+        path = self.locations["config"] / "printer.cfg"
+        path.write_bytes(calibrated.split(core.MARKER, 1)[0] + core.MARKER + b"\n#*# [input_shaper]\n#*# shaper_freq_x = 71\n")
+        with self.assertRaisesRegex(ValueError, "Локально изменён"):
+            self.apply()
+        self.services.assert_not_called()
+
+    def test_baseline_accepts_stock_pid_comments_and_saved_calibration(self):
+        before, _calibrated = self.seed_pid_calibration()
+        source = self.root / "source-printer.cfg"
+        source.write_bytes(before.split(core.MARKER, 1)[0])
+        with patch.object(core, "package_manifest", return_value=dict(self.manifest, files=[])), \
+             patch.object(core, "sources", return_value={"config/printer.cfg": source}):
+            core.baseline(self.root, self.env)
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.2.0")
 
     def test_heater_shutdown_failure_does_not_stop_services_or_replace_files(self):
         self.stop_heating.side_effect = ValueError("heater still active")

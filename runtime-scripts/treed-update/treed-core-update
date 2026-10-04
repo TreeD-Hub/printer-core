@@ -262,10 +262,67 @@ def content_hash(key, data):
     return sha(data)
 
 
+def saved_pid_fields(data):
+    # SAVE_CONFIG комментирует исходные PID в основном файле, сохраняя их значения.
+    fields, section = set(), b""
+    for line in data.partition(MARKER)[2].splitlines():
+        if not line.startswith(b"#*# "):
+            continue
+        line = line[4:].strip().lower()
+        if line.startswith(b"[") and line.endswith(b"]"):
+            section = line[1:-1]
+        elif section in {b"extruder", b"heater_bed"}:
+            option = re.match(rb"(control|pid_kp|pid_ki|pid_kd)\s*=", line)
+            if option:
+                fields.add((section, option[1]))
+    return fields
+
+
+def pid_line_numbers(lines, fields, commented=False):
+    section = b""
+    for index, line in enumerate(lines):
+        header = re.fullmatch(rb"\[([^]]+)\]\s*(?:[#;].*)?", line.strip())
+        if header:
+            section = header[1].strip().lower()
+        if commented:
+            if not line.startswith(b"#"):
+                continue
+            line = line[1:]
+        option = re.match(rb"(control|pid_kp|pid_ki|pid_kd)\s*[:=]", line.strip(), re.I)
+        if option and (section, option[1].lower()) in fields:
+            yield index
+
+
+def matches_managed_file(key, data, expected_hash):
+    if content_hash(key, data) == expected_hash:
+        return True
+    if key != "config/printer.cfg":
+        return False
+    lines = data.partition(MARKER)[0].splitlines(keepends=True)
+    indices = list(pid_line_numbers(lines, saved_pid_fields(data), commented=True))
+    # Совместимость с уже записанными manifest: часть PID могла быть сохранена раньше.
+    # Проверяем только снятие одного штатного '#', без изменений исходных значений.
+    # Два нагревателя по четыре поля дают не более 256 вариантов исходного hash.
+    if len(indices) > 8:
+        return False
+    for mask in range(1, 1 << len(indices)):
+        candidate = list(lines)
+        for bit, index in enumerate(indices):
+            if mask & (1 << bit):
+                candidate[index] = candidate[index][1:]
+        if content_hash(key, b"".join(candidate)) == expected_hash:
+            return True
+    return False
+
+
 def render(key, data, old, env):
     if key == "config/printer.cfg":
         data = data.split(MARKER, 1)[0]
         if old and MARKER in old:
+            lines = data.splitlines(keepends=True)
+            for index in pid_line_numbers(lines, saved_pid_fields(old)):
+                lines[index] = b"#" + lines[index]
+            data = b"".join(lines)
             data = data.rstrip(b"\r\n") + b"\n\n" + MARKER + old.split(MARKER, 1)[1]
     if key.startswith("config/moonraker/base/"):
         text = data.decode("utf-8").replace("{{PI_HOME}}", env["TREED_UPDATE_PI_HOME"])
@@ -455,7 +512,7 @@ def prepare(manifest, payload, env, journal):
     for index, key in enumerate(sorted(payload.keys() | old_files.keys())):
         path = destination(key, locations)
         old, info = read_file(path)
-        if old is not None and key in old_files and content_hash(key, old) != old_files[key]["runtimeSha256"]:
+        if old is not None and key in old_files and not matches_managed_file(key, old, old_files[key]["runtimeSha256"]):
             raise ValueError(f"Локально изменён управляемый файл: {key}; перенесите настройки в overrides")
         if old is not None and key not in old_files:
             raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
