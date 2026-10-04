@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import types
 import unittest
@@ -319,6 +320,48 @@ class PackageTests(unittest.TestCase):
              patch.object(core.subprocess, "check_output", return_value=" M klippy.py"):
             with self.assertRaisesRegex(ValueError, "Изменены исходники"):
                 core.check_compatibility(manifest, env)
+
+
+# Блок 5: Реальный Git с checkout другого владельца, без глобального доверия.
+class CoreGitOwnershipTests(unittest.TestCase):
+    def test_cross_owner_read_preserves_version_and_dirty_checks(self):
+        with tempfile.TemporaryDirectory(prefix="treed git ownership ") as temp, \
+             patch.dict(os.environ, {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}):
+            home = Path(temp)
+            env = {"TREED_UPDATE_PI_HOME": str(home)}
+            requires = {}
+            for name in ("klipper", "moonraker"):
+                repo = home / name
+                subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=10)
+                (repo / "tracked.txt").write_text("original\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True, timeout=10)
+                subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c",
+                                "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                                "commit", "-qm", "Initial"], check=True, timeout=10)
+                requires[name] = core.git_head(repo)
+            manifest = {"requires": requires}
+            locations = {"klipper": home / "klipper/klippy/extras",
+                         "moonraker": home / "moonraker/moonraker/components"}
+            with patch.dict(os.environ, {"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}), \
+                 patch.object(core, "roots", return_value=locations):
+                for name, expected in requires.items():
+                    repo = home / name
+                    rejected = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                              capture_output=True, text=True, timeout=10)
+                    self.assertEqual(rejected.returncode, 128)
+                    self.assertIn("dubious ownership", rejected.stderr)
+                    self.assertEqual(core.git_head(repo), expected)
+                core.check_compatibility(manifest, env)
+                incompatible = {"requires": dict(requires, klipper="0" * 40)}
+                with self.assertRaisesRegex(ValueError, "другую версию klipper"):
+                    core.check_compatibility(incompatible, env)
+                for name in requires:
+                    with self.subTest(name=name):
+                        tracked = home / name / "tracked.txt"
+                        tracked.write_text("local edit\n", encoding="utf-8")
+                        with self.assertRaisesRegex(ValueError, f"Изменены исходники установленного {name}"):
+                            core.check_compatibility(manifest, env)
+                        tracked.write_text("original\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

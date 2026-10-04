@@ -87,7 +87,9 @@ def sources(repo):
 
 
 def git_head(path):
-    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"],
+    # Root-worker читает checkout пользователя; доверие ограничено одним путём и вызовом.
+    return subprocess.check_output(["git", "-c", f"safe.directory={path.resolve().as_posix()}",
+                                   "-C", str(path), "rev-parse", "HEAD"],
                                    text=True, timeout=10).strip()
 
 
@@ -350,7 +352,8 @@ def check_compatibility(manifest, env):
                        ("moonraker", locations["moonraker"].parents[1])):
         if git_head(repo) != manifest["requires"].get(name):
             raise ValueError(f"Пакет требует другую версию {name}; обновление зависимостей выполняется отдельно")
-        dirty = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+        dirty = subprocess.check_output(["git", "-c", f"safe.directory={repo.resolve().as_posix()}",
+                                        "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
                                         text=True, timeout=10).strip()
         if dirty:
             raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
