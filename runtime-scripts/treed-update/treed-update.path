@@ -4,7 +4,8 @@ Description=Watch for queued TreeD update operations
 [Path]
 PathChanged=/var/lib/treed-update/state.json
 Unit=treed-update.service
-MakeDirectory=yes
+# state.json — файл; родительский каталог создаёт loader.
+MakeDirectory=no
 
 [Install]
 WantedBy=multi-user.target

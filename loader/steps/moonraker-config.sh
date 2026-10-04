@@ -199,6 +199,20 @@ deploy_treed_update_command() {
   install -m 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
   install -m 0644 "${recover_unit_src}" /etc/systemd/system/treed-update-recover.service
   install -d -m 0755 -o root -g root /var/lib/treed-update /var/log/treed-update
+
+  # Блок 3.2: Устраняем только пустой каталог от прежнего MakeDirectory=yes.
+  if [ -L /var/lib/treed-update/state.json ]; then
+    log_error "treed update state must not be a symlink: /var/lib/treed-update/state.json"
+    exit 1
+  fi
+  if [ -d /var/lib/treed-update/state.json ]; then
+    systemctl stop treed-update.path
+    if ! rmdir /var/lib/treed-update/state.json; then
+      log_error "treed update state directory is not empty; refusing to remove its contents"
+      exit 1
+    fi
+    log_warn "treed update: removed empty state.json directory created by the old path unit"
+  fi
   systemctl daemon-reload
   systemctl enable treed-update-recover.service
   systemctl enable --now treed-update.path

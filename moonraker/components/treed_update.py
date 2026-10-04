@@ -549,7 +549,7 @@ class TreeDUpdate:
             return _result(target, None, None, "error", "Не удалось проверить выпуск. Повторите попытку позже.")
 
     def _read_state(self) -> Dict[str, Any]:
-        if not self.state_file.is_file():
+        if not self.state_file.exists():
             return {
                 "status": "idle",
                 "busy": False,

@@ -97,6 +97,17 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
                     requestId="not-an-id", targetId="printer-ui", targetTag="ui-main-123-1"))
         submit.assert_not_awaited()
 
+    async def test_state_directory_is_reported_as_unreadable_and_blocks_apply(self):
+        self.component.state_file.mkdir()
+
+        result = await self.component._handle_status(object())
+
+        self.assertTrue(result["busy"])
+        self.assertFalse(result["canApply"])
+        self.assertEqual(result["resultCode"], "state_unreadable")
+        ui = next(row for row in result["releaseResults"] if row["id"] == "printer-ui")
+        self.assertFalse(ui["canApply"])
+
     async def test_ui_release_without_sha256_digest_is_not_advertised_as_applicable(self):
         release = {
             "tag_name": "ui-main-123-1", "assets": [{

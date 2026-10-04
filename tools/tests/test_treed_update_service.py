@@ -1,9 +1,12 @@
 """Изолированные проверки root update queue и persistent operation state."""
 
 import contextlib
+import configparser
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -26,6 +29,43 @@ class FakeLock:
 
 
 class UpdateServiceTests(unittest.TestCase):
+    def test_path_unit_watches_state_file_without_creating_a_directory(self):
+        config = configparser.ConfigParser()
+        config.read(SERVICE_PATH.with_name("treed-update.path"), encoding="utf-8")
+        self.assertEqual(config["Path"]["PathChanged"], "/var/lib/treed-update/state.json")
+        self.assertFalse(config["Path"].getboolean("MakeDirectory", fallback=False))
+
+    def test_loader_repairs_only_empty_state_directory(self):
+        git = shutil.which("git")
+        bash = str(Path(git).parents[1] / "bin/bash.exe") if sys.platform == "win32" and git else shutil.which("bash")
+        if not bash or not Path(bash).is_file():
+            self.skipTest("Bash недоступен для проверки миграции loader")
+        loader = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
+        block = loader.split("  # Блок 3.2:", 1)[1].split("  systemctl daemon-reload", 1)[0]
+        block = block[block.index("  if "):].replace("/var/lib/treed-update/state.json", "./state.json")
+        script = "set -e\nsystemctl() { echo \"$*\" >> calls; }\nlog_error() { :; }\nlog_warn() { :; }\n" + block
+        for kind in ("missing", "file", "empty", "nonempty"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                state = Path(temp) / "state.json"
+                if kind == "file":
+                    state.write_text('{"history": []}', encoding="utf-8")
+                elif kind in ("empty", "nonempty"):
+                    state.mkdir()
+                    if kind == "nonempty":
+                        (state / "keep.json").write_text("сохранить", encoding="utf-8")
+                result = subprocess.run([bash, "-c", script], cwd=temp, capture_output=True)
+                self.assertEqual(result.returncode, 1 if kind == "nonempty" else 0)
+                if kind == "empty":
+                    self.assertFalse(state.exists())
+                    self.assertEqual((Path(temp) / "calls").read_text().strip(), "stop treed-update.path")
+                elif kind == "nonempty":
+                    self.assertEqual((state / "keep.json").read_text(encoding="utf-8"), "сохранить")
+                elif kind == "file":
+                    self.assertEqual(state.read_text(encoding="utf-8"), '{"history": []}')
+                    self.assertFalse((Path(temp) / "calls").exists())
+                else:
+                    self.assertFalse(state.exists())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

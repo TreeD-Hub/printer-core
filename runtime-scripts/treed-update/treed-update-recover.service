@@ -1,10 +1,12 @@
+# Назначение: восстановление состояния обновления после запуска UI (required).
+# Блок 1: UI может требовать Moonraker; восстановление не блокирует запуск API.
 [Unit]
 Description=Recover interrupted TreeD update operation state
 DefaultDependencies=no
 After=local-fs.target treed-shell.service
-Before=moonraker.service
 Wants=local-fs.target
 
+# Блок 2: общий worker восстанавливает операцию под штатной блокировкой.
 [Service]
 Type=oneshot
 User=root
@@ -17,5 +19,6 @@ ExecStart=/usr/local/sbin/treed-update-service recover
 StandardOutput=journal
 StandardError=journal
 
+# Блок 3: восстановление включается при обычной загрузке системы.
 [Install]
 WantedBy=multi-user.target
