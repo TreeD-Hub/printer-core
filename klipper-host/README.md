@@ -4,7 +4,9 @@
 закреплённого Klipper. Здесь хранятся расширения для профиля `treed_v2_corexy_v1`.
 
 `treed_driver_mode.py` управляет режимом TMC5160 XYZ, с допуском и групповым откатом.
-`treed_driver_fan_mode.py` меняет профиль штатного controller_fan без сброса автоматики.
+`treed_driver_fan_mode.py` включает обдув по нагрузке и защитному таймеру,
+меняет мощность в проверенном диапазоне. Пин и timer принадлежат controller_fan;
+его callback заменяется до `klippy:ready` для закреплённого Klipper ce7002bed.
 [Команды, сохранение и аппаратный допуск](../klipper/profiles/treed_v2_corexy_v1/ui-driver-modes-contract.md).
 
 `treed_print_cancel.py` подключается секцией `[treed_print_cancel]` в `ui.cfg`.
