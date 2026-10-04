@@ -189,10 +189,36 @@ if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
 
   if [ -f "${TMP_KEEP}/printer_save_config.block" ] && [ -f "${CONFIG_DIR}/printer.cfg" ]; then
     TMP_PRINTER="$(mktemp)"
+    # Сохранённая PID-калибровка имеет приоритет над начальными значениями staging.
+    # Комментируем только присутствующие в autosave поля, как штатный SAVE_CONFIG.
     awk -v marker="${SAVE_CONFIG_MARKER}" '
+      FNR == 1 { section = "" }
+      NR == FNR {
+        line = tolower($0)
+        sub(/^#\*#[[:space:]]*/, "", line)
+        if (line ~ /^\[[^]]+\][[:space:]]*$/) {
+          section = line
+          sub(/[[:space:]]+$/, "", section)
+        }
+        if ((section == "[extruder]" || section == "[heater_bed]") &&
+            line ~ /^(control|pid_kp|pid_ki|pid_kd)[[:space:]]*=/) {
+          sub(/[[:space:]]*=.*$/, "", line)
+          saved_pid[section, line] = 1
+        }
+        next
+      }
       index($0, marker) { exit }
+      {
+        line = tolower($0)
+        if (line ~ /^\[[^]]+\][[:space:]]*$/) {
+          section = line
+          sub(/[[:space:]]+$/, "", section)
+        }
+        sub(/[[:space:]]*:.*$/, "", line)
+        if (saved_pid[section, line]) { $0 = "#" $0 }
+      }
       { print }
-    ' "${CONFIG_DIR}/printer.cfg" > "${TMP_PRINTER}"
+    ' "${TMP_KEEP}/printer_save_config.block" "${CONFIG_DIR}/printer.cfg" > "${TMP_PRINTER}"
     cat "${TMP_KEEP}/printer_save_config.block" >> "${TMP_PRINTER}"
     mv "${TMP_PRINTER}" "${CONFIG_DIR}/printer.cfg"
     log_info "klipper-core: restored printer.cfg SAVE_CONFIG segment"
