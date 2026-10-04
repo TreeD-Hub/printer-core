@@ -60,6 +60,14 @@ class Printer:
         self.callbacks = []
         self.controller = NS(fan_speed=1., idle_speed=.5, last_on=99,
                              get_status=lambda now: {'speed': .5})
+        self.motors_enabled = False
+        self.fan_output = []
+        self.controller.stepper_names = ['stepper_x', 'stepper_y', 'stepper_z']
+        self.controller.stepper_enable = NS(lookup_enable=lambda name:
+            NS(is_motor_enabled=lambda: self.motors_enabled))
+        self.controller.idle_timeout = 120
+        self.controller.last_speed = 0.
+        self.controller.fan = NS(set_speed=self.fan_output.append)
         self.objects = {
             'gcode': NS(register_command=lambda name, fn: self.commands.update({name: fn}),
                         get_mutex=nullcontext,
@@ -129,7 +137,7 @@ class Config:
     def getsection(self, name):
         return Config(self.printer, off_below=.15)
 
-    def getfloat(self, name, default=None):
+    def getfloat(self, name, default=None, **kwargs):
         return self.values.get(name, default)
 
     def getboolean(self, name, default=False):
@@ -147,6 +155,9 @@ class Command:
 
     def get(self, key):
         return self.params[key]
+
+    def get_float(self, key):
+        return float(self.params[key])
 
     error = staticmethod(ValueError)
 
@@ -328,6 +339,94 @@ class DriverModesTest(unittest.TestCase):
         for active, idle in ((None, None), (.1, .1), (.8, .9), (float('nan'), .4), (1.1, .4)):
             with self.assertRaises(ValueError):
                 self.fan(quiet_validated=True, quiet_active_speed=active, quiet_idle_speed=idle)
+
+    def test_manual_fan_delay_and_hold_protection(self):
+        fan = self.fan()
+        self.printer.motors_enabled = True
+        fan.callback(0.)
+        fan.callback(29.)
+        self.assertEqual(self.printer.fan_output, [])
+        self.assertEqual(fan.load_reason, 'manual_delay')
+        fan.callback(30.)
+        self.assertEqual(self.printer.fan_output, [1.])
+        self.assertEqual(fan.load_reason, 'motor_timeout')
+
+    def test_nonfinite_fan_delay_is_rejected(self):
+        for delay in (float('nan'), float('inf'), float('-inf')):
+            with self.assertRaises(ValueError):
+                self.fan(load_delay=delay)
+
+    def test_short_manual_move_does_not_start_cooldown(self):
+        fan = self.fan()
+        self.printer.motors_enabled = True
+        fan.callback(0.)
+        self.printer.motors_enabled = False
+        fan.callback(5.)
+        fan.callback(130.)
+        self.assertEqual(self.printer.fan_output, [])
+        self.assertEqual(fan.load_reason, 'idle')
+
+    def test_operation_load_and_cooldown(self):
+        for phase in ('preparing', 'printing', 'paused', 'calibrating', 'auto_remove'):
+            with self.subTest(phase=phase):
+                self.printer.controller.last_speed = 0.
+                self.printer.fan_output.clear()
+                fan = self.fan()
+                self.printer.objects['gcode_macro _TREED_OPERATION_STATE'].variables['phase'] = phase
+                self.printer.motors_enabled = False
+                fan.callback(0.)
+                self.assertEqual(self.printer.fan_output, [])
+                self.printer.motors_enabled = True
+                fan.callback(1.)
+                self.assertEqual(self.printer.fan_output, [1.])
+                self.printer.motors_enabled = False
+                fan.callback(2.)
+                self.assertEqual(fan.load_reason, 'cooldown')
+                self.assertEqual(self.printer.fan_output, [1., .5])
+                fan.callback(121.)
+                self.assertEqual(self.printer.fan_output, [1., .5, 0.])
+
+    def test_print_stats_and_unknown_phase_start_fan(self):
+        fan = self.fan()
+        self.printer.motors_enabled = True
+        self.printer.stats = 'printing'
+        fan.callback(0.)
+        self.assertEqual(fan.load_reason, 'printing')
+        self.printer.stats = 'standby'
+        self.printer.objects['gcode_macro _TREED_OPERATION_STATE'].variables['phase'] = 'unknown'
+        fan.callback(1.)
+        self.assertEqual(fan.load_reason, 'unknown_state')
+        self.assertEqual(self.printer.controller.last_speed, 1.)
+
+    def test_sgt_calibration_starts_fan_without_phase_marker(self):
+        fan = self.fan()
+        self.printer.motors_enabled = True
+        self.printer.objects['treed_sgt_executor'] = NS(running=True)
+        fan.callback(0.)
+        self.assertEqual(fan.load_reason, 'calibrating')
+        self.assertEqual(self.printer.fan_output, [1.])
+
+    def test_fan_power_range_persistence_and_rollback(self):
+        fan = self.fan(quiet_validated=True, quiet_active_speed=.8, quiet_idle_speed=.4)
+        fan.cmd_set(Command('normal', POWER='90'))
+        self.assertEqual(self.printer.controller.fan_speed, .9)
+        fan.handle_ready()
+        self.assertEqual(self.printer.controller.fan_speed, .9)
+        self.printer.save_fails = True
+        with self.assertRaises(ValueError):
+            fan.cmd_set(Command('quiet', POWER='85'))
+        self.assertEqual(self.printer.controller.fan_speed, .9)
+        self.assertEqual(self.printer.controller.idle_speed, .5)
+        for power in ('0', '79', '101', 'nan', 'inf'):
+            with self.assertRaises(ValueError):
+                fan.cmd_set(Command('normal', POWER=power))
+        self.printer.controller.fan_speed = 1.
+        self.printer.controller.idle_speed = .5
+        fan = self.fan()
+        with self.assertRaises(ValueError):
+            fan.cmd_set(Command('normal', POWER='99'))
+        fan.handle_ready()
+        self.assertEqual(self.printer.controller.fan_speed, 1.)
 
     def test_delivery_contract(self):
         bootstrap = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
