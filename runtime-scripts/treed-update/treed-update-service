@@ -27,9 +27,10 @@ from typing import Any, Dict
 
 STATE = Path(os.environ.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json"))
 LOCK = Path(os.environ.get("TREED_UPDATE_LOCK_FILE", "/run/lock/treed-update.lock"))
+LOG = Path(os.environ.get("TREED_UPDATE_LOG_FILE", "/var/log/treed-update/worker.log"))
 APPLY = os.environ.get("TREED_UPDATE_APPLY", "/usr/local/sbin/treed-update-apply")
 UNIT = os.environ.get("TREED_UPDATE_UNIT", "treed-update.service")
-TREED_AB = os.environ.get("TREED_AB_COMMAND", "/usr/local/sbin/treed-ab")
+CORE_APPLY = os.environ.get("TREED_CORE_UPDATE_COMMAND", "/usr/local/sbin/treed-core-update")
 TARGET_RE = {
     "printer-ui": re.compile(r"^ui-main-[0-9]+-[0-9]+$"),
     "printer-core": re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
@@ -204,20 +205,29 @@ def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -
     write_state(state)
 
 
-def system_ab_capability() -> Dict[str, Any]:
+def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
+    # Блок 3.1: Отдельный пакет TreeD; provisioning и A/B adapter не вызываются.
+    command = [CORE_APPLY, "recover", state["operationId"]] if recovery else [
+        CORE_APPLY, "apply", state["targetTag"], state["operationId"]]
     try:
-        result = subprocess.run([TREED_AB, "status"], capture_output=True, text=True,
-                                timeout=6, check=False)
-        value = json.loads(result.stdout) if result.returncode == 0 else {}
-    except (OSError, subprocess.SubprocessError, ValueError):
-        value = {}
-    if isinstance(value, dict) and value.get("supported") is False:
-        return value
-    return {
-        "supported": False,
-        "reasonCode": "ab_update_backend_incomplete",
-        "reason": "Обновление системы недоступно: A/B-установка и проверка после загрузки не реализованы.",
-    }
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a", encoding="utf-8") as log:
+            log.write(f"{now()} core {'recovery' if recovery else 'apply'} {state['operationId']}\n")
+            log.flush()
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=log, text=True, check=False)
+            log.write(result.stdout + "\n")
+        payload = json.loads(result.stdout)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid core updater response")
+        status = payload.get("status")
+        if status not in {"applied", "rolled_back", "error"} or status == "applied" and result.returncode != 0:
+            raise ValueError("invalid core updater response")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        payload = {"status": "error", "resultCode": "core_update_failed",
+                   "message": "Не удалось подтвердить результат core updater; проверьте журнал службы."}
+    finish(read_state(), payload["status"], str(payload.get("resultCode", "core_update_failed")),
+           str(payload.get("message", "Обновление TreeD Core завершено.")))
+    return 0 if payload["status"] == "applied" or recovery and payload["status"] == "rolled_back" else 1
 
 
 def run_worker() -> int:
@@ -228,16 +238,15 @@ def run_worker() -> int:
         state = read_state()
         if state.get("status") not in ACTIVE or state.get("busy") is not True:
             return 0
+        if state.get("targetId") == "printer-core" and state.get("status") != "queued":
+            return run_core(state, recovery=True)
         state.update(status="validating", phase="validating", message="Проверяем состояние принтера.", updatedAt=now())
         write_state(state)
         if not printer_is_idle():
             finish(state, "rejected", "printer_not_idle", "Принтер печатает или его состояние недоступно.")
             return 1
         if state.get("targetId") == "printer-core":
-            capability = system_ab_capability()
-            finish(state, "rejected", str(capability.get("reasonCode", "ab_platform_unverified")),
-                   str(capability.get("reason", "Обновление системы недоступно: A/B-платформа не подтверждена.")))
-            return 1
+            return run_core(state)
         transition("downloading", "Загружаем и проверяем UI bundle.")
         state = read_state()
         env = dict(os.environ, TREED_UPDATE_MANAGED="1",
@@ -285,6 +294,8 @@ def recover() -> int:
     try:
         state = read_state()
         if state.get("busy") is True or state.get("status") in ACTIVE:
+            if state.get("targetId") == "printer-core":
+                return run_core(state, recovery=True)
             if state.get("targetId") == "printer-ui" and recover_ui(state):
                 return 0
             finish(state, "error", "operation_interrupted",

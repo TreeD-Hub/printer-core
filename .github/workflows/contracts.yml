@@ -12,6 +12,9 @@ on:
       - "moonraker/**"
       - "runtime-scripts/**"
       - "tools/tests/**"
+      - "tools/treed_sgt_calibration.py"
+      - "VERSION"
+      - "runtime-versions.env"
   pull_request:
     paths:
       - ".github/workflows/**"
@@ -23,6 +26,9 @@ on:
       - "moonraker/**"
       - "runtime-scripts/**"
       - "tools/tests/**"
+      - "tools/treed_sgt_calibration.py"
+      - "VERSION"
+      - "runtime-versions.env"
 
 jobs:
   static-contracts:
@@ -32,6 +38,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a new core version in release PRs
+        if: github.event_name == 'pull_request' && github.base_ref == 'treed-v2'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import subprocess
+          base = os.environ['BASE_SHA']
+          changed = subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines()
+          payload = ('klipper/', 'klipper-host/', 'moonraker/', 'runtime-scripts/treed-cam/',
+                     'runtime-scripts/treed-update/', 'runtime-scripts/treed-ui/')
+          if any((path.startswith(payload) and not path.endswith('.md')) or path == 'tools/treed_sgt_calibration.py' for path in changed):
+              previous = subprocess.check_output(['git', 'show', base + ':VERSION'], text=True).strip()
+              current = pathlib.Path('VERSION').read_text().strip()
+              if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', current):
+                  raise SystemExit('VERSION must be x.y.z')
+              if tuple(map(int, current.split('.'))) <= tuple(map(int, previous.split('.'))):
+                  raise SystemExit('Bump VERSION in this PR to publish a new immutable core runtime release')
+          PY
 
       - name: Shell syntax
         shell: bash
@@ -56,3 +87,9 @@ jobs:
             ForEach-Object {
               & $_.FullName
             }
+
+      - name: Runtime updater checks
+        run: |
+          python3 -B tools/tests/test_treed_core_update.py
+          python3 -B tools/tests/test_treed_update_service.py
+          python3 -B tools/tests/test_treed_update_component.py

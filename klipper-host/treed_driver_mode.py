@@ -17,12 +17,15 @@ class TreedDriverMode:
         self.state = 'applying'
         self.message = None
         self.needs_restart = False
+        self.normal_limits = None
         self.gcode.register_command('TREED_DRIVER_MODE_SET', self.cmd_set)
         self.printer.register_event_handler('klippy:connect', self.handle_connect)
         self.printer.register_event_handler('klippy:ready', self.handle_ready)
 
     def handle_connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
+        self.set_max_velocities = self.toolhead.set_max_velocities
+        self.toolhead.set_max_velocities = self.limit_velocities
         self.drivers = [self.printer.lookup_object('tmc5160 stepper_' + axis)
                         for axis in ('x', 'y', 'z')]
 
@@ -90,7 +93,20 @@ class TreedDriverMode:
         except Exception as exc:
             raise gcmd.error('Режим XYZ: ' + str(exc)) from exc
 
-    # Блок 3: Групповая запись с откатом; MCU-проверка доступного GCONF.
+    # Блок 3: Общий потолок XYZ, включая M204, travel и сервисные лимиты.
+    def motion_limits(self):
+        return (self.toolhead.max_velocity, self.toolhead.max_accel,
+                self.toolhead.square_corner_velocity, self.toolhead.min_cruise_ratio)
+
+    def limit_velocities(self, velocity, accel, scv, cruise_ratio):
+        if self.normal_limits is not None:
+            # None сохраняет текущий лимит; более низкие значения не повышаем.
+            velocity = min(self.toolhead.max_velocity if velocity is None else velocity, 350.)
+            accel = min(self.toolhead.max_accel if accel is None else accel, 15000.)
+            scv = min(self.toolhead.square_corner_velocity if scv is None else scv, 350.)
+        return self.set_max_velocities(velocity, accel, scv, cruise_ratio)
+
+    # Блок 4: Групповая запись с откатом драйверов и лимитов движения.
     def write_fields(self, values):
         for driver, fields in zip(self.drivers, values):
             for field, value in fields.items():
@@ -104,23 +120,37 @@ class TreedDriverMode:
 
     def apply(self, mode, persist=True):
         previous_mode = self.mode
+        previous_limits = self.motion_limits()
+        previous_normal_limits = self.normal_limits
         previous = [{field: d.fields.get_field(field)
                      for field in ('en_pwm_mode', 'tpwmthrs')} for d in self.drivers]
         self.state, self.message = 'applying', None
         try:
+            if mode == 'quiet':
+                if self.normal_limits is None:
+                    self.normal_limits = previous_limits
+                # Сначала ограничиваем движение, затем включаем stealthChop.
+                self.limit_velocities(None, None, None, None)
             self.write_fields([dict(en_pwm_mode=int(mode == 'quiet'), tpwmthrs=0)
                                for _ in self.drivers])
+            if mode == 'normal' and self.normal_limits is not None:
+                limits = self.normal_limits
+                self.normal_limits = None
+                self.set_max_velocities(*limits)
             if persist:
                 self.gcode.run_script_from_command(
                     'SAVE_VARIABLE VARIABLE=driver_mode VALUE="' + repr(mode) + '"')
         except Exception as exc:
             self.message = str(exc)
             try:
+                # При возврате в quiet потолок действует до восстановления TMC.
+                self.normal_limits = previous_normal_limits
+                self.set_max_velocities(*previous_limits)
                 self.write_fields(previous)
                 self.mode, self.state = previous_mode, 'ready'
             except Exception:
                 self.mode, self.state, self.needs_restart = None, 'fault', True
-                self.printer.invoke_shutdown('Режим XYZ: восстановление драйверов не подтверждено')
+                self.printer.invoke_shutdown('Режим XYZ: восстановление драйверов и лимитов не подтверждено')
             raise
         self.mode, self.state = mode, 'ready'
 

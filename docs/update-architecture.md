@@ -18,9 +18,65 @@ Moonraker принимает запрос, но не владеет долгой
 
 Root-служба атомарно хранит текущую операцию и последние десять завершённых в `/var/lib/treed-update/state.json`; inter-process `flock` сериализует submit, worker и recovery. Файл синхронизируется на диск до замены, каталог — после неё. Systemd path-unit запускает worker при изменении состояния, закрывая промежуток между записью queued и запуском службы. `ExecStopPost` и boot recovery завершают состояние, если worker прервался.
 
-## Чего пока нет
+## Обновление компонентов TreeD (`printer-core`)
 
-Обновление `printer-core` намеренно недоступно (`canApply=false`, capability `ab_update_backend_incomplete`). Этот репозиторий не содержит подтверждённой разметки устройства, интеграции загрузчика, production RAUC system bundle, ключа подписи, миграции постоянных данных или обязательной post-boot health-проверки. Старый путь `git checkout` плюс обычный loader удалён из updater: он не мог дать A/B откат.
+`printer-core` теперь означает пакет `treed-core-runtime.zip`: наши конфиги,
+Klipper host extensions, Moonraker components, camera scripts и команды
+`treed-ui`, `treed-update-service`, `treed-update-apply`, `treed-core-update`.
+ОС, загрузчик, зависимости, systemd units, upstream Git checkout и MCU firmware
+этим пакетом не обновляются. Полный loader не запускается.
+
+Release workflow публикует пакет после push изменения `VERSION` в `treed-v2`
+(обычно merge PR), по тегу `vX.Y.Z` или вручную. PR с изменением payload должен
+повышать `VERSION`. Тег и assets неизменяемы; совпадение существующего тега с
+другим commit блокирует публикацию. Assets сначала загружаются в draft;
+публикация выполняется после успешной загрузки полного набора. Прерванный draft
+допускает повтор, опубликованный выпуск не перезаписывается.
+Архив содержит schema/kind, версию, commit,
+точные SHA совместимых Klipper/Moonraker и checksum каждого файла. Старый
+source-only release не предлагает применимое обновление.
+
+Worker вызывает `treed-core-update apply <tag> <operationId>` под общим lock.
+Updater проверяет SHA-256 GitHub Release asset, ZIP, manifest, разрешённые
+назначения и текущие upstream SHA/отсутствие tracked изменений. Перед остановкой
+служб требуются Klipper `ready`, отсутствие печати/паузы и нулевые heater targets.
+Установка заменяет отдельные управляемые файлы; неизвестные файлы не удаляются.
+Удаление допускается только для файлов предыдущего ownership manifest.
+Локальные правки управляемых файлов блокируют update; перенесите настройки в
+штатные overrides. Занятое неизвестным файлом новое назначение также блокирует
+установку. `SAVE_CONFIG` сохраняется целиком, включая последнее сохранение до
+остановки Klipper. `local_overrides.cfg`, `treed_variables.cfg`,
+`filament_motion_runtime.cfg`, `moonraker/generated`, снимки и пользовательские
+данные не входят в package payload. Устройство сохраняет вычисленные loader
+updater-секции Mainsail/Crowsnest, шаблоны рендерятся с его `PI_HOME`/`PI_USER`.
+
+До первой замены сохраняются fsync before-images и journal в
+`/var/lib/treed-update/core/<operationId>`. Записи отдельных файлов атомарны;
+многофайловая установка защищена остановкой Klipper/Moonraker и recovery.
+Сбой установки/readiness возвращает прежние файлы, права и ownership manifest.
+Три последовательных проверки Klipper `ready` и обязательных Moonraker
+components подтверждают результат. Только затем обновляется
+`/var/lib/treed-update/core-manifest.json`. Worker/boot recovery откатывает
+незавершённый journal; committed результат подтверждается readiness. Ошибка
+возврата или readiness не называется успешным rollback. Резервные файлы остаются
+для диагностики; текущий updater автоматически их не удаляет.
+
+Первичная доставка: установить новый checkout обычным loader. После успешного
+`verify` записывается baseline после сверки реально доставленных файлов с
+исходниками выпуска и SHA текущих зависимостей. При
+`TREED_ALLOW_HARDWARE_NOT_READY=1` baseline не записывается. Виджет разрешает core
+update только после установки команды и baseline. Текущая версия читается из
+runtime manifest; `VERSION` checkout используется лишь до первичной установки.
+GitHub digest/TLS используется с той же моделью доверия, что у UI; отдельной
+подписи издателя runtime-пакета пока нет. Readiness не заменяет испытания
+движения, нагрева и калибровки при выпуске изменённых макросов.
+
+## Системное A/B обновление: пока недоступно
+
+Системный A/B updater остаётся отдельным будущим контуром. Этот репозиторий не
+содержит подтверждённой разметки устройства, интеграции загрузчика, production
+RAUC system bundle, ключа подписи, миграции постоянных данных или обязательной
+post-boot health-проверки.
 
 `treed-ab` сейчас только сообщает fail-closed состояние. Установка RAUC или наличие platform attestation сами по себе не разблокируют кнопку. Для включения требуются все следующие части:
 
@@ -30,10 +86,15 @@ Root-служба атомарно хранит текущую операцию 
 4. Разделить системные файлы и пользовательские данные, подготовить миграцию настроек с возможностью возврата.
 5. Проверить на целевой плате загрузку, службы, обязательные MCU, интерфейс и стабильность; подтверждать новый слот лишь после health gate.
 6. Испытать потерю питания на каждой границе, ошибку записи, повреждённый пакет, отказ платы, rollback и восстановление через сервисный носитель.
-7. Только после этого выставлять capability `supported=true` и разрешать системные выпуски.
+7. Только после этого разрешать отдельные системные выпуски; capability пакета компонентов TreeD не подтверждает готовность A/B.
 
 Обновление прошивки MCU остаётся отдельной операцией: возврат OS-слота не откатывает прошивку контроллера. Выпуск системы должен явно объявлять совместимость с установленными версиями MCU.
 
 ## Проверки
 
-`tools/tests/test_treed_update_component.py` проверяет совместимость POST, быстрый локальный status и capability. `tools/tests/test_treed_update_service.py` проверяет idempotency, busy, валидацию аргументов, durable state, service-start failure, прерывание и recovery UI в изоляции. Эти проверки не заменяют испытания systemd, RAUC и загрузчика на целевой плате.
+`tools/tests/test_treed_update_component.py` проверяет совместимость POST,
+локальный status, runtime capability и версию. `tools/tests/test_treed_update_service.py`
+проверяет очередь и передачу core операции, прерывание и recovery UI.
+`tools/tests/test_treed_core_update.py` проверяет реальный package build,
+сохранность локальных данных, rollback и прерывание многофайловой установки.
+Эти проверки не заменяют испытания systemd и принтера на целевой плате.

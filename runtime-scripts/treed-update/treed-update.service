@@ -15,6 +15,7 @@ EnvironmentFile=-/etc/default/treed-update
 ExecStart=/usr/local/sbin/treed-update-service run
 ExecStopPost=/usr/local/sbin/treed-update-service recover
 TimeoutStartSec=30min
+TimeoutStopSec=5min
 StandardOutput=journal
 StandardError=journal
 

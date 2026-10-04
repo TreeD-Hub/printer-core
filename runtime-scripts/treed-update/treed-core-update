@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+"""Назначение: пакет и транзакционная доставка компонентов TreeD без provisioning.
+Контур: build read-only к repo; baseline/apply/recover root-only под lock worker.
+"""
+
+from __future__ import annotations
+
+# Блок 1: Фиксированный контракт пакета и разрешённые назначения.
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+import uuid
+import zipfile
+from contextlib import contextmanager
+
+KIND = "treed-core-runtime"
+ASSET = "treed-core-runtime.zip"
+MARKER = b"#*# <---------------------- SAVE_CONFIG ---------------------->"
+SBIN = {"treed-core-update", "treed-update-service", "treed-update-apply", "treed-ui"}
+CAMERA = {"cam_env.sh", "session_start.sh", "session_stop.sh", "snapshot.sh", "stream_detect.py"}
+PRESERVED = {"local_overrides.cfg", "treed_variables.cfg", "filament_motion_runtime.cfg"}
+MAX_PACKAGE = 32 * 1024 * 1024
+MAX_CONTENT = 64 * 1024 * 1024
+
+
+def allowed(key):
+    if not isinstance(key, str):
+        raise ValueError("Недопустимый путь в пакете core")
+    path = PurePosixPath(key)
+    if (path.as_posix() != key or "\\" in key
+            or path.is_absolute() or ".." in path.parts or len(path.parts) < 2):
+        raise ValueError("Недопустимый путь в пакете core")
+    group, *parts = path.parts
+    relative = PurePosixPath(*parts)
+    valid = (
+        group == "config" and (
+            str(relative) in {"printer.cfg", "moonraker.conf"}
+            or len(parts) == 3 and parts[:2] == ["profiles", "treed_v2_corexy_v1"]
+            and relative.suffix == ".cfg" and relative.name not in PRESERVED
+            or len(parts) == 3 and parts[:2] == ["moonraker", "base"] and relative.suffix == ".conf"
+        )
+        or group in {"klipper", "moonraker"} and len(parts) == 1
+        and re.fullmatch(r"treed_[a-z0-9_]+\.py", parts[0]) is not None
+        or group == "camera" and len(parts) == 1 and parts[0] in CAMERA
+        or group == "sbin" and len(parts) == 1 and parts[0] in SBIN
+    )
+    if not valid:
+        raise ValueError(f"Назначение не принадлежит пакету TreeD: {key}")
+    return group, relative
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def sources(repo):
+    items = {"config/printer.cfg": repo / "klipper/printer.cfg",
+             "config/moonraker.conf": repo / "moonraker/moonraker.conf"}
+    for prefix, directory, pattern in (
+        ("config/profiles/treed_v2_corexy_v1", "klipper/profiles/treed_v2_corexy_v1", "*.cfg"),
+        ("config/moonraker/base", "moonraker/base", "*.conf"),
+        ("klipper", "klipper-host", "treed_*.py"),
+        ("moonraker", "moonraker/components", "treed_*.py"),
+    ):
+        for path in sorted((repo / directory).glob(pattern)):
+            items[f"{prefix}/{path.name}"] = path
+    items["klipper/treed_sgt_calibration.py"] = repo / "tools/treed_sgt_calibration.py"
+    for name in CAMERA:
+        items[f"camera/{name}"] = repo / "runtime-scripts/treed-cam" / name
+    for name in SBIN:
+        directory = "treed-ui" if name == "treed-ui" else "treed-update"
+        items[f"sbin/{name}"] = repo / "runtime-scripts" / directory / name
+    for key, path in items.items():
+        allowed(key)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Исходник пакета отсутствует или является ссылкой: {path}")
+    return items
+
+
+def git_head(path):
+    return subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"],
+                                   text=True, timeout=10).strip()
+
+
+def package_manifest(repo):
+    version = (repo / "VERSION").read_text(encoding="utf-8").strip()
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        raise ValueError("VERSION должен быть x.y.z")
+    runtime = (repo / "runtime-versions.env").read_text(encoding="utf-8")
+    requirements = {}
+    for component in ("KLIPPER", "MOONRAKER"):
+        match = re.search(rf'^TREED_{component}_REF="([0-9a-f]{{40}})"$', runtime, re.M)
+        if not match:
+            raise ValueError(f"Отсутствует закреплённый SHA {component}")
+        requirements[component.lower()] = match[1]
+    return {"kind": KIND, "schema": 1, "version": version, "tag": f"v{version}",
+            "sha": git_head(repo), "requires": requirements, "files": []}
+
+
+def build(repo, archive):
+    manifest = package_manifest(repo)
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for key, path in sorted(sources(repo).items()):
+            data = path.read_bytes()
+            manifest["files"].append({"path": key, "sha256": sha(data)})
+            bundle.writestr("payload/" + key, data)
+        bundle.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+
+
+# Блок 2: Root-owned настройки; архив не может назначать произвольные пути.
+def settings():
+    env = {}
+    env_file = Path(os.environ.get("TREED_UPDATE_ENV_FILE", "/etc/default/treed-update"))
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            name, separator, value = line.partition("=")
+            if separator and name.startswith("TREED_"):
+                values = shlex.split(value)
+                if len(values) == 1:
+                    env[name] = values[0]
+    env.update(os.environ)
+    env.setdefault("TREED_UPDATE_PI_HOME", "/home/pi")
+    env.setdefault("TREED_UPDATE_PI_USER", "pi")
+    env.setdefault("TREED_UPDATE_PI_GROUP", env["TREED_UPDATE_PI_USER"])
+    return env
+
+
+def roots(env):
+    home = Path(env.get("TREED_UPDATE_PI_HOME", "/home/pi"))
+    result = {
+        "config": home / "printer_data/config",
+        "klipper": Path(env.get("TREED_CORE_KLIPPER_DIR", str(home / "klipper"))) / "klippy/extras",
+        "moonraker": Path(env.get("TREED_CORE_MOONRAKER_DIR", str(home / "moonraker"))) / "moonraker/components",
+        "camera": home / "treed/cam/bin",
+        "sbin": Path("/usr/local/sbin"),
+    }
+    if not home.is_absolute() or ".." in home.parts or any(
+        not path.is_absolute() or ".." in path.parts for path in result.values()
+    ):
+        raise ValueError("Недопустимые runtime-пути core")
+    return result
+
+
+def destination(key, locations):
+    group, relative = allowed(key)
+    return locations[group] / str(relative)
+
+
+@contextmanager
+def parent_fd(path, create=False):
+    # Linux: O_NOFOLLOW на каждом каталоге и операции через dir_fd закрывают
+    # подмену user-owned parent на symlink между проверкой и записью от root.
+    if os.name == "nt":
+        for part in (path.parent, *path.parent.parents):
+            if part.is_symlink():
+                raise ValueError(f"Runtime-путь является ссылкой: {part}")
+        if create:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        yield None
+        return
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in path.parent.parts[1:]:
+            if create:
+                try:
+                    os.mkdir(name, 0o755, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                except FileExistsError:
+                    pass
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def read_file(path):
+    with parent_fd(path) as descriptor:
+        try:
+            info = os.stat(path.name if descriptor is not None else path,
+                           dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return None, None
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONTENT:
+            raise ValueError(f"Runtime-файл не является обычным файлом: {path}")
+        handle = os.open(path.name if descriptor is not None else path,
+                         os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=descriptor)
+        with os.fdopen(handle, "rb") as stream:
+            return stream.read(MAX_CONTENT + 1), info
+
+
+def write_file(path, data, mode=0o644, uid=None, gid=None):
+    with parent_fd(path, create=True) as descriptor:
+        name = path.name + "." + str(uuid.uuid4()) + ".tmp"
+        target = name if descriptor is not None else path.with_name(name)
+        handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode, dir_fd=descriptor)
+        try:
+            if os.name != "nt":
+                os.fchmod(handle, mode)
+                if uid is not None and gid is not None:
+                    os.fchown(handle, uid, gid)
+            with os.fdopen(handle, "wb", closefd=False) as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(handle)
+        finally:
+            os.close(handle)
+        os.replace(target, path.name if descriptor is not None else path,
+                   src_dir_fd=descriptor, dst_dir_fd=descriptor)
+        if descriptor is not None:
+            os.fsync(descriptor)
+
+
+def remove_file(path):
+    with parent_fd(path) as descriptor:
+        try:
+            os.unlink(path.name if descriptor is not None else path, dir_fd=descriptor)
+        except FileNotFoundError:
+            pass
+        if descriptor is not None:
+            os.fsync(descriptor)
+
+
+def clear_bytecode(entries, locations):
+    # При быстром rollback mtime/размер .py могут совпасть с новым pyc.
+    # Удаляем только кеш затронутых TreeD-модулей перед запуском процесса.
+    for row in entries:
+        group, _relative = allowed(row["path"])
+        if group in {"klipper", "moonraker"}:
+            path = destination(row["path"], locations)
+            cache = path.parent / "__pycache__"
+            if cache.is_dir():
+                for item in cache.glob(path.stem + ".*.pyc"):
+                    remove_file(item)
+
+
+def read_json(path):
+    data, _info = read_file(path)
+    return json.loads(data) if data is not None else None
+
+
+def write_json(path, value):
+    write_file(path, (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+
+
+def content_hash(key, data):
+    if key == "config/printer.cfg":
+        data = data.split(MARKER, 1)[0].rstrip(b"\r\n")
+    return sha(data)
+
+
+def render(key, data, old, env):
+    if key == "config/printer.cfg":
+        data = data.split(MARKER, 1)[0]
+        if old and MARKER in old:
+            data = data.rstrip(b"\r\n") + b"\n\n" + MARKER + old.split(MARKER, 1)[1]
+    if key.startswith("config/moonraker/base/"):
+        text = data.decode("utf-8").replace("{{PI_HOME}}", env["TREED_UPDATE_PI_HOME"])
+        text = text.replace("{{PI_USER}}", env["TREED_UPDATE_PI_USER"])
+        if key == "config/moonraker/base/00-core.conf" and old:
+            # Updater-пути Mainsail/Crowsnest определил loader для этой установки.
+            for name in ("mainsail", "crowsnest"):
+                pattern = rf"(?m)^\[update_manager {name}\][^\[]*"
+                previous = re.search(pattern, old.decode("utf-8"))
+                text = re.sub(pattern, lambda _m: previous[0] if previous else "", text)
+        data = text.encode("utf-8")
+    if key.endswith(".py") or key.startswith("sbin/") and key != "sbin/treed-ui" and key != "sbin/treed-update-apply":
+        compile(data, key, "exec")
+    if key.endswith(".sh") or key in {"sbin/treed-ui", "sbin/treed-update-apply"}:
+        subprocess.run(["bash", "-n"], input=data, check=True, timeout=10)
+    return data
+
+
+# Блок 3: Release download, валидация архива и совместимости с текущим стеком.
+def download(tag, archive, env):
+    api = env.get("TREED_CORE_RELEASE_API_URL", "https://api.github.com/repos/TreeD-Hub/printer-core/releases")
+    if not api.startswith("https://api.github.com/repos/"):
+        raise ValueError("Core release API должен быть GitHub HTTPS")
+    request = urllib.request.Request(api.rstrip("/") + "/tags/" + tag,
+                                     headers={"Accept": "application/vnd.github+json", "User-Agent": "treed-core-update"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        release = json.load(response)
+    if release.get("tag_name") != tag or release.get("draft") or release.get("prerelease"):
+        raise ValueError("Выпуск core не является опубликованным стабильным релизом")
+    asset = next((row for row in release.get("assets", []) if row.get("name") == ASSET), {})
+    digest = asset.get("digest", "")
+    url = asset.get("browser_download_url", "")
+    if (not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+            or not url.startswith("https://github.com/")):
+        raise ValueError("Отсутствует core пакет с SHA-256 GitHub")
+    with urllib.request.urlopen(url, timeout=30) as response, archive.open("wb") as output:
+        size = 0
+        checksum = hashlib.sha256()
+        while block := response.read(65536):
+            size += len(block)
+            if size > MAX_PACKAGE:
+                raise ValueError("Core пакет превышает допустимый размер")
+            checksum.update(block)
+            output.write(block)
+    if checksum.hexdigest() != digest.removeprefix("sha256:"):
+        raise ValueError("SHA-256 core пакета не совпадает с GitHub")
+
+
+def load_package(archive, tag):
+    with zipfile.ZipFile(archive) as bundle:
+        infos = bundle.infolist()
+        names = [item.filename for item in infos]
+        if len(names) != len(set(names)) or len(names) > 256 or sum(i.file_size for i in infos) > MAX_CONTENT:
+            raise ValueError("Повторные файлы или превышение лимита core пакета")
+        if any(stat.S_ISLNK(i.external_attr >> 16) for i in infos):
+            raise ValueError("Symlink в core пакете")
+        manifest = json.loads(bundle.read("manifest.json"))
+        if (manifest.get("kind") != KIND or manifest.get("schema") != 1
+                or manifest.get("tag") != tag or manifest.get("version") != tag[1:]
+                or re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("sha"))) is None):
+            raise ValueError("Manifest core не соответствует контракту выпуска")
+        payload = {}
+        for row in manifest["files"]:
+            key = row["path"]
+            allowed(key)
+            if key in payload:
+                raise ValueError("Повторное назначение core файла")
+            data = bundle.read("payload/" + key)
+            if sha(data) != row["sha256"]:
+                raise ValueError(f"Повреждён файл пакета: {key}")
+            payload[key] = data
+        if set(names) != {"manifest.json", *("payload/" + key for key in payload)}:
+            raise ValueError("В архиве есть файлы вне manifest")
+        required = {"config/printer.cfg", "config/moonraker.conf", "config/moonraker/base/00-core.conf",
+                    "klipper/treed_driver_mode.py", "moonraker/treed_update.py", "sbin/treed-core-update"}
+        if not required <= payload.keys():
+            raise ValueError("Core пакет неполон")
+        return manifest, payload
+
+
+def check_compatibility(manifest, env):
+    locations = roots(env)
+    for name, repo in (("klipper", locations["klipper"].parents[1]),
+                       ("moonraker", locations["moonraker"].parents[1])):
+        if git_head(repo) != manifest["requires"].get(name):
+            raise ValueError(f"Пакет требует другую версию {name}; обновление зависимостей выполняется отдельно")
+        dirty = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+                                        text=True, timeout=10).strip()
+        if dirty:
+            raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
+
+
+def phase(name, message):
+    subprocess.run(["/usr/local/sbin/treed-update-service", "phase", name, message], check=True, timeout=10)
+
+
+def request_json(path):
+    with urllib.request.urlopen("http://127.0.0.1:7125" + path, timeout=3) as response:
+        return json.load(response)["result"]
+
+
+def ready():
+    try:
+        info = request_json("/server/info")
+        return (info.get("klippy_state") == "ready" and
+                {"treed_update", "treed_recovery", "treed_detection", "treed_host_network",
+                 "treed_filament_sensor", "treed_shell_command"} <= set(info.get("components", [])))
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def idle():
+    if not ready():
+        return False
+    try:
+        status = request_json("/printer/objects/query?print_stats=state&extruder=target&heater_bed=target")["status"]
+        state = status["print_stats"]["state"]
+        return (state in {"standby", "complete", "cancelled", "error"}
+                and status["extruder"]["target"] == 0 and status["heater_bed"]["target"] == 0)
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def services(action):
+    subprocess.run(["systemctl", action, "moonraker.service", "klipper.service"], check=True, timeout=45)
+
+
+def wait_ready():
+    deadline = time.monotonic() + 60
+    consecutive = 0
+    while time.monotonic() < deadline:
+        consecutive = consecutive + 1 if ready() else 0
+        if consecutive == 3:
+            return True
+        time.sleep(1)
+    return False
+
+
+# Блок 4: Durable before-images; до journal никакие runtime-файлы не меняются.
+def manifest_path(env):
+    return Path(env.get("TREED_CORE_MANIFEST_FILE", "/var/lib/treed-update/core-manifest.json"))
+
+
+def journal_path(env, operation):
+    uuid.UUID(operation)
+    return Path(env.get("TREED_CORE_STATE_DIR", "/var/lib/treed-update/core")) / operation / "journal.json"
+
+
+def baseline(repo, env):
+    manifest = package_manifest(repo)
+    check_compatibility(manifest, env)
+    locations = roots(env)
+    for key, source in sorted(sources(repo).items()):
+        data, _info = read_file(destination(key, locations))
+        if data is None:
+            raise ValueError(f"Baseline: runtime-файл отсутствует: {key}")
+        expected = render(key, source.read_bytes(), data, env)
+        if content_hash(key, data) != content_hash(key, expected):
+            raise ValueError(f"Baseline: файл не соответствует устанавливаемому выпуску: {key}")
+        manifest["files"].append({"path": key, "runtimeSha256": content_hash(key, data)})
+    write_json(manifest_path(env), manifest)
+
+
+def prepare(manifest, payload, env, journal):
+    locations = roots(env)
+    previous = read_json(manifest_path(env))
+    if not previous or previous.get("kind") != KIND or previous.get("schema") != 1:
+        raise ValueError("Core baseline отсутствует; сначала установите новый updater через loader")
+    if tuple(map(int, manifest["version"].split("."))) <= tuple(map(int, previous["version"].split("."))):
+        raise ValueError("Core пакет не новее установленной версии")
+    old_files = {row["path"]: row for row in previous["files"]}
+    entries, installed = [], []
+    for index, key in enumerate(sorted(payload.keys() | old_files.keys())):
+        path = destination(key, locations)
+        old, info = read_file(path)
+        if old is not None and key in old_files and content_hash(key, old) != old_files[key]["runtimeSha256"]:
+            raise ValueError(f"Локально изменён управляемый файл: {key}; перенесите настройки в overrides")
+        if old is not None and key not in old_files:
+            raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
+        backup = str(index)
+        if old is not None:
+            write_file(journal.parent / backup, old, mode=0o600)
+        entry = {"path": key, "backup": backup, "existed": old is not None,
+                 "mode": stat.S_IMODE(info.st_mode) if info else 0o644,
+                 "uid": info.st_uid if info else 0, "gid": info.st_gid if info else 0}
+        data = render(key, payload[key], old, env) if key in payload else None
+        if data is not None:
+            write_file(journal.parent / (backup + ".new"), data, mode=0o600)
+            installed.append({"path": key, "runtimeSha256": content_hash(key, data)})
+        entry["delete"] = data is None
+        entries.append(entry)
+    write_json(journal.parent / "manifest.before.json", previous)
+    current = dict(manifest, files=installed)
+    write_json(journal.parent / "manifest.new.json", current)
+    write_json(journal, {"schema": 1, "stage": "prepared", "entries": entries})
+    return current
+
+
+def rollback(env, journal, transaction):
+    try:
+        phase("rolling_back", "Восстанавливаем предыдущие компоненты TreeD.")
+    except (OSError, subprocess.SubprocessError):
+        # Сбой нового service entrypoint не должен мешать возврату его старой копии.
+        print("Core rollback: phase notification failed", file=sys.stderr)
+    services("stop")
+    locations = roots(env)
+    for row in transaction["entries"]:
+        path = destination(row["path"], locations)
+        if row["existed"]:
+            data, _info = read_file(journal.parent / row["backup"])
+            if data is None:
+                raise ValueError("Резервная копия core неполна")
+            write_file(path, data, row["mode"], row["uid"], row["gid"])
+        else:
+            remove_file(path)
+    previous = read_json(journal.parent / "manifest.before.json")
+    write_json(manifest_path(env), previous)
+    clear_bytecode(transaction["entries"], locations)
+    services("start")
+    if not wait_ready():
+        raise RuntimeError("Файлы восстановлены, но Klipper/Moonraker не прошли readiness")
+    transaction["stage"] = "rolled_back"
+    write_json(journal, transaction)
+    return {"status": "rolled_back", "resultCode": "rollback_succeeded",
+            "message": "Предыдущие компоненты TreeD восстановлены и проверены."}
+
+
+def recover(env, operation):
+    journal = journal_path(env, operation)
+    transaction = read_json(journal) if journal.parent.exists() else None
+    if not transaction:
+        return {"status": "error", "resultCode": "operation_interrupted",
+                "message": "Обновление core прервано до изменения файлов."}
+    if transaction.get("schema") != 1:
+        raise ValueError("Неизвестный journal core")
+    if transaction["stage"] == "committed" and wait_ready():
+        installed = read_json(manifest_path(env))
+        expected = read_json(journal.parent / "manifest.new.json")
+        if installed != expected:
+            return rollback(env, journal, transaction)
+        return {"status": "applied", "resultCode": "core_updated",
+                "message": "Готовность установленного TreeD Core подтверждена."}
+    if transaction["stage"] == "rolled_back" and wait_ready():
+        return {"status": "rolled_back", "resultCode": "rollback_succeeded",
+                "message": "Готовность восстановленных компонентов TreeD подтверждена."}
+    return rollback(env, journal, transaction)
+
+
+def owner(env):
+    import pwd
+    import grp
+    return (pwd.getpwnam(env["TREED_UPDATE_PI_USER"]).pw_uid,
+            grp.getgrnam(env["TREED_UPDATE_PI_GROUP"]).gr_gid)
+
+
+def apply(tag, operation, env):
+    if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None:
+        raise ValueError("Недопустимый тег core")
+    journal = journal_path(env, operation)
+    if journal.exists():
+        raise ValueError("Для операции уже существует journal; требуется recovery")
+    phase("downloading", "Загружаем и проверяем пакет компонентов TreeD.")
+    with tempfile.TemporaryDirectory(prefix="treed-core-") as temp:
+        archive = Path(temp) / ASSET
+        download(tag, archive, env)
+        manifest, payload = load_package(archive, tag)
+        check_compatibility(manifest, env)
+        uid, gid = owner(env)
+        if not idle():
+            raise ValueError("Core update требует готового принтера без печати, паузы и активного нагрева")
+        prepare(manifest, payload, env, journal)
+    try:
+        phase("installing", "Устанавливаем компоненты TreeD; локальные настройки сохраняются.")
+        services("stop")
+        # После остановки Klipper SAVE_CONFIG уже не может изменяться.
+        # Переподготовка также подхватывает последнее сохранение до остановки.
+        current = prepare(manifest, payload, env, journal)
+        transaction = read_json(journal)
+        for row in transaction["entries"]:
+            path = destination(row["path"], roots(env))
+            if row["delete"]:
+                remove_file(path)
+            else:
+                data, _info = read_file(journal.parent / (row["backup"] + ".new"))
+                system = row["path"].startswith("sbin/")
+                executable = system or row["path"].startswith("camera/") and row["path"].endswith(".sh")
+                write_file(path, data, 0o755 if executable else 0o644, 0 if system else uid, 0 if system else gid)
+        clear_bytecode(transaction["entries"], roots(env))
+        phase("restarting", "Запускаем Klipper и Moonraker.")
+        services("start")
+        phase("verifying", "Проверяем готовность Klipper и загрузку компонентов Moonraker.")
+        if not wait_ready():
+            raise RuntimeError("Новая версия TreeD Core не прошла readiness")
+        write_json(manifest_path(env), current)
+        transaction["stage"] = "committed"
+        write_json(journal, transaction)
+        return {"status": "applied", "resultCode": "core_updated", "message": "Обновление TreeD Core завершено."}
+    except Exception as error:
+        print(f"Core update failed: {error}", file=sys.stderr)
+        return rollback(env, journal, read_json(journal))
+
+
+# Блок 5: CLI build не требует root; device-команды запускаются worker или loader.
+def main(argv):
+    if len(argv) == 4 and argv[1] == "build":
+        build(Path(argv[2]).resolve(), Path(argv[3]).resolve())
+        return 0
+    if os.geteuid() != 0:
+        raise RuntimeError("Core updater требует root")
+    env = settings()
+    if len(argv) == 3 and argv[1] == "baseline":
+        import fcntl
+        lock_path = Path(env.get("TREED_UPDATE_LOCK_FILE", "/run/lock/treed-update.lock"))
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            state = read_json(Path(env.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json")))
+            if state and state.get("busy"):
+                raise ValueError("Baseline запрещён при незавершённом обновлении")
+            baseline(Path(argv[2]).resolve(), env)
+        return 0
+    if len(argv) == 4 and argv[1] == "apply":
+        state = read_json(Path(env.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json")))
+        if (not state or state.get("busy") is not True or state.get("targetId") != "printer-core"
+                or state.get("operationId") != argv[3] or state.get("targetTag") != argv[2]):
+            raise ValueError("Core apply требует активную операцию worker")
+        result = apply(argv[2], argv[3], env)
+    elif len(argv) == 3 and argv[1] == "recover":
+        result = recover(env, argv[2])
+    else:
+        raise ValueError("usage: treed-core-update build repo zip | baseline repo | apply tag operationId | recover operationId")
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result["status"] == "applied" or argv[1] == "recover" and result["status"] == "rolled_back" else 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv))
+    except Exception as error:
+        print(json.dumps({"status": "error", "resultCode": "core_update_failed", "message": str(error)}, ensure_ascii=False))
+        raise SystemExit(1)

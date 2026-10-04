@@ -52,7 +52,8 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
         )
         values = {
             "state_file": str(root / "state.json"),
-            "ab_capability_file": str(root / "capability.json"),
+            "core_manifest_path": str(root / "core-manifest.json"),
+            "core_update_command": str(root / "treed-core-update"),
             "submit_command": "/usr/bin/sudo -n /usr/local/sbin/treed-update-service submit",
             "version_file": str(root / "VERSION"),
             "shell_manifest_path": str(root / "ui-manifest.json"),
@@ -82,13 +83,40 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((target_id, tag), ("printer-ui", "ui-main-123-1"))
         release_check.assert_not_awaited()
 
-    async def test_status_is_local_and_marks_system_target_unavailable(self):
+    async def test_status_is_local_and_requires_installed_runtime_updater(self):
         result = await self.component._handle_status(object())
         core = next(row for row in result["releaseResults"] if row["id"] == "printer-core")
         self.assertNotIn("firmware", result)
         self.assertFalse(core["canApply"])
         self.assertFalse(core["capability"]["supported"])
-        self.assertIn("A/B", core["capability"]["reason"])
+        self.assertEqual(core["capability"]["reasonCode"], "core_runtime_updater_missing")
+
+    async def test_core_version_uses_confirmed_runtime_manifest_and_capability(self):
+        self.component.version_file.write_text("9.0.0", encoding="utf-8")
+        self.component.core_update_command.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        self.component.core_update_command.chmod(0o755)
+        self.component.core_manifest_path.write_text(json.dumps({
+            "kind": "treed-core-runtime", "schema": 1, "version": "0.2.0"}), encoding="utf-8")
+        self.assertEqual(self.component._read_core_version(), "0.2.0")
+        self.assertTrue(self.component._core_capability()["supported"])
+
+    async def test_old_source_only_core_release_is_not_applicable(self):
+        target = self.component._build_targets()[1]
+        releases = [{"tag_name": "v0.2.0", "assets": [{"name": "treed-mainshellos-source.zip"}]}]
+        with patch.object(module, "_fetch_releases", return_value=releases):
+            result = await self.component._check_target(target)
+        self.assertEqual(result["status"], "unknown")
+
+    async def test_core_apply_reuses_existing_submission_and_operation_contract(self):
+        process = NS(returncode=0, communicate=AsyncMock(return_value=(json.dumps({
+            "accepted": True, "operationId": "core-operation", "status": "queued",
+            "targetId": "printer-core", "targetTag": "v0.2.0"}).encode(), b"")))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)) as submit:
+            result = await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.2.0"))
+        self.assertTrue(result["busy"])
+        self.assertEqual(result["operationId"], "core-operation")
+        self.assertEqual(submit.await_args.args[-2:], ("printer-core", "v0.2.0"))
 
     async def test_bad_request_id_is_rejected_before_root_submission(self):
         with patch.object(asyncio, "create_subprocess_exec", new=AsyncMock()) as submit:

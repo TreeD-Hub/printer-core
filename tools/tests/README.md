@@ -29,8 +29,9 @@
 - `test_moonraker_host_network_contracts.ps1` — PowerShell-проверка host network Moonraker endpoints и deploy/provisioning contract.
 - `test_moonraker_update_contracts.ps1` — runnable-проверка fail-closed запрета update во время печати.
 - `test_treed_shell_update_contracts.ps1` — статическая проверка atomic publish, readiness и rollback UI bundle.
-- `test_treed_update_service.py` — изолированные проверки request idempotency, busy lock, durable terminal state, reboot recovery и fail-closed отказа для системного update. Запуск `python -B tools/tests/test_treed_update_service.py`; без systemd и устройства.
-- `test_treed_update_component.py` — проверяет совместимый быстрый POST (включая старого клиента без requestId), локальный polling и canApply/capability для A/B release. Запуск `python -B tools/tests/test_treed_update_component.py`; без сети и устройства.
+- `test_treed_update_service.py` — request idempotency, busy lock, durable state, UI recovery и dispatch/recovery core worker. Запуск `python -B tools/tests/test_treed_update_service.py`; без systemd и устройства.
+- `test_treed_update_component.py` — быстрый POST, локальный polling, runtime manifest/capability и отказ для source-only release. Запуск `python -B tools/tests/test_treed_update_component.py`; без сети и устройства.
+- `test_treed_core_update.py` — пакет, checksum/allowlist, сохранение локальных данных, полный rollback и journal recovery после частичной установки. Запуск `python -B tools/tests/test_treed_core_update.py`; services/network изолированы, symlink и Linux dir_fd требуют соответствующих возможностей среды.
 - `test_runtime_repo_sync.sh` — runnable-проверка exact Git sync, восстановления detached/shallow/wrong-origin checkout и сохранения dirty данных.
 - `test_mainsail_bundle_offline.sh` — runnable offline deployment bundled Mainsail без обращения к GitHub.
 - `test_runtime_update_contracts.ps1` — единая проверка runtime manifest, порядка host/firmware update и production fail-closed gate.

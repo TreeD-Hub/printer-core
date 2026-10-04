@@ -6,7 +6,7 @@
 
 - `runtime-scripts/treed-cam/*` — runtime-команды камеры TreeD.
 - `runtime-scripts/treed-ui/*` — операторские команды переключения экранного UI.
-- `runtime-scripts/treed-update/*` — root-side очередь, persistent operation state и UI bundle update.
+- `runtime-scripts/treed-update/*` — root-side очередь, persistent operation state, UI bundle и пакет компонентов core с journal/rollback.
 - `runtime-scripts/treed-ab/*` — fail-closed boundary для будущего A/B system updater.
 
 ## Модель деплоя
@@ -25,9 +25,10 @@
 Для обновлений:
 - источник в репозитории: `runtime-scripts/treed-update/treed-update-service`, `treed-update-apply` и systemd units
 - шаг деплоя: `loader/steps/moonraker-config.sh`
-- команды на устройстве: `/usr/local/sbin/treed-update-service`, `/usr/local/sbin/treed-update-apply`
+- команды на устройстве: `/usr/local/sbin/treed-update-service`, `/usr/local/sbin/treed-update-apply`, `/usr/local/sbin/treed-core-update`
 - persistent operation state/history: `/var/lib/treed-update/state.json`
-- описание capability системы: `runtime-scripts/treed-ab/README.md`
+- core version/ownership: `/var/lib/treed-update/core-manifest.json`, после успешного loader verify или runtime update
+- отдельный системный A/B контур: `runtime-scripts/treed-ab/README.md`
 
 ## Контракт runtime-скриптов
 
