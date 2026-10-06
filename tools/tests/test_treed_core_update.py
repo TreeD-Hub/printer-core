@@ -168,6 +168,59 @@ class CoreUpdateTests(unittest.TestCase):
         self.assert_restored()
 
     # Блок 2: Успех и сохранность принадлежащего принтеру состояния.
+    def test_selected_config_reset_uses_package_and_retains_manual_backup(self):
+        key = "config/profiles/treed_v2_corexy_v1/macros.cfg"
+        path = core.destination(key, self.locations)
+        manual = b"# custom fan settings\n"
+        path.write_bytes(manual)
+        selection = [{"path": key, "sha256": core.sha(manual)}]
+        self.assertEqual(core.config_conflicts(self.env), selection)
+        with self.assertRaisesRegex(ValueError, "Локально изменён"):
+            self.apply()
+        self.assertEqual(path.read_bytes(), manual)
+        result = core.apply("v0.2.0", OPERATION, self.env, selection)
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(path.read_bytes(), self.payload[key])
+        journal = core.journal_path(self.env, OPERATION)
+        row = next(row for row in core.read_json(journal)["entries"] if row["path"] == key)
+        self.assertEqual((journal.parent / row["backup"]).read_bytes(), manual)
+
+    def test_reset_consent_does_not_cover_subsequent_edit_or_non_config_files(self):
+        for key in ("config/printer.cfg", "klipper/treed_driver_mode.py", "config/local_overrides.cfg", "config/../printer.cfg"):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                core.prepare(self.manifest, self.payload, self.env, core.journal_path(self.env, OPERATION),
+                             [{"path": key, "sha256": "0" * 64}])
+        self.assert_restored()
+        self.services.assert_not_called()
+
+    def test_edit_during_service_stop_is_not_overwritten_by_reset_or_rollback(self):
+        key = "config/printer.cfg"
+        path = core.destination(key, self.locations)
+        manual = b"# manual\n" + self.old[key]
+        path.write_bytes(manual)
+        selection = core.config_conflicts(self.env)
+        newer = manual + b"# newer edit\n"
+        self.services.side_effect = lambda action: path.write_bytes(newer) if action == "stop" else None
+        result = core.apply("v0.2.0", OPERATION, self.env, selection)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(path.read_bytes(), newer)
+        self.assertEqual(core.recover(self.env, OPERATION)["status"], "error")
+        self.assertEqual(path.read_bytes(), newer)
+
+    def test_selected_printer_reset_preserves_calibration_and_rolls_back_manual_file(self):
+        key = "config/printer.cfg"
+        manual = b"# manual\n" + self.old[key]
+        core.destination(key, self.locations).write_bytes(manual)
+        self.old[key] = manual
+        def start(action):
+            if action == "start":
+                self.assertIn(core.MARKER + manual.split(core.MARKER, 1)[1], core.destination(key, self.locations).read_bytes())
+        self.services.side_effect = start
+        self.wait.side_effect = [False, True]
+        result = core.apply("v0.2.0", OPERATION, self.env, core.config_conflicts(self.env))
+        self.assertEqual(result["status"], "rolled_back")
+        self.assert_restored()
+
     def test_apply_preserves_save_config_overrides_generated_data_and_unknown_files(self):
         preserved = {"local_overrides.cfg": b"custom settings\n", "treed_variables.cfg": b"light = True\n",
                      "filament_motion_runtime.cfg": b"detection_length: 17\n",

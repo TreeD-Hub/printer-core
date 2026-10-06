@@ -363,6 +363,24 @@ class UpdateServiceTests(unittest.TestCase):
                     service.submit("11111111-1111-4111-8111-111111111111", target, tag, ui_tag)
             acquire.assert_not_called()
 
+    def test_config_reset_selection_is_validated_and_persisted_with_combined_update(self):
+        selection = [{"path": "config/profiles/treed_v2_corexy_v1/service_fans.cfg", "sha256": "a" * 64}]
+        request = "11111111-1111-4111-8111-111111111111"
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service.fcntl, "flock"), patch.object(service.subprocess, "run"):
+            self.assertEqual(service.submit(request, "printer-core", "v0.2.0", "ui-main-123-1", json.dumps(selection)), 0)
+        self.assertEqual(service.read_state()["resetConfigs"], selection)
+        self.assertEqual(service.read_state()["pendingUiTag"], "ui-main-123-1")
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire") as acquire:
+            for invalid in ([{"path": "config/../printer.cfg", "sha256": "a" * 64}], selection * 2, False):
+                with self.assertRaises(ValueError):
+                    service.submit(request, "printer-core", "v0.2.0", "", json.dumps(invalid))
+            with self.assertRaises(ValueError):
+                service.submit(request, "printer-ui", "ui-main-123-1", "", json.dumps(selection))
+            acquire.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -228,6 +228,44 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
                     requestId="not-an-id", targetId="printer-ui", targetTag="ui-main-123-1"))
         submit.assert_not_awaited()
 
+    async def test_config_reset_requires_inspected_selection_and_passes_it_to_worker(self):
+        selection = [{"path": "config/printer.cfg", "sha256": "a" * 64}]
+        self.component.config_conflicts = selection
+        self.component.supports_config_reset = True
+        process = NS(returncode=0, communicate=AsyncMock(return_value=(b'{"status":"queued"}', b"")))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)) as submit:
+            with self.assertRaises(ApiError):
+                await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.2.0",
+                    resetConfigs=[{"path": "config/printer.cfg", "sha256": "b" * 64}]))
+            submit.assert_not_awaited()
+            result = await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.2.0",
+                resetConfigs=selection))
+        self.assertTrue(result["busy"])
+        self.assertEqual(submit.await_args.args[-2], "")
+        self.assertEqual(json.loads(submit.await_args.args[-1]), selection)
+
+    async def test_inspection_is_read_only_and_status_exposes_conflicts(self):
+        selection = [{"path": "config/printer.cfg", "sha256": "a" * 64}]
+        process = NS(returncode=0, communicate=AsyncMock(return_value=(json.dumps({
+            "configConflicts": selection, "supportsConfigReset": True}).encode(), b"")))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)) as inspect:
+            await self.component._inspect_config_conflicts()
+        self.assertEqual(inspect.await_args.args, (str(self.component.core_update_command), "inspect"))
+        status = await self.component._handle_status(object())
+        self.assertEqual(status["configConflicts"], selection)
+        self.api.run_gcode.assert_not_awaited()
+
+    async def test_legacy_root_only_updater_keeps_release_checks_available(self):
+        process = NS(returncode=1, communicate=AsyncMock(return_value=(json.dumps({
+            "message": "Core updater требует root"}).encode(), b"")))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)):
+            await self.component._inspect_config_conflicts()
+        self.assertFalse(self.component.supports_config_reset)
+        self.assertEqual(self.component.config_conflicts, [])
+
     async def test_state_directory_is_reported_as_unreadable_and_blocks_apply(self):
         self.component.state_file.mkdir()
 
