@@ -251,5 +251,31 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(module._has_verified_ui_asset([release], release["tag_name"], "treed-shell-ui.zip"))
 
 
+    async def test_combined_apply_passes_both_validated_tags_to_worker(self):
+        process = NS(returncode=0, communicate=AsyncMock(return_value=(json.dumps({
+            "accepted": True, "operationId": "combined", "status": "queued"}).encode(), b"")))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)) as submit:
+            result = await self.component._handle_apply(Request(
+                targetId="printer-core", targetTag="v0.2.0", uiTargetTag="ui-main-123-1"))
+            self.assertTrue(result["supportsCombinedUpdate"])
+            self.assertEqual(submit.await_args.args[-3:], ("printer-core", "v0.2.0", "ui-main-123-1"))
+            submit.reset_mock()
+            for invalid in ("bad", 123, "ui-main-123-1\n"):
+                with self.assertRaises(ApiError):
+                    await self.component._handle_apply(Request(
+                        targetId="printer-core", targetTag="v0.2.0", uiTargetTag=invalid))
+            submit.assert_not_awaited()
+
+    async def test_status_refreshes_installed_versions_after_update_without_network_check(self):
+        self.component.shell_manifest_path.write_text(json.dumps({"runNumber": 123, "runAttempt": 1}), encoding="utf-8")
+        self.component.last_release_results = [{"id": "printer-ui", "status": "available",
+            "currentVersion": "ui-main-122-1", "latestTag": "ui-main-123-1"}]
+        result = await self.component._handle_status(object())
+        self.assertEqual(result["releaseResults"][0]["currentVersion"], "ui-main-123-1")
+        self.assertEqual(result["releaseResults"][0]["status"], "latest")
+        self.assertFalse(result["releaseResults"][0]["canApply"])
+
+
 if __name__ == "__main__":
     unittest.main()

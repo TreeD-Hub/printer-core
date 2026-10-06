@@ -108,13 +108,15 @@ def response(state: Dict[str, Any], accepted: bool, duplicate: bool = False) -> 
     }
 
 
-def submit(request_id: str, target_id: str, target_tag: str) -> int:
+def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str | None = None) -> int:
     if os.geteuid() != 0:
         raise RuntimeError("submit must run as root")
     if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", request_id):
         raise ValueError("invalid requestId")
     if target_id not in TARGET_RE or not TARGET_RE[target_id].fullmatch(target_tag):
         raise ValueError("invalid update target or release tag")
+    if ui_target_tag is not None and (target_id != "printer-core" or not TARGET_RE["printer-ui"].fullmatch(ui_target_tag)):
+        raise ValueError("combined update requires core followed by a valid UI release")
     lock = acquire()
     if lock is None:
         state = read_state()
@@ -138,6 +140,8 @@ def submit(request_id: str, target_id: str, target_tag: str) -> int:
             "startedAt": stamp, "updatedAt": stamp, "finishedAt": None,
             "busy": True, "history": state.get("history", [])[-9:],
         }
+        if ui_target_tag is not None:
+            operation["pendingUiTag"] = ui_target_tag
         write_state(operation)
         try:
             subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
@@ -198,6 +202,17 @@ def printer_is_idle() -> bool:
 
 def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -> None:
     stamp = now()
+    # Блок 3: Второй шаг сохраняется под тем же lock до публикации terminal state.
+    # Перезапуск Moonraker/UI не теряет очередь; после ошибки core UI не запускается.
+    if status == "applied" and state.get("targetId") == "printer-core" and state.get("pendingUiTag"):
+        state.update(targetId="printer-ui", targetTag=state.pop("pendingUiTag"),
+                     coreUpdated=True, status="queued", phase="queued", busy=True,
+                     progress=0, resultCode=None, updatedAt=stamp, finishedAt=None,
+                     message="Система обновлена. Обновляем интерфейс TreeD.")
+        write_state(state)
+        return
+    if state.get("coreUpdated"):
+        message = "Система обновлена. " + message
     state.update(status=status, phase="complete" if status in {"applied", "rolled_back"} else status,
                  busy=False, progress=100 if status == "applied" else None,
                  resultCode=result_code, message=message,
@@ -236,48 +251,57 @@ def run_worker() -> int:
         raise RuntimeError("worker must run as root")
     lock = acquire(blocking=True)
     try:
-        state = read_state()
-        if state.get("status") not in ACTIVE or state.get("busy") is not True:
-            return 0
-        if state.get("targetId") == "printer-core" and state.get("status") != "queued":
-            return run_core(state, recovery=True)
-        state.update(status="validating", phase="validating", message="Проверяем состояние принтера.", updatedAt=now())
-        write_state(state)
-        if not printer_is_idle():
-            finish(state, "rejected", "printer_not_idle", "Принтер печатает или его состояние недоступно.")
-            return 1
-        if state.get("targetId") == "printer-core":
-            return run_core(state)
-        transition("downloading", "Загружаем и проверяем UI bundle.")
-        state = read_state()
-        env = dict(os.environ, TREED_UPDATE_MANAGED="1",
-                   TREED_UPDATE_OPERATION_ID=str(state.get("operationId", "")))
-        process = subprocess.run([APPLY, state["targetId"], state["targetTag"]], env=env, check=False)
-        state = read_state()
-        if process.returncode == 0:
-            finish(state, "applied", "ui_updated", "Обновление TreeD UI завершено.")
-            return 0
-        result_code = (
-            "rollback_succeeded" if state.get("rollbackSucceeded")
-            else "rollback_failed" if state.get("rollbackFailed")
-            else "update_failed"
-        )
-        finish(state, "rolled_back" if state.get("rollbackSucceeded") else "error", result_code,
-               "Предыдущая версия TreeD UI восстановлена." if state.get("rollbackSucceeded")
-               else "Обновление не выполнено; проверьте журнал службы.")
-        return process.returncode
+        while True:
+            result = run_current()
+            state = read_state()
+            if result != 0 or state.get("status") != "queued" or state.get("busy") is not True:
+                return result
     finally:
         if lock is not None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
 
 
+def run_current() -> int:
+    # Блок 4: Один компонент; общий worker удерживает lock между core и UI.
+    state = read_state()
+    if state.get("status") not in ACTIVE or state.get("busy") is not True:
+        return 0
+    if state.get("targetId") == "printer-core" and state.get("status") != "queued":
+        return run_core(state, recovery=True)
+    state.update(status="validating", phase="validating", message="Проверяем состояние принтера.", updatedAt=now())
+    write_state(state)
+    if not printer_is_idle():
+        finish(state, "rejected", "printer_not_idle", "Принтер печатает или его состояние недоступно.")
+        return 1
+    if state.get("targetId") == "printer-core":
+        return run_core(state)
+    transition("downloading", "Загружаем и проверяем UI bundle.")
+    state = read_state()
+    env = dict(os.environ, TREED_UPDATE_MANAGED="1",
+               TREED_UPDATE_OPERATION_ID=str(state.get("operationId", "")))
+    process = subprocess.run([APPLY, state["targetId"], state["targetTag"]], env=env, check=False)
+    state = read_state()
+    if process.returncode == 0:
+        finish(state, "applied", "ui_updated", "Обновление TreeD UI завершено.")
+        return 0
+    result_code = (
+        "rollback_succeeded" if state.get("rollbackSucceeded")
+        else "rollback_failed" if state.get("rollbackFailed")
+        else "update_failed"
+    )
+    finish(state, "rolled_back" if state.get("rollbackSucceeded") else "error", result_code,
+           "Предыдущая версия TreeD UI восстановлена." if state.get("rollbackSucceeded")
+           else "Обновление не выполнено; проверьте журнал службы.")
+    return process.returncode
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         raise ValueError("usage: treed-update-service submit|run|phase ...")
     command = argv[1]
-    if command == "submit" and len(argv) == 5:
-        return submit(argv[2], argv[3], argv[4])
+    if command == "submit" and len(argv) in (5, 6):
+        return submit(*argv[2:])
     if command == "run" and len(argv) == 2:
         return run_worker()
     if command == "recover" and len(argv) == 2:
@@ -294,9 +318,18 @@ def recover() -> int:
     lock = acquire(blocking=True)
     try:
         state = read_state()
+        if state.get("targetId") == "printer-core" and state.get("status") != "queued" and (
+            state.get("busy") is True or state.get("status") in ACTIVE
+        ):
+            result = run_core(state, recovery=True)
+            state = read_state()
+            if state.get("status") != "queued":
+                return result
+        # При boot PathChanged не обязан заметить уже существующий queued-файл.
+        if state.get("status") == "queued":
+            subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
+            return 0
         if state.get("busy") is True or state.get("status") in ACTIVE:
-            if state.get("targetId") == "printer-core":
-                return run_core(state, recovery=True)
             if state.get("targetId") == "printer-ui" and recover_ui(state):
                 return 0
             finish(state, "error", "operation_interrupted",

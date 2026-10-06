@@ -246,6 +246,12 @@ class TreeDUpdate:
         if target_id == "printer-core" and not self._core_capability().get("supported"):
             capability = self._core_capability()
             raise self.server.error(str(capability["reason"]), 409)
+        ui_target_tag = getattr(web_request, "get")("uiTargetTag", None)
+        if ui_target_tag is not None and (
+            target_id != "printer-core" or not isinstance(ui_target_tag, str)
+            or UI_TAG_RE.fullmatch(ui_target_tag) is None
+        ):
+            raise self.server.error("Совместное обновление требует core и корректный тег UI.", 400)
 
         cancel_paused_print = getattr(web_request, "get")("cancelPausedPrint", False) is True
         if cancel_paused_print and self._build_status(None)["busy"]:
@@ -253,6 +259,8 @@ class TreeDUpdate:
         await self._ensure_apply_allowed(cancel_paused_print=cancel_paused_print)
 
         command = [*self.submit_command.split(), request_id, target_id, target_tag]
+        if ui_target_tag is not None:
+            command.append(ui_target_tag)
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -273,6 +281,7 @@ class TreeDUpdate:
 
         response.update({
             "available": True,
+            "supportsCombinedUpdate": True,
             "busy": response.get("status") in {
                 "queued", "validating", "downloading", "installing",
                 "restarting", "verifying", "rolling_back",
@@ -511,7 +520,16 @@ class TreeDUpdate:
         state = self._read_state()
         capability = self._core_capability()
         is_busy = state.get("busy") is True
+        installed = {target.id: target.current_version for target in self._build_targets()}
         for release in release_results:
+            current = installed.get(release.get("id"), "unknown")
+            release["currentVersion"] = current
+            if not is_busy and release.get("status") == "available" and (
+                current == release.get("latestTag")
+                or (_normalize_semver(current) is not None
+                    and _normalize_semver(current) == _normalize_semver(str(release.get("latestTag"))))
+            ):
+                release.update(status="latest", message="Установлена последняя версия.")
             release["canApply"] = release.get("status") == "available" and not is_busy
             if release.get("id") == "printer-core":
                 release["capability"] = capability
@@ -520,6 +538,7 @@ class TreeDUpdate:
 
         return {
             "available": True,
+            "supportsCombinedUpdate": True,
             "busy": is_busy,
             "canApply": can_apply,
             "canResetOverrides": self.local_overrides_path is not None and not is_busy,

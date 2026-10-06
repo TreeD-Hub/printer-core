@@ -5,6 +5,7 @@
 ## Contract
 
 - Moonraker submits a request with `requestId`, `targetId`, and `targetTag`; accepted values are `printer-ui` plus `ui-main-<run>-<attempt>`, or `printer-core` plus `vX.Y.Z`.
+- A core request may include `uiTargetTag` (the fourth submit argument). The worker persists this UI step before starting, runs core then UI under the same lock and operation ID, and stops on core failure. Recovery preserves a queued second step. `supportsCombinedUpdate` advertises this API; older services must not receive combined requests.
 - `requestId` is a UUID. A repeated ID returns its original operation; another request cannot replace a queued or active operation.
 - The worker serializes submissions and execution with `/run/lock/treed-update.lock` and atomically stores the current operation plus the last ten terminal operations in `/var/lib/treed-update/state.json`.
 - The state file is root-written and world-readable so Moonraker can poll it. Requests and status messages contain no secrets.
