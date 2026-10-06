@@ -306,5 +306,63 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertEqual(state["resultCode"], "ui_updated_recovered")
 
 
+    def test_combined_update_runs_core_then_ui_and_stops_on_core_failure(self):
+        for outcome in ("applied", "error", "rolled_back"):
+            with self.subTest(core_result=outcome):
+                service.write_state({"status": "idle"})
+                calls = []
+
+                def run(command, **_kwargs):
+                    calls.append(command)
+                    if command[0] == service.CORE_APPLY:
+                        return types.SimpleNamespace(returncode=0 if outcome == "applied" else 1,
+                            stdout=json.dumps({"status": outcome, "message": "core result"}))
+                    if command[0] == service.APPLY:
+                        self.assertTrue(service.read_state()["busy"])
+                        self.assertTrue(service.read_state()["coreUpdated"])
+                    return types.SimpleNamespace(returncode=0)
+
+                with patch.object(service.os, "geteuid", return_value=0, create=True), \
+                     patch.object(service, "acquire", return_value=FakeLock()), \
+                     patch.object(service, "printer_is_idle", return_value=True), \
+                     patch.object(service.subprocess, "run", side_effect=run), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    service.submit("11111111-1111-4111-8111-111111111111", "printer-core", "v0.2.0", "ui-main-123-1")
+                    queued = service.read_state()
+                    self.assertEqual(queued["pendingUiTag"], "ui-main-123-1")
+                    service.run_worker()
+                final = service.read_state()
+                self.assertEqual(final["operationId"], queued["operationId"])
+                self.assertFalse(final["busy"])
+                self.assertEqual(final["status"], outcome)
+                self.assertEqual([call[0] for call in calls],
+                                 ["systemctl", service.CORE_APPLY] + ([service.APPLY] if outcome == "applied" else []))
+
+    def test_combined_update_preserves_next_step_across_recovery(self):
+        state = {"operationId": "batch", "requestId": "request", "targetId": "printer-core",
+                 "targetTag": "v0.2.0", "pendingUiTag": "ui-main-123-1", "busy": True, "status": "verifying"}
+        service.finish(state, "applied", "core_updated", "core ready")
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service.subprocess, "run") as restart:
+            service.recover()
+            restart.assert_called_once_with(["systemctl", "start", "--no-block", service.UNIT], check=True, timeout=3)
+        resumed = service.read_state()
+        self.assertEqual((resumed["targetId"], resumed["targetTag"], resumed["status"]),
+                         ("printer-ui", "ui-main-123-1", "queued"))
+        self.assertTrue(resumed["busy"])
+        service.finish(resumed, "error", "ui_failed", "Интерфейс не обновлён.")
+        self.assertEqual(service.read_state()["message"], "Система обновлена. Интерфейс не обновлён.")
+
+    def test_combined_submission_validates_both_targets_before_acquiring_lock(self):
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire") as acquire:
+            for target, tag, ui_tag in (("printer-ui", "ui-main-1-1", "ui-main-2-1"),
+                                        ("printer-core", "v0.2.0", "../../bad")):
+                with self.assertRaises(ValueError):
+                    service.submit("11111111-1111-4111-8111-111111111111", target, tag, ui_tag)
+            acquire.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
