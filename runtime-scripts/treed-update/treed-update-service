@@ -108,15 +108,29 @@ def response(state: Dict[str, Any], accepted: bool, duplicate: bool = False) -> 
     }
 
 
-def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str | None = None) -> int:
+def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str | None = None,
+           reset_configs_json: str | None = None) -> int:
     if os.geteuid() != 0:
         raise RuntimeError("submit must run as root")
     if not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", request_id):
         raise ValueError("invalid requestId")
     if target_id not in TARGET_RE or not TARGET_RE[target_id].fullmatch(target_tag):
         raise ValueError("invalid update target or release tag")
+    ui_target_tag = ui_target_tag or None
     if ui_target_tag is not None and (target_id != "printer-core" or not TARGET_RE["printer-ui"].fullmatch(ui_target_tag)):
         raise ValueError("combined update requires core followed by a valid UI release")
+    reset_configs = json.loads(reset_configs_json) if reset_configs_json is not None else []
+    # Root boundary: updater повторно проверяет ownership и точный hash файла.
+    if not isinstance(reset_configs, list) or len(reset_configs) > 128 or reset_configs and target_id != "printer-core":
+        raise ValueError("invalid config reset selection")
+    paths = set()
+    for row in reset_configs:
+        if (not isinstance(row, dict) or not isinstance(row.get("path"), str)
+                or not re.fullmatch(r"config/(?:printer\.cfg|profiles/treed_v2_corexy_v1/[a-zA-Z0-9_-]+\.cfg)", row["path"])
+                or not isinstance(row.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
+                or row["path"] in paths):
+            raise ValueError("invalid config reset file")
+        paths.add(row["path"])
     lock = acquire()
     if lock is None:
         state = read_state()
@@ -142,6 +156,8 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
         }
         if ui_target_tag is not None:
             operation["pendingUiTag"] = ui_target_tag
+        if reset_configs:
+            operation["resetConfigs"] = reset_configs
         write_state(operation)
         try:
             subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
@@ -300,7 +316,7 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         raise ValueError("usage: treed-update-service submit|run|phase ...")
     command = argv[1]
-    if command == "submit" and len(argv) in (5, 6):
+    if command == "submit" and len(argv) in (5, 6, 7):
         return submit(*argv[2:])
     if command == "run" and len(argv) == 2:
         return run_worker()

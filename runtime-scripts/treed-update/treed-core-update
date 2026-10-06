@@ -500,7 +500,38 @@ def baseline(repo, env):
     write_json(manifest_path(env), manifest)
 
 
-def prepare(manifest, payload, env, journal):
+def config_conflicts(env):
+    # Read-only: калибровки SAVE_CONFIG не считаются ручной правкой профиля.
+    previous = read_json(manifest_path(env))
+    if not previous or previous.get("kind") != KIND or previous.get("schema") != 1:
+        raise ValueError("Core baseline отсутствует")
+    conflicts = []
+    for row in previous["files"]:
+        key = row["path"]
+        if not key.startswith("config/") or not key.endswith(".cfg"):
+            continue
+        data, _info = read_file(destination(key, roots(env)))
+        if data is not None and not matches_managed_file(key, data, row["runtimeSha256"]):
+            conflicts.append({"path": key, "sha256": sha(data)})
+    return conflicts
+
+
+def validate_config_resets(value):
+    if not isinstance(value, list) or len(value) > 128:
+        raise ValueError("Некорректный список сброса конфигов")
+    selected = {}
+    for row in value:
+        if not isinstance(row, dict) or not isinstance(row.get("sha256"), str):
+            raise ValueError("Некорректный файл сброса")
+        key = row.get("path")
+        group, relative = allowed(key)
+        if group != "config" or relative.suffix != ".cfg" or key in selected or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"]):
+            raise ValueError("Сброс допустим только для управляемых Klipper cfg")
+        selected[key] = row["sha256"]
+    return selected
+
+
+def prepare(manifest, payload, env, journal, reset_configs=None):
     locations = roots(env)
     previous = read_json(manifest_path(env))
     if not previous or previous.get("kind") != KIND or previous.get("schema") != 1:
@@ -508,11 +539,17 @@ def prepare(manifest, payload, env, journal):
     if tuple(map(int, manifest["version"].split("."))) <= tuple(map(int, previous["version"].split("."))):
         raise ValueError("Core пакет не новее установленной версии")
     old_files = {row["path"]: row for row in previous["files"]}
+    selected = validate_config_resets([] if reset_configs is None else reset_configs)
+    for key in selected:
+        if key not in old_files or key not in payload:
+            raise ValueError(f"Файл сброса отсутствует в установленном или новом выпуске: {key}")
     entries, installed = [], []
     for index, key in enumerate(sorted(payload.keys() | old_files.keys())):
         path = destination(key, locations)
         old, info = read_file(path)
-        if old is not None and key in old_files and not matches_managed_file(key, old, old_files[key]["runtimeSha256"]):
+        if key in selected and (old is None or sha(old) != selected[key]):
+            raise ValueError(f"Файл изменился после выбора сброса: {key}; повторите проверку")
+        if old is not None and key in old_files and key not in selected and not matches_managed_file(key, old, old_files[key]["runtimeSha256"]):
             raise ValueError(f"Локально изменён управляемый файл: {key}; перенесите настройки в overrides")
         if old is not None and key not in old_files:
             raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
@@ -531,11 +568,21 @@ def prepare(manifest, payload, env, journal):
     write_json(journal.parent / "manifest.before.json", previous)
     current = dict(manifest, files=installed)
     write_json(journal.parent / "manifest.new.json", current)
-    write_json(journal, {"schema": 1, "stage": "prepared", "entries": entries})
+    write_json(journal, {"schema": 1, "stage": "validated", "entries": entries})
     return current
 
 
 def rollback(env, journal, transaction):
+    # До начала записи rollback не должен затирать более свежие ручные правки.
+    # Старые journal со stage=prepared сохраняют прежний recovery-контракт.
+    if transaction["stage"] in {"validated", "aborted"}:
+        services("start")
+        if not wait_ready():
+            raise RuntimeError("Обновление не началось, но сервисы не прошли readiness")
+        transaction["stage"] = "aborted"
+        write_json(journal, transaction)
+        return {"status": "error", "resultCode": "core_not_installed",
+                "message": "Обновление прервано до записи файлов; локальные изменения сохранены. Повторите проверку."}
     try:
         phase("rolling_back", "Восстанавливаем предыдущие компоненты TreeD.")
     except (OSError, subprocess.SubprocessError):
@@ -592,7 +639,7 @@ def owner(env):
             grp.getgrnam(env["TREED_UPDATE_PI_GROUP"]).gr_gid)
 
 
-def apply(tag, operation, env):
+def apply(tag, operation, env, reset_configs=None):
     if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None:
         raise ValueError("Недопустимый тег core")
     journal = journal_path(env, operation)
@@ -607,7 +654,7 @@ def apply(tag, operation, env):
         uid, gid = owner(env)
         if not idle():
             raise ValueError("Core update требует готового принтера без активной печати или паузы")
-        prepare(manifest, payload, env, journal)
+        prepare(manifest, payload, env, journal, reset_configs)
     if not idle():
         raise ValueError("Принтер начал печать во время подготовки обновления")
     stop_heating()
@@ -616,8 +663,10 @@ def apply(tag, operation, env):
         services("stop")
         # После остановки Klipper SAVE_CONFIG уже не может изменяться.
         # Переподготовка также подхватывает последнее сохранение до остановки.
-        current = prepare(manifest, payload, env, journal)
+        current = prepare(manifest, payload, env, journal, reset_configs)
         transaction = read_json(journal)
+        transaction["stage"] = "installing"
+        write_json(journal, transaction)
         for row in transaction["entries"]:
             path = destination(row["path"], roots(env))
             if row["delete"]:
@@ -647,6 +696,9 @@ def main(argv):
     if len(argv) == 4 and argv[1] == "build":
         build(Path(argv[2]).resolve(), Path(argv[3]).resolve())
         return 0
+    if len(argv) == 2 and argv[1] == "inspect":
+        print(json.dumps({"configConflicts": config_conflicts(settings()), "supportsConfigReset": True}, ensure_ascii=False))
+        return 0
     if os.geteuid() != 0:
         raise RuntimeError("Core updater требует root")
     env = settings()
@@ -666,11 +718,11 @@ def main(argv):
         if (not state or state.get("busy") is not True or state.get("targetId") != "printer-core"
                 or state.get("operationId") != argv[3] or state.get("targetTag") != argv[2]):
             raise ValueError("Core apply требует активную операцию worker")
-        result = apply(argv[2], argv[3], env)
+        result = apply(argv[2], argv[3], env, state.get("resetConfigs", []))
     elif len(argv) == 3 and argv[1] == "recover":
         result = recover(env, argv[2])
     else:
-        raise ValueError("usage: treed-core-update build repo zip | baseline repo | apply tag operationId | recover operationId")
+        raise ValueError("usage: treed-core-update build repo zip | inspect | baseline repo | apply tag operationId | recover operationId")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "applied" or argv[1] == "recover" and result["status"] == "rolled_back" else 1
 

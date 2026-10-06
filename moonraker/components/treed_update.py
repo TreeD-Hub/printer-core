@@ -139,6 +139,8 @@ class TreeDUpdate:
             ),
         )
         self.last_release_results: Optional[List[Dict[str, Any]]] = None
+        self.config_conflicts: List[Dict[str, str]] = []
+        self.supports_config_reset = False
 
         self.server.register_endpoint(
             "/server/treed/update/status",
@@ -177,7 +179,36 @@ class TreeDUpdate:
 
     async def _handle_check(self, _web_request: object) -> Dict[str, Any]:
         # Блок 5: Параллельный refresh release data с ограниченным временем ответа.
+        await self._inspect_config_conflicts()
         return await self._check_releases()
+
+    async def _inspect_config_conflicts(self) -> None:
+        # Непривилегированное чтение тем же updater, который проверяет baseline.
+        self.supports_config_reset = False
+        self.config_conflicts = []
+        if not self._core_capability().get("supported"):
+            return
+        process = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                str(self.core_update_command), "inspect",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=3)
+            result = _read_json_payload(stdout)
+            if process.returncode == 0 and result and result.get("supportsConfigReset") is True:
+                self.config_conflicts = result["configConflicts"]
+                self.supports_config_reset = True
+            elif result and ("usage:" in str(result.get("message", ""))
+                             or result.get("message") == "Core updater требует root"):
+                return  # Предыдущий updater ещё не поддерживает inspect.
+            else:
+                raise ValueError("Не удалось прочитать управляемые конфиги")
+        except (OSError, ValueError, KeyError, asyncio.TimeoutError) as error:
+            if process is not None and process.returncode is None:
+                process.kill()
+                await process.communicate()
+            raise self.server.error("Не удалось проверить локальные конфиги. Повторите проверку.", 503) from error
 
     async def _handle_firmware_status(self, _web_request: object) -> Dict[str, Any]:
         return await self._firmware_status()
@@ -254,13 +285,20 @@ class TreeDUpdate:
             raise self.server.error("Совместное обновление требует core и корректный тег UI.", 400)
 
         cancel_paused_print = getattr(web_request, "get")("cancelPausedPrint", False) is True
+        reset_configs = getattr(web_request, "get")("resetConfigs", [])
+        if (not isinstance(reset_configs, list) or len(reset_configs) > 128
+                or reset_configs and (target_id != "printer-core" or not self.supports_config_reset)
+                or any(row not in self.config_conflicts for row in reset_configs)):
+            raise self.server.error("Повторите проверку и явно выберите файлы сброса.", 400)
         if cancel_paused_print and self._build_status(None)["busy"]:
             raise self.server.error("Другое обновление уже выполняется.", 409)
         await self._ensure_apply_allowed(cancel_paused_print=cancel_paused_print)
 
         command = [*self.submit_command.split(), request_id, target_id, target_tag]
-        if ui_target_tag is not None:
-            command.append(ui_target_tag)
+        if ui_target_tag is not None or reset_configs:
+            command.append(ui_target_tag or "")
+        if reset_configs:
+            command.append(json.dumps(reset_configs))
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -540,6 +578,8 @@ class TreeDUpdate:
             "available": True,
             "supportsCombinedUpdate": True,
             "busy": is_busy,
+            "supportsConfigReset": self.supports_config_reset,
+            "configConflicts": self.config_conflicts,
             "canApply": can_apply,
             "canResetOverrides": self.local_overrides_path is not None and not is_busy,
             "message": message or str(state.get("message") or "Состояние обновлений готово."),
