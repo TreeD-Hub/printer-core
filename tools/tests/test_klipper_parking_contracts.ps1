@@ -206,13 +206,13 @@ Assert-NotContains $cancelPrint '(?m)^\s*G28\b' "CANCEL_PRINT must not home axes
 
 # Блок 4: Проверка фиксированной purge-линии в print-area.
 Assert-Contains $purgeSettings 'variable_park_height:\s*10\.0' "Безопасная высота переезда должна оставаться 10 мм"
-Assert-Contains $purgeSettings 'variable_heat_wait_height:\s*0\.2' "Высота ожидания нагрева должна быть задана отдельно с зазором 0,2 мм"
+Assert-Contains $purgeSettings 'variable_heat_wait_height:\s*0\.4' "Высота ожидания нагрева должна быть задана отдельно с зазором 0,4 мм"
 Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_START_ADAPTIVE_MESH\s*$' '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "native mesh must precede print coords"
 Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' '(?m)^\s*_TREED_SMART_PARK\s*$' "park must use print coords"
 Assert-ContainsBefore $startPrint '(?m)^\s*_TREED_SMART_PARK\s*$' '(?m)^\s*_TREED_START_FINAL_HEAT\s*$' "park must precede final heat"
 Assert-ContainsBefore $smartPark '(?m)^\s*G0 X\{park_x\} Y\{park_y\} F6000\s*$' '(?m)^\s*G0 Z\{wait_z\} F1500\s*$' "SMART_PARK должен завершить XY-переезд до сближения со столом"
 Assert-ContainsBefore $smartPark '(?m)^\s*_TREED_PURGE_VALIDATE\s*$' '(?m)^\s*SAVE_GCODE_STATE\b' "Настройки ожидания должны проверяться до команд движения"
-Assert-ContainsBefore $linePurge '(?m)^\s*_TREED_PURGE_VALIDATE\s*$' '(?m)^\s*SAVE_GCODE_STATE\b' "Настройки обеих линий должны проверяться до изменения PA и движения"
+Assert-ContainsBefore $linePurge '(?m)^\s*_TREED_PURGE_VALIDATE\s*$' '(?m)^\s*SAVE_GCODE_STATE\b' "Настройки линии должны проверяться до изменения состояния и движения"
 Assert-Contains $smartPark 'printer\.gcode_move\.gcode_position' "Высоты переезда должны сравниваться в G-code координатах с активной mesh"
 Assert-Contains $linePurge 'printer\.gcode_move\.gcode_position' "Начальная точка purge должна сравниваться в print-координатах"
 Assert-Contains $linePurge '(?s)\{% if not at_start %\}\s*\{% if pos\.z\|float < park_z %\}\s*G0 Z\{park_z\} F1500\s*\{% endif %\}\s*G0 X\{start_x\} Y\{start_y\} F6000\s*\{% endif %\}\s*G0 Z\{purge_z\} F1500' "Purge должен пропускать повторный отход в начальной точке и сохранять безопасный переезд из другой точки"
@@ -225,8 +225,9 @@ Assert-Contains $finalHeat '(?m)^\s*TEMPERATURE_WAIT SENSOR=extruder MINIMUM=\{w
 Assert-NotContains $finalHeat '(?m)^\s*M109\b' "Final heat must not block on M109 thermal settling"
 Assert-NotContains $finalHeat '\bMAXIMUM=' "Final heat must not wait for overshoot cooldown"
 Assert-ContainsBefore $linePurge '(?m)^\s*G0 X\{start_x\} Y\{start_y\} F6000\s*$' '(?m)^\s*G0 Z\{purge_z\} F1500\s*$' "LINE_PURGE must reach safe XY before lowering"
-Assert-Contains $linePurge 'x_max - purge_len - break_len' "purge and break must be clipped to print X max"
-Assert-Contains $linePurge 'start_x \+ purge_len \+ break_len' "purge break must use clipped start"
+Assert-Contains $linePurge 'geo\.print_size_x\|float / 2\.0' "Длина линии должна составлять половину ширины стола"
+Assert-Contains $linePurge 'geo\.print_min_y\|float \+ geo\.print_size_y\|float - cfg\.y_inset\|float' "Линия должна идти у максимального Y"
+Assert-NotContains $linePurge 'SET_PRESSURE_ADVANCE|\bG10\b|\bG11\b' "Обычная purge-линия не должна переключать PA или firmware retract"
 Assert-Contains $purgeValidation '"x" not in homed or "y" not in homed or "z" not in homed' "Park/purge должны требовать homed XYZ"
 Assert-NotContains $macrosPurge 'printer\.exclude_object|map\(attribute=.polygon.\)' "fixed park and purge must not depend on object metadata"
 

@@ -33,7 +33,7 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 3. Начинает прогрев стола и preheat сопла.
 4. Выполняет полный `G28` через sensorless X/Y и Eddy Z-home.
 5. Строит новую Eddy mesh методом `rapid_scan` вокруг объектов с adaptive margin.
-6. Включает print-offset, паркуется в передней полосе, догревает сопло и проводит фиксированную purge-линию.
+6. Включает print-offset, паркуется у максимального Y, догревает сопло и проводит одну purge-линию вдоль X длиной в половину ширины стола.
 
 Параметры `ADAPTIVE_MARGIN` и `HOTEND_READY_MARGIN` можно задавать в вызове;
 значения по умолчанию и полный контракт перечислены в
