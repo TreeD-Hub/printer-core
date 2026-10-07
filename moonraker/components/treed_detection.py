@@ -1,12 +1,13 @@
 """Локальная реакция на результат серверного анализа изображения.
 
 Контур: отмена только после трёх подтверждений для активной сессии печати.
-Серверный транспорт пока не реализован; endpoint принимает нормализованный результат.
+Настройка AI сохраняется на принтере; endpoint принимает нормализованный результат.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,12 @@ class TreeDDetection:
         self.klippy_apis = self.server.lookup_component("klippy_apis")
         self.frames_root = Path(config.get("frames_root")).resolve()
         self.session_file = Path(config.get("session_file", "/tmp/treed_cam_session_dir"))
+        self.settings_file = self.frames_root.parent / "config" / "detection.json"
+        settings = json.loads(self.settings_file.read_text(encoding="utf-8")) if self.settings_file.exists() else {"enabled": True}
+        if not isinstance(settings, dict) or type(settings.get("enabled")) is not bool:
+            raise ValueError("Invalid AI detection settings")
+        self._enabled = settings["enabled"]
+        self._settings_generation = 0
         self._lock = asyncio.Lock()
         self._session_id = None
         self._session_dir = None
@@ -57,13 +64,38 @@ class TreeDDetection:
             "/server/treed/detection/result", ["POST"], self._handle_result,
             wrap_result=False,
         )
+        self.server.register_endpoint(
+            "/server/treed/detection/settings", ["GET", "POST"], self._handle_settings,
+            wrap_result=False,
+        )
+
+    async def _handle_settings(self, web_request) -> dict:
+        # Настройка и результаты сериализованы: выключение инвалидирует ответы в пути.
+        async with self._lock:
+            if web_request.get_action().upper() == "POST":
+                enabled = web_request.get("enabled")
+                if type(enabled) is not bool:
+                    raise self.server.error("enabled must be boolean", 400)
+                self.settings_file.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.settings_file.with_suffix(".tmp")
+                temporary.write_text(json.dumps({"enabled": enabled}) + "\n", encoding="utf-8")
+                temporary.replace(self.settings_file)
+                if enabled != self._enabled:
+                    self._enabled = enabled
+                    self._settings_generation += 1
+                    self._session_id = None
+                    self._last_order = None
+                    self._decision = DetectionDecision()
+                    self._cancel_error = None
+            return {"enabled": self._enabled}
 
     async def _sync_session(self) -> None:
         # Блок 3: Сессия существует только при подтверждённой активной печати.
         objects = await self.klippy_apis.query_objects(RUNTIME_OBJECTS, default={})
         camera = objects.get("gcode_macro _TREED_CAM_STATE", {})
         active = (
-            objects.get("print_stats", {}).get("state") == "printing"
+            self._enabled
+            and objects.get("print_stats", {}).get("state") == "printing"
             and objects.get("gcode_macro _TREED_OPERATION_STATE", {}).get("phase") == "printing"
             and camera.get("enabled") == 1
         )
@@ -77,7 +109,7 @@ class TreeDDetection:
                         or session_dir.parent != self.frames_root
                         or not session_dir.is_dir()):
                     raise ValueError("inactive camera session")
-                session_id = f"{generation}:{session_dir.name}"
+                session_id = f"{generation}:{self._settings_generation}:{session_dir.name}"
             except (OSError, ValueError, KeyError, TypeError):
                 session_dir, generation = None, 0
         if session_id != self._session_id:
@@ -89,6 +121,7 @@ class TreeDDetection:
 
     def _status(self) -> dict:
         return {
+            "enabled": self._enabled,
             "active": self._session_id is not None,
             "session_id": self._session_id,
             "counter": self._decision.count,
