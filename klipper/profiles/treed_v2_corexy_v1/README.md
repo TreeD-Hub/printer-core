@@ -1,12 +1,14 @@
 # Профиль `treed_v2_corexy_v1`
 
-Профиль задает V2-контур Klipper для ветки `treed-v2`:
+Профиль задаёт конфигурацию Klipper для TreeD V2:
+
 - host: Rock Pi (Armbian Debian 12);
 - CAN: U2C -> Octopus Pro (main MCU, required), EBB42 (required), Eddy Duo (required).
 
 ## Include-цепочка
 
 Основная include-цепочка задается в `klipper/printer.cfg`:
+
 1. `profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg`
 2. `profiles/treed_v2_corexy_v1/ebb42_can.cfg`
 3. `profiles/treed_v2_corexy_v1/printer_base.cfg`
@@ -14,18 +16,18 @@
 5. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
 6. `profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg`
 7. `profiles/treed_v2_corexy_v1/steppers.cfg`
-   Затем `profiles/treed_v2_corexy_v1/driver_mode.cfg` — runtime-режим XYZ.
-8. `profiles/treed_v2_corexy_v1/z_recovery.cfg`
-9. `profiles/treed_v2_corexy_v1/motion_guard.cfg`
-10. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
-11. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
-12. `filament_motion_runtime.cfg`
-13. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
-14. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
-15. `profiles/treed_v2_corexy_v1/service_fans.cfg`
-16. `profiles/treed_v2_corexy_v1/macros.cfg`
-17. `profiles/treed_v2_corexy_v1/ui.cfg`
-18. `local_overrides.cfg`
+8. `profiles/treed_v2_corexy_v1/driver_mode.cfg`
+9. `profiles/treed_v2_corexy_v1/z_recovery.cfg`
+10. `profiles/treed_v2_corexy_v1/motion_guard.cfg`
+11. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
+12. `profiles/treed_v2_corexy_v1/filament_sensor.cfg`
+13. `filament_motion_runtime.cfg`
+14. `profiles/treed_v2_corexy_v1/bed_heater_dc.cfg`
+15. `profiles/treed_v2_corexy_v1/input_shaper.cfg`
+16. `profiles/treed_v2_corexy_v1/service_fans.cfg`
+17. `profiles/treed_v2_corexy_v1/macros.cfg`
+18. `profiles/treed_v2_corexy_v1/ui.cfg`
+19. `local_overrides.cfg`
 
 `macros.cfg` дополнительно подключает:
 - `macros_ui_contract.cfg` как versioned device handshake для TreeD Shell;
@@ -39,9 +41,9 @@
 
 Эти macro не выполняют действие сами. Они только публикуют state surface для Moonraker object query; destructive команды остаются штатными Moonraker endpoints и должны вызываться только после ручного подтверждения в UI.
 
-Контракт UI live-тюнинга описан в `ui-runtime-tune-contract.md`: публичные `TREED_UI_*` команды, диапазоны, ошибки и Moonraker state surface.
+Контракт настройки во время работы описан в [ui-runtime-tune-contract.md](ui-runtime-tune-contract.md): публичные `TREED_UI_*` команды, диапазоны, ошибки и состояние в Moonraker.
 
-Методичка по ручному и UI-использованию макросов профиля: `macros-usage.md`.
+Ручное использование и вызов макросов из UI: [macros-usage.md](macros-usage.md).
 
 Фактические слои печати: `START_PRINT ... TOTAL_LAYER=N` и штатный
 `SET_PRINT_STATS_INFO CURRENT_LAYER=N` на каждой смене слоя.

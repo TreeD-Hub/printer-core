@@ -1,7 +1,10 @@
-# TreeD Klipper host extensions
+# Host-расширения Klipper для TreeD
 
 `loader/steps/runtime-bootstrap.sh` копирует эти модули в `klippy/extras`
 закреплённого Klipper. Здесь хранятся расширения для профиля `treed_v2_corexy_v1`.
+Версию Klipper задаёт [`runtime-versions.env`](../runtime-versions.env).
+
+## Модули и контракты
 
 `treed_driver_mode.py` управляет режимом TMC5160 XYZ, с допуском и групповым откатом.
 `treed_driver_fan_mode.py` включает обдув по нагрузке и защитному таймеру
@@ -46,3 +49,9 @@ TMC5160 и отход от фактического DIAG. Доставляетс
 callback и проверяет неизменность pending autosave. Сверять также BedMesh,
 configfile.get_status и GCodeDispatch.ready_gcode_handlers при обновлении Klipper.
 [Контракты и запуск серий](../docs/z-eddy-acceptance.md).
+
+## Проверка изменений
+
+Адресные офлайн-проверки перечислены в [`tools/tests`](../tools/tests/README.md).
+Они проверяют программные контракты; движение, StallGuard и работу Eddy
+подтверждают отдельно на оборудовании по связанным инструкциям.

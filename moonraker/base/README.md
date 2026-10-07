@@ -1,6 +1,7 @@
-# Moonraker Base Fragments
+# Базовые фрагменты Moonraker
 
-`moonraker/base/` содержит статические базовые фрагменты Moonraker (repo-managed слой).
+Статические фрагменты конфигурации, которыми управляет репозиторий.
+Loader подставляет пути пользователя и доставляет их в runtime.
 
 ## Runtime-путь
 
@@ -27,3 +28,6 @@
 - фрагменты должны оставаться совместимыми с `moonraker/moonraker.conf`;
 - для user-зависимых путей использовать шаблоны `{{PI_HOME}}`/`{{PI_USER}}` (подстановка в runtime делает `loader/steps/moonraker-config.sh`);
 - generated-конфиги в этот каталог не добавляются (они живут в runtime: `${PI_HOME}/printer_data/config/moonraker/generated/*.conf`, не в репозитории).
+
+Смежная документация: [include-цепочка и доставка](../README.md),
+[компоненты](../components/README.md).

@@ -1,4 +1,4 @@
-# Loader Steps
+# Шаги loader
 
 Каталог `loader/steps/` содержит атомарные этапы provisioning. Порядок и тип шага (`required`/`optional`) задаются в `loader/loader.sh`.
 
@@ -251,7 +251,7 @@ treed-ui status
   - при `TREED_UI_MODE=ts` активируется `treed-shell.service`, а `KlipperScreen.service` отключается;
   - при `TREED_UI_MODE=ks` активируется `KlipperScreen.service`, а `treed-shell.service` отключается.
 
-## Практические замечания
+## Поведение шагов
 
 - `can-setup.sh` required: пишет `/etc/default/treed-can-setup`, `/usr/local/sbin/treed-can-setup.sh` и systemd unit `treed-can-setup.service`; на каждом boot применяет `bitrate`, `txqueuelen`, `restart-ms`, ждет появление интерфейса и выполняет reinit-циклы при старте.
 - `packages-core.sh` перед `apt update/install` сверяет установленный пакетный набор через `dpkg-query`; если все пакеты уже актуально установлены, apt-фаза пропускается.
@@ -277,3 +277,10 @@ treed-ui status
 - `moonraker-config.sh` идемпотентно добавляет `treed-shell` в `moonraker.asvc`, чтобы UI мог перезапустить только `treed-shell.service` через штатный Moonraker service endpoint.
 - `verify.sh` production-default fail-closed: `Klippy state=ready`, main MCU, EBBCan, Eddy и свежий MCU journal обязательны; `TREED_ALLOW_HARDWARE_NOT_READY=1` явно включает service/install mode.
 - `verify.sh` проверяет наличие сервисного sensorless-компонента, CLI и cfg, но не проверяет всю include-цепочку или значения sensorless-параметров.
+
+## Запуск и проверка
+
+Шаги получают окружение от [`loader.sh`](../loader.sh); для установки запускайте
+[оркестратор](../README.md#запуск), а не отдельный шаг без его контекста.
+Режим `TREED_LOADER_MODE=check` не запускает шаги и не применяет изменения.
+Локальные проверки контрактов описаны в [`tools/tests`](../../tools/tests/README.md).

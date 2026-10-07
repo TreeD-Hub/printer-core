@@ -1,17 +1,18 @@
-# Firmware Artifacts
+# Прошивки MCU
 
-Каталог `firmware/` хранит firmware-слой для сборки и ручной прошивки.
+Конфигурации сборки Klipper для Octopus Pro, EBB42 и Eddy Duo.
+Loader собирает артефакты; запись прошивки выполняет оператор отдельно.
 
 ## Состав
 
-- `firmware/configs/` — Kconfig-файлы target-ов для auto build шага `loader/steps/firmware-build.sh`.
+- [`configs/`](configs/README.md) — Kconfig-файлы для шага `loader/steps/firmware-build.sh`.
 
 ## Runtime/Deploy контракт (`treed-v2`)
 
 - loader выполняет auto build main+EBB(+Eddy при enabled);
 - результат сборки публикуется в staging-каталог:
-  - `/home/pi/treed/firmware-artifacts/treed-v2/<run-id>/...`
-  - `/home/pi/treed/firmware-artifacts/treed-v2/latest -> <run-id>`
+  - `${PI_HOME}/treed/firmware-artifacts/treed-v2/<run-id>/...`
+  - `${PI_HOME}/treed/firmware-artifacts/treed-v2/latest -> <run-id>`
 - в `latest` формируются:
   - `manifest.tsv`
   - `checksums.sha256`
@@ -40,3 +41,7 @@
 6. После завершения всех плат выполнить отдельно согласованный cold-start/FIRMWARE_RESTART/emergency-stop план без движения и нагрева, затем 60-секундное наблюдение recovery.
 
 Одинаковая строка `v0.13.0` не подтверждает одинаковые исходники. Short SHA принимается только когда он однозначно разрешается в установленном Klipper checkout; dirty/неразрешимое значение остаётся `unknown`. Reported version не заменяет device readback, если плата его не поддерживает.
+
+Смежная документация: [целевые платы](configs/treed_v2/README.md),
+[параметры сборки loader](../loader/steps/README.md),
+[архитектура обновлений](../docs/update-architecture.md).

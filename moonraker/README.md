@@ -1,6 +1,6 @@
-# Moonraker Config Layer
+# Конфигурация Moonraker
 
-Каталог `moonraker/` содержит репозиторный слой конфигурации и компонента Moonraker для TreeD.
+Базовая конфигурация и компоненты Moonraker для TreeD.
 
 ## Структура
 
@@ -23,7 +23,7 @@
 - `moonraker/base/*.conf` -> `${PI_HOME}/printer_data/config/moonraker/base/*.conf`
 - `moonraker/components/*.py` -> `${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}/moonraker/components`, тот же checkout, который указан в `moonraker.service`
 
-После копирования loader компилирует компоненты runtime Python, перезапускает Moonraker и проверяет через `/server/info`, что `treed_shell_command`, `treed_host_network`, `treed_filament_sensor`, `treed_update` и `treed_recovery` реально загружены.
+После копирования loader компилирует компоненты runtime Python, перезапускает Moonraker и проверяет через `/server/info`, что `treed_shell_command`, `treed_detection`, `treed_host_network`, `treed_filament_sensor`, `treed_update` и `treed_recovery` реально загружены.
 
 `generated` слой:
 
@@ -45,5 +45,6 @@
 
 ## Связанные каталоги
 
-- `moonraker/base/README.md` — детали базовых конфиг-фрагментов.
-- `moonraker/components/README.md` — детали кастомного компонента.
+- [Базовые фрагменты](base/README.md).
+- [Компоненты и API](components/README.md).
+- [Владение runtime-конфигами](../docs/config-ownership.md).

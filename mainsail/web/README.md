@@ -1,6 +1,7 @@
-# Mainsail Web Bundle
+# Архив веб-интерфейса Mainsail
 
-Каталог содержит bundled web-архив Mainsail для установки без доступа к GitHub Releases.
+Архив Mainsail для установки без доступа к GitHub Releases.
+Шаг loader сверяет его версию и SHA-256 с `runtime-versions.env`.
 
 ## Состав
 
@@ -17,3 +18,7 @@
 
 - целевой путь: `/var/www/mainsail` по умолчанию;
 - владелец деплоя: `loader/steps/mainsail-web.sh`.
+
+Смежная документация: [Mainsail и тема](../README.md),
+[закреплённые версии](../../runtime-versions.env),
+[переменные loader](../../loader/steps/README.md).

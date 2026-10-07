@@ -1,6 +1,8 @@
-# TreeD V2 Firmware Target Configs
+# Целевые платы TreeD V2
 
-Дефолтные Kconfig-файлы для шага `loader/steps/firmware-build.sh` в ветке `treed-v2`.
+Штатные Kconfig-файлы для шага `loader/steps/firmware-build.sh`.
+До сборки и записи сверьте модель MCU, ревизию платы и bootloader offset
+с фактическим оборудованием; имя файла не подтверждает их соответствие.
 
 ## Файлы
 
@@ -16,3 +18,6 @@
 - Если у вашей платы другая ревизия MCU (например F429/H723 или другой Eddy-чип),
   переопределите config-файл через env и перезапустите loader.
 - Step `firmware-build` fail-fast проверяет, что итоговая `.config` содержит ожидаемую архитектуру.
+
+Переменные выбора target: [README конфигураций](../README.md).
+Артефакты и ручная запись: [README прошивок](../../README.md).

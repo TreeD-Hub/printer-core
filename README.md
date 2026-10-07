@@ -19,7 +19,7 @@ legacy-контур.
 
 ## Версии и release assets
 
-Версия проекта хранится в `VERSION`. Совместимые версии Klipper, Moonraker,
+Начальная версия проекта хранится в `VERSION`. Совместимые версии Klipper, Moonraker,
 KlipperScreen и Crowsnest, а также версия и checksum Mainsail закреплены в
 `runtime-versions.env`. Loader устанавливает эти компоненты по закреплённым
 ревизиям и release asset.
@@ -33,14 +33,18 @@ Core обновляется через тот же виджет настроек
 Для первого включения новый updater доставляется loader, после успешного verify
 фиксируется baseline. [Контракт и границы обновления](docs/update-architecture.md).
 
-Release workflow запускается после изменения `VERSION` в `treed-v2` (merge PR),
-тегом `vX.Y.Z`, совпадающим с `VERSION`, или вручную. Имена
+Workflow релиза запускается после каждого push в `treed-v2`, включая merge PR,
+или вручную. Он назначает версию `0.<run_number>.<run_attempt>` и тег
+`v0.<run_number>.<run_attempt>` без коммита `VERSION` в ветку. При запуске
+тегом `vX.Y.Z` версия должна совпадать с `VERSION` этого коммита. Имена
 `treed-mainshellos-source.zip` и `treed-mainshellos-release.json` — сохранённые
-**legacy compatibility asset names** для совместимости релизного процесса.
+имена артефактов для совместимости релизного процесса.
 
 ## Установка и обслуживание
 
-Быстрый install на Rock Pi:
+Перед установкой подготовьте Rock Pi по [инструкции первого запуска](docs/firstStart.md)
+и сверьте состав оборудования ниже. Команда запускает установку, меняет runtime
+и после первой установки по умолчанию перезагружает устройство:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
@@ -170,10 +174,10 @@ EBB42 и Eddy. Камера необязательна, если не включ
 AUTO как следующий шаг вслепую. Полная процедура находится в
 [инструкции калибровки Eddy](docs/eddy-calibration.md).
 
-## Runtime и source of truth
+## Состав и runtime-пути
 
-- `loader/loader.sh` — entrypoint provisioning; актуальный порядок шагов описан
-  в [модели владения конфигами](docs/config-ownership.md).
+- `loader/loader.sh` — точка входа установки; актуальный порядок шагов описан
+  в [README loader](loader/README.md#реестр-шагов).
 - `loader/steps/` — шаги provisioning режима `apply`; `check` выполняется
   оркестратором без запуска шагов.
 - `klipper/` — канонические конфигурации и профиль `treed_v2_corexy_v1`.
@@ -206,3 +210,6 @@ AUTO как следующий шаг вслепую. Полная процед�
 - [Сборка и ручная прошивка MCU](firmware/README.md)
 - [Использование макросов профиля](klipper/profiles/treed_v2_corexy_v1/macros-usage.md)
 - [Локальные проверки контрактов](tools/tests/README.md)
+
+Команды проверки выбирайте по затронутой подсистеме из README выше.
+Статические и офлайн-проверки не подтверждают готовность механики, CAN и нагревателей.

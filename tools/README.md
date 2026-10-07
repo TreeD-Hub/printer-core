@@ -1,6 +1,6 @@
 # `tools`
 
-Вспомогательные утилиты и skills-ресурсы для проверок и поддержки проекта.
+Диагностические утилиты, офлайн-проверки и локальные skills проекта.
 
 ## Состав
 
@@ -16,9 +16,7 @@
 - `comment-style` — универсальный skill форматирования/проверки комментариев.
 - `readme-coverage` — универсальный skill покрытия README.
 
-Для `comment-style` и `readme-coverage` source of truth:
-
-- `C:/Users/Yawllen/Documents/GitHub/codex-shared-skills`
+Порядок применения и доступные скрипты: [README skills](skills/README.md).
 
 ## `tools/tests/`
 
@@ -26,7 +24,8 @@
 `collect_eddy_diagnostic.sh`, формирует JSON schema 1 и сравнивает независимые
 cold-start пакеты. [Команды, переменные и критерии](../docs/z-eddy-acceptance.md).
 
-Содержит легкие контрактные проверки, которые можно запускать локально на Windows без WSL.
+PowerShell-проверки доступны на Windows без WSL. Python- и Bash-проверки
+имеют отдельные требования к среде; полный список приведён в [README тестов](tests/README.md).
 
 Команда:
 

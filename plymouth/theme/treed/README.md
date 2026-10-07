@@ -1,6 +1,7 @@
-# Plymouth Theme: treed
+# Тема Plymouth `treed`
 
-Тема `treed` — текущая активная тема boot splash для TreeD.
+Активная тема раннего экрана загрузки TreeD. Выполняется в Plymouth,
+до запуска браузера и React UI.
 
 ## Состав
 
@@ -39,3 +40,5 @@ React-экран не выполняется в initramfs: ранний boot р�
 Изменение `treed.script` требуется доставить в `/usr/share/plymouth/themes/treed`
 и включить в initramfs через `loader/steps/plymouth-initramfs.sh`.
 Реальную видимость splash и переход в UI проверяют после перезагрузки устройства.
+
+Полная цепочка доставки темы: [README Plymouth](../../README.md).

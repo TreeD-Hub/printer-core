@@ -1,6 +1,8 @@
-# Moonraker Components
+# Компоненты Moonraker
 
-Каталог для кастомных компонентов Moonraker, которые деплоятся loader.
+Расширения Moonraker для команд, сети, датчика филамента, обновления,
+восстановления и локальной реакции на результаты анализа камеры.
+Компоненты доставляет шаг `loader/steps/moonraker-config.sh`.
 
 ## Состав
 
@@ -101,11 +103,15 @@
 ## Деплой
 
 - выполняет `loader/steps/moonraker-config.sh`;
-- путь назначения определяется автоматически по фактической установке Moonraker
-  (process path -> systemd unit -> типовые пути -> fallback поиск).
+- путь назначения: `${TREED_MOONRAKER_SRC_DIR:-${PI_HOME}/moonraker}/moonraker/components`; loader сверяет его с checkout, который использует `moonraker.service`.
 - деплоятся все `*.py` компоненты из этого каталога.
 
 ## Ограничения
 
 - компонент должен оставаться совместимым с текущим API Moonraker;
 - изменения компонента проверяются вместе с `moonraker/base/00-core.conf`.
+
+Смежная документация: [конфигурация Moonraker](../README.md),
+[камерные скрипты](../../runtime-scripts/treed-cam/README.md),
+[обновление и откат](../../runtime-scripts/treed-update/README.md),
+[офлайн-проверки](../../tools/tests/README.md).

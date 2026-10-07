@@ -2,8 +2,11 @@
 
 Каталог тем KlipperScreen, которые поддерживаются в TreeD.
 
-Содержимое:
-- `treed-oled/` — тема TreeD для OLED-экрана (черный фон, сдержанные элементы UI).
+## Состав
 
-Деплой:
-- выполняется шагом loader `loader/steps/klipperscreen-theme.sh`.
+- [`treed-oled/`](treed-oled/README.md) — тема TreeD с чёрным фоном.
+
+## Установка
+
+Тему копирует шаг `loader/steps/klipperscreen-theme.sh`.
+Выбор темы и языка описан в [README KlipperScreen](../README.md).
