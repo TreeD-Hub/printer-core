@@ -87,6 +87,7 @@ class Rig:
         self.manual_active = False
         self.hits = [(205., .025)]
         self.moves, self.move_speeds, self.seeks, self.pauses, self.writes = [], [], [], [], []
+        self.seek_driver_settings = []
         self.fail_move = None
         self.fields = Fields()
         self.saved_fields = self.fields.values.copy()
@@ -197,6 +198,8 @@ class Rig:
             def homing_move(self, target, speed, probe_pos=False):
                 assert probe_pos and target[:2] == rig.pos[:2] and target[3] == rig.pos[3]
                 rig.seeks.append((rig.pos[2], target[2], speed))
+                rig.seek_driver_settings.append((rig.fields.get_field('sgt'),
+                                                 rig.toolhead.max_accel))
                 hit = rig.hits.pop(0)
                 rig.fields.values.update(en_pwm_mode=0, diag1_stall=1, tcoolthrs=0xfffff, thigh=0)
                 if isinstance(hit, BaseException):
@@ -295,6 +298,40 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             rig.run(manual_park=True)
         self.assertFalse(rig.seeks or rig.moves)
+
+    def test_bottom_commands_use_live_z_driver_settings(self):
+        for mode in ('recovery', 'manual_park', 'auto_remove'):
+            for sgt, current in ((1, .9), (-3, 1.1)):
+                with self.subTest(mode=mode, sgt=sgt, current=current):
+                    rig = Rig(speed=50., accel=1000.)
+                    rig.kin.max_z_velocity = 50.
+                    if mode != 'recovery':
+                        rig.homed = 'xyz'
+                    if mode == 'auto_remove':
+                        rig.phase = 'auto_remove'
+                    # Изменение драйвера после загрузки extra должно влиять на поиск.
+                    rig.fields.values['sgt'] = sgt
+                    rig.saved_fields = rig.fields.values.copy()
+                    rig.current.get_current = lambda: (current, .4, 2., 3.)
+                    rig.current.set_current = Mock(wraps=rig.current.set_current)
+                    rig.run(auto_remove=mode == 'auto_remove',
+                            manual_park=mode == 'manual_park')
+                    self.assertEqual(rig.seek_driver_settings, [(sgt, 1000.)])
+                    self.assertEqual(rig.seeks, [(-7., 203., 50.)])
+                    rig.current.set_current.assert_called_once_with(current, current, 1.)
+                    self.assertEqual(rig.extra.last_run['sgt'], sgt)
+                    self.assertEqual(rig.extra.last_run['current'], current)
+                    self.restored(rig, True)
+
+    def test_invalid_driver_current_blocks_bottom_motion(self):
+        for current in (0., -1., float('nan'), float('inf'), 4.):
+            with self.subTest(current=current):
+                rig = Rig()
+                rig.current.get_current = lambda: (current, .4, 2., 3.)
+                with self.assertRaisesRegex(ValueError, 'неверный рабочий ток'):
+                    rig.run()
+                self.assertFalse(rig.seeks or rig.moves or rig.writes)
+                rig.enable.motor_enable.assert_not_called()
 
     def test_auto_remove_forces_bottom_and_runs_five_cycles(self):
         rig = Rig()
@@ -584,6 +621,10 @@ class RecoveryTests(unittest.TestCase):
                        dict(sgt=64), dict(stallguard_pause=1), dict(current=4)):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 Rig(**params)
+        for params in (dict(sgt=1), dict(current=.9)):
+            with self.subTest(params=params), self.assertRaisesRegex(
+                    ValueError, 'driver_SGT/run_current'):
+                Rig(**params)
 
     def test_active_config_and_delivery(self):
         profile = ROOT / 'klipper/profiles/treed_v2_corexy_v1'
@@ -596,16 +637,26 @@ class RecoveryTests(unittest.TestCase):
         steppers = (profile / 'steppers.cfg').read_text(encoding='utf-8')
         self.assertIn('endstop_pin: probe:z_virtual_endstop', steppers)
         self.assertIn('position_max: 203', steppers)
+        z_axis = steppers.split('[stepper_z]')[1].split('[tmc5160 stepper_z]')[0]
+        z_driver = steppers.split('[tmc5160 stepper_z]')[1]
+        self.assertIn('homing_speed: 60', z_axis)
+        self.assertIn('driver_SGT: 1', z_driver)
+        self.assertIn('run_current: 0.9', z_driver)
         self.assertIn('[force_move]', (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8'))
         recovery = (profile / 'z_recovery.cfg').read_text(encoding='utf-8')
         self.assertNotIn('enabled:', recovery)
+        self.assertNotIn('sgt:', recovery)
+        self.assertNotIn('current:', recovery)
+        self.assertIn('speed: 50', recovery)
+        self.assertIn('accel: 1000', recovery)
         self.assertIn('bottom_position: 203', recovery)
         self.assertIn('max_seek: 210', recovery)
         self.assertNotIn('verify_backoff_mm', recovery)
         self.assertNotIn('tolerance:', recovery)
         printer = (profile / 'printer_base.cfg').read_text(encoding='utf-8')
         max_z_velocity = float(printer.split('max_z_velocity:')[1].split()[0])
-        self.assertGreaterEqual(max_z_velocity, 50.)
+        self.assertEqual(max_z_velocity, 50.)
+        self.assertEqual(float(printer.split('max_z_accel:')[1].split()[0]), 1000.)
         self.assertIn('variable_axis_z_max: 203.0', (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8'))
         eddy = (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8')
         home = eddy.split('[gcode_macro _TREED_EDDY_HOME_Z]')[1].split('[gcode_macro')[0]
