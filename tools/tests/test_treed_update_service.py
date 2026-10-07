@@ -364,7 +364,10 @@ class UpdateServiceTests(unittest.TestCase):
             acquire.assert_not_called()
 
     def test_config_reset_selection_is_validated_and_persisted_with_combined_update(self):
-        selection = [{"path": "config/profiles/treed_v2_corexy_v1/service_fans.cfg", "sha256": "a" * 64}]
+        selection = [{"path": key, "sha256": "a" * 64} for key in (
+            "config/profiles/treed_v2_corexy_v1/service_fans.cfg", "config/moonraker/base/00-core.conf",
+            "config/moonraker.conf", "klipper/treed_driver_mode.py", "moonraker/treed_update.py",
+            "camera/stream_detect.py", "sbin/treed-core-update")]
         request = "11111111-1111-4111-8111-111111111111"
         with patch.object(service.os, "geteuid", return_value=0, create=True), \
              patch.object(service, "acquire", return_value=FakeLock()), \
@@ -374,7 +377,9 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertEqual(service.read_state()["pendingUiTag"], "ui-main-123-1")
         with patch.object(service.os, "geteuid", return_value=0, create=True), \
              patch.object(service, "acquire") as acquire:
-            for invalid in ([{"path": "config/../printer.cfg", "sha256": "a" * 64}], selection * 2, False):
+            for invalid in ([{"path": "config/../printer.cfg", "sha256": "a" * 64}],
+                            [{"path": "camera/unknown.py", "sha256": "a" * 64}],
+                            [{"path": "/etc/shadow", "sha256": "a" * 64}], selection * 2, False):
                 with self.assertRaises(ValueError):
                     service.submit(request, "printer-core", "v0.2.0", "", json.dumps(invalid))
             with self.assertRaises(ValueError):

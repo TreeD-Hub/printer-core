@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -185,7 +185,55 @@ class CoreUpdateTests(unittest.TestCase):
         row = next(row for row in core.read_json(journal)["entries"] if row["path"] == key)
         self.assertEqual((journal.parent / row["backup"]).read_bytes(), manual)
 
-    def test_reset_consent_does_not_cover_subsequent_edit_or_non_config_files(self):
+    def test_selected_runtime_reset_replaces_all_managed_groups_and_retains_backups(self):
+        additions = {"camera/stream_detect.py": b"old camera\n",
+                     "sbin/treed-core-update": b"old updater\n",
+                     "config/moonraker/base/00-core.conf": b"old moonraker config\n"}
+        for key, data in additions.items():
+            path = core.destination(key, self.locations)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            self.previous["files"].append({"path": key, "runtimeSha256": core.content_hash(key, data)})
+            self.payload[key] = b"# new runtime\n"
+        core.write_json(core.manifest_path(self.env), self.previous)
+        keys = ["klipper/treed_driver_mode.py", "moonraker/treed_update.py", *additions]
+        manual = b"manual runtime change\n"
+        for key in keys:
+            core.destination(key, self.locations).write_bytes(manual)
+        selection = core.config_conflicts(self.env)
+        self.assertEqual({row["path"] for row in selection}, set(keys))
+        with self.assertRaisesRegex(ValueError, "Локально изменён"):
+            self.apply()
+        camera = core.destination("camera/stream_detect.py", self.locations)
+        camera.write_bytes(manual + b"# newer edit\n")
+        with self.assertRaisesRegex(ValueError, "Файл изменился после выбора сброса"):
+            core.apply("v0.2.0", OPERATION, self.env, selection)
+        self.assertEqual(camera.read_bytes(), manual + b"# newer edit\n")
+        camera.write_bytes(manual)
+        with patch.object(core.os, "fchown", create=True) as chown:
+            result = core.apply("v0.2.0", OPERATION, self.env, selection)
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
+        self.assertEqual(result["status"], "applied")
+        journal = core.journal_path(self.env, OPERATION)
+        entries = {row["path"]: row for row in core.read_json(journal)["entries"]}
+        for key in keys:
+            self.assertEqual(core.destination(key, self.locations).read_bytes(), self.payload[key])
+            self.assertEqual((journal.parent / entries[key]["backup"]).read_bytes(), manual)
+
+    def test_selected_removed_managed_file_is_deleted_with_backup(self):
+        key = "klipper/treed_driver_mode.py"
+        manual = b"manual runtime change\n"
+        core.destination(key, self.locations).write_bytes(manual)
+        del self.payload[key]
+        result = core.apply("v0.2.0", OPERATION, self.env, core.config_conflicts(self.env))
+        self.assertEqual(result["status"], "applied")
+        self.assertFalse(core.destination(key, self.locations).exists())
+        journal = core.journal_path(self.env, OPERATION)
+        row = next(row for row in core.read_json(journal)["entries"] if row["path"] == key)
+        self.assertEqual((journal.parent / row["backup"]).read_bytes(), manual)
+
+    def test_reset_consent_does_not_cover_subsequent_edit_or_unmanaged_files(self):
         for key in ("config/printer.cfg", "klipper/treed_driver_mode.py", "config/local_overrides.cfg", "config/../printer.cfg"):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 core.prepare(self.manifest, self.payload, self.env, core.journal_path(self.env, OPERATION),
