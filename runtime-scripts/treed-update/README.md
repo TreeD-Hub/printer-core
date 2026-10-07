@@ -2,6 +2,13 @@
 
 `treed-update-service` is the root-owned submission and worker entry point installed by `loader/steps/moonraker-config.sh`.
 
+## Source files
+
+- `treed-update-service` — validated submission, queue, execution and recovery.
+- `treed-update-apply` — UI bundle publication, readiness checks and rollback.
+- `treed-core-update` — TreeD runtime package build, inspection, installation and recovery.
+- `treed-update.service`, `treed-update.path`, `treed-update-recover.service` — systemd worker, queue activation and boot recovery.
+
 ## Contract
 
 - Moonraker submits a request with `requestId`, `targetId`, and `targetTag`; accepted values are `printer-ui` plus `ui-main-<run>-<attempt>`, or `printer-core` plus `vX.Y.Z`.
@@ -31,6 +38,7 @@ The API exposes `operationId`, `requestId`, `status`, `phase`, `progress`, `resu
 - `/usr/local/sbin/treed-update-apply`
 - `/usr/local/sbin/treed-core-update`
 - `/etc/systemd/system/treed-update.service`
+- `/etc/systemd/system/treed-update.path`
 - `/etc/systemd/system/treed-update-recover.service`
 - `/var/lib/treed-update/state.json`
 - `/var/log/treed-update/worker.log`
@@ -54,3 +62,7 @@ Addressed checks: `python -B tools/tests/test_treed_core_update.py`,
 `python -B tools/tests/test_treed_update_service.py`,
 `python -B tools/tests/test_treed_update_component.py`. Device smoke testing must
 cover real stop/start, readiness failure and interrupted installation.
+
+Related documentation: [Moonraker API](../../moonraker/components/README.md#назначение-treed_updatepy),
+[UI delivery](../../docs/ui-runtime-delivery/README.md),
+[offline checks](../../tools/tests/README.md).

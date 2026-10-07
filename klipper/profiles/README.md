@@ -1,14 +1,17 @@
-# Klipper Profiles
+# Профили Klipper
 
 Папка профилей железа для Klipper.
 
-Текущий активный профиль в репозитории:
-- `treed_v2_corexy_v1/`
+## Активный профиль
 
-Правила:
+[`treed_v2_corexy_v1/`](treed_v2_corexy_v1/README.md) — Rock Pi, Octopus Pro,
+EBB42 и обязательный Eddy Duo по CAN.
+
+## Правила подключения
+
 - каждый профиль хранит модульные cfg-файлы по зонам ответственности;
 - профиль подключается через `klipper/printer.cfg`;
 - runtime-переключение динамических профилей в текущей модели не используется.
 
-Подробности по активному профилю:
-- `klipper/profiles/treed_v2_corexy_v1/README.md`
+Порядок подключений задаёт [`printer.cfg`](../printer.cfg).
+Доставка и сохранение локальных настроек описаны в [README Klipper](../README.md).

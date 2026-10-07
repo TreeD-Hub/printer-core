@@ -1,7 +1,14 @@
-> Root project map: `README.md`
-> Canonical config ownership model: `docs/config-ownership.md`
+# Документация `printer-core`
+
+Инструкции установки, калибровки и обслуживания TreeD V2.
+Обзор проекта: [корневой README](../README.md).
+Границы репозиторных конфигов и локальных настроек: [владение конфигами](config-ownership.md).
 
 ## Быстрый install path (V2)
+
+Команда выполняется на подготовленном Rock Pi и применяет изменения.
+Перед запуском прочитайте [первую настройку](firstStart.md) и
+[режимы loader](../loader/README.md); после `fresh` по умолчанию следует перезагрузка.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash
@@ -20,20 +27,22 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 - `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED` — `0|1`, default `0`; при `1` strict UUID-gate через `canbus_query.py`, при `0` query не запускается.
 - `TREED_EBB_CANBUS_UUID` — EBB42 UUID, default `efaf957ab20f`; auto-detect не используется, чтобы не принять Eddy за EBB.
 - `TREED_EDDY_CANBUS_UUID` — Eddy UUID, default `95485b93332a`.
-- `TREED_NONINTERACTIVE` — `0|1`, default `1`; disables apt/dpkg/needrestart prompts.
-- `TREED_KLIPPERSCREEN_INSTALL_SERVICE` — answer for KlipperScreen service install, default `1`.
-- `TREED_KLIPPERSCREEN_BACKEND` — answer for KlipperScreen graphical backend, default `X`.
-- `TREED_KLIPPERSCREEN_NETWORK_MANAGER` — answer for NetworkManager install, default `N`.
-- `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` — answer for external installer service start, default `0`.
-- `TREED_UI_MODE` — `ts|ks`, default `ts`; selected screen UI (`ts` = TreeD Shell, `ks` = KlipperScreen).
-- `TREED_SHELL_RELEASE_API_URL` — TreeD Printer UI releases API, default `https://api.github.com/repos/TreeD-Hub/printer-ui/releases`.
-- `TREED_SHELL_RELEASE_TAG_PREFIX` — release tag prefix, default `ui-main-`.
-- `TREED_SHELL_UI_ASSET_NAME` — release asset name, default `treed-shell-ui.zip`.
-- `TREED_SHELL_UI_ARCHIVE_URL` — optional direct archive URL; overrides GitHub API lookup.
-- `TREED_SHELL_RUNTIME_DIR` — runtime root, default `${PI_HOME}/treed/treed-shell-runtime`.
-- `TREED_SHELL_WEB_DIR` — unpacked UI root, default `${TREED_SHELL_RUNTIME_DIR}/ui`.
-- `TREED_SHELL_HTTP_PORT` — local static server port, default `8787`.
-- `TREED_SHELL_BROWSER_BIN` — optional browser binary override.
+- `TREED_NONINTERACTIVE` — `0|1`, по умолчанию `1`; отключает запросы apt/dpkg/needrestart.
+- `TREED_KLIPPERSCREEN_INSTALL_SERVICE` — ответ installer на установку сервиса, по умолчанию `1`.
+- `TREED_KLIPPERSCREEN_BACKEND` — графический backend, по умолчанию `X`.
+- `TREED_KLIPPERSCREEN_NETWORK_MANAGER` — ответ installer на установку NetworkManager, по умолчанию `N`.
+- `TREED_KLIPPERSCREEN_START_AFTER_INSTALL` — запуск сервиса внешним installer, по умолчанию `0`.
+- `TREED_UI_MODE` — `ts|ks`, по умолчанию `ts`; экранный UI (`ts` — TreeD Shell, `ks` — KlipperScreen).
+- `TREED_SHELL_RELEASE_API_URL` — API релизов UI, по умолчанию `https://api.github.com/repos/TreeD-Hub/printer-ui/releases`.
+- `TREED_SHELL_RELEASE_TAG_PREFIX` — префикс тега релиза, по умолчанию `ui-main-`.
+- `TREED_SHELL_UI_ASSET_NAME` — имя артефакта, по умолчанию `treed-shell-ui.zip`.
+- `TREED_SHELL_UI_ARCHIVE_URL` — необязательный прямой URL архива; заменяет поиск через GitHub API.
+- `TREED_SHELL_RUNTIME_DIR` — корневой runtime-каталог, по умолчанию `${PI_HOME}/treed/treed-shell-runtime`.
+- `TREED_SHELL_WEB_DIR` — распакованный UI, по умолчанию `${TREED_SHELL_RUNTIME_DIR}/ui`.
+- `TREED_SHELL_HTTP_PORT` — порт локального HTTP-сервера, по умолчанию `8787`.
+- `TREED_SHELL_BROWSER_BIN` — необязательный путь к исполняемому файлу браузера.
+
+Полный справочник параметров: [`loader/steps`](../loader/steps/README.md).
 
 ## Контракт железа
 
@@ -53,3 +62,5 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 серии, защита pending autosave и сравнение cold-start пакетов.
 
 [Архитектура обновлений](update-architecture.md): служба обновления, целевой A/B-контур, сохранение данных и условия аппаратной приёмки.
+
+Программные проверки и требования к среде: [`tools/tests`](../tools/tests/README.md).

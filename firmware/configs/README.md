@@ -1,16 +1,16 @@
-# Firmware Build Configs
+# Конфигурации сборки прошивок
 
-Каталог хранит Kconfig-фрагменты для автоматической сборки прошивок Klipper в loader pipeline.
+Kconfig-фрагменты для сборки прошивок Klipper шагом `firmware-build`.
 
 ## Назначение
 
 - зафиксировать воспроизводимые target-конфиги сборки;
-- хранить source-of-truth для шага `loader/steps/firmware-build.sh`;
-- позволить переопределять конкретные target-файлы через env без правки кода шага.
+- задавать конфигурацию для шага `loader/steps/firmware-build.sh`;
+- поддерживать выбор другого target-файла через переменные окружения без правки шага.
 
 ## Структура
 
-- `treed_v2/` — дефолтные конфиги для контура Rock Pi + Octopus + U2C + EBB + Eddy.
+- [`treed_v2/`](treed_v2/README.md) — штатные конфиги Octopus Pro, EBB42 и Eddy Duo.
 
 ## Контракт
 
@@ -20,3 +20,5 @@
   - `TREED_FW_MAIN_CONFIG`
   - `TREED_FW_EBB_CONFIG`
   - `TREED_FW_EDDY_CONFIG`
+
+Пути артефактов и порядок ручной записи: [README прошивок](../README.md).

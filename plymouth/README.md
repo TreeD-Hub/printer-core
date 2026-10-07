@@ -1,17 +1,17 @@
-# Plymouth Assets
+# Загрузочная тема Plymouth
 
-Каталог `plymouth/` содержит исходники splash-темы TreeD и связанные ресурсы boot UX.
+Исходники темы TreeD для раннего экрана загрузки, выключения и обновления.
 
 ## Структура
 
-- `plymouth/theme/README.md` — правила для каталога тем.
-- `plymouth/theme/treed/*` — активная тема TreeD.
+- [`theme/`](theme/README.md) — правила для каталога тем.
+- [`theme/treed/`](theme/treed/README.md) — активная тема TreeD.
 
 ## Цепочка применения через loader
 
 - `loader/steps/plymouth-theme-install.sh` — копирует тему в системный каталог и выставляет default theme.
 - `loader/steps/plymouth-initramfs.sh` — пересобирает initramfs для текущего ядра.
-- `loader/steps/plymouth-initramfs-config.sh` — прописывает `initramfs ... followkernel` в `config.txt`.
+- `loader/steps/plymouth-initramfs-config.sh` — RPi: прописывает `initramfs ... followkernel` в `config.txt`; Armbian и Extlinux: проверяет соответствующий контур initrd.
 - `loader/steps/plymouth-cmdline.sh` — нормализует kernel cmdline для splash.
 - `loader/steps/plymouth-systemd.sh` — настраивает связанный systemd-контур (`plymouth-quit*`, `getty@tty1`).
 
@@ -25,3 +25,5 @@
 - файлы в этой папке влияют на ранний boot-контур;
 - любое изменение темы нужно проверять на реальной загрузке устройства;
 - имена обязательных файлов темы синхронизированы с `loader/steps/plymouth-theme-install.sh`.
+
+Порядок шагов и выбор boot backend: [README loader](../loader/README.md).

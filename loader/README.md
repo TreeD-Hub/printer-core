@@ -1,16 +1,18 @@
 # Loader
 
-Каталог `loader/` содержит оркестратор provisioning и шаги, которые приводят систему к целевому runtime-состоянию V2.
+Каталог `loader/` содержит оркестратор установки и обновления runtime TreeD V2.
+Режим `check` проверяет установленную систему; `apply` выполняет шаги установки.
 
 ## Структура
 
-- `loader/loader.sh` — главный оркестратор.
-- `loader/lib/*.sh` — общие библиотеки функций.
-- `loader/steps/*.sh` — атомарные шаги provisioning.
+- [`loader.sh`](loader.sh) — главный оркестратор.
+- [`lib/`](lib/README.md) — общие библиотеки функций.
+- [`steps/`](steps/README.md) — шаги установки и справочник переменных окружения.
 
 ## Как работает оркестратор
 
 `loader.sh` выполняет:
+
 1. Нормализацию `*.sh` в `loader/**` для `apply`-режима (убирает CRLF, выставляет executable-bit).
 2. Определение `PI_USER` / `PI_HOME` и host-aware boot-контекста (`BOOT_DIR`, `TREED_BOOT_BACKEND`, `CMDLINE_FILE`, `CONFIG_FILE`, `ARMBIAN_ENV_FILE`).
 3. Fail-fast проверку boot backend-контракта (`rpi`, `armbian` или `extlinux`).
@@ -60,7 +62,7 @@ Renderer объединяет stdout/stderr шагов в один послед�
 | 2 | `timezone-sync` | required | Синхронизация timezone/NTP. |
 | 3 | `maintenance-stop` | required | Контролируемая остановка runtime-сервисов. |
 | 4 | `packages-core` | required | Установка базовых пакетов и numpy/matplotlib/BLAS-зависимостей. |
-| 5 | `runtime-bootstrap` | required | Bootstrap Klipper/Moonraker unit-файлов, venv и runtime-каталогов; Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`. |
+| 5 | `runtime-bootstrap` | required | Подготовка unit-файлов, venv и каталогов Klipper/Moonraker, доставка host-расширений; Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`. |
 | 6 | `can-setup` | required | Подъем `can0` через systemd oneshot + `ip link`. |
 | 7 | `firmware-build` | required | Сборка firmware main+EBB(+Eddy) и публикация build-отчета. |
 | 8 | `boot-hdmi-config` | required | RPi: `config.txt`; Armbian: `armbianEnv.txt`; Extlinux: `append video=...`. |
@@ -169,14 +171,14 @@ cd ~/treed/printer-core
 sudo bash loader/loader.sh
 ```
 
-Read-only проверка актуальности без применения изменений:
+Проверка актуальности без применения изменений, из корня клона:
 
 ```bash
-sudo TREED_LOADER_MODE=check bash loader/loader.sh
+sudo env TREED_LOADER_MODE=check bash loader/loader.sh
 ```
 
 ## Смежная документация
 
-- `loader/lib/README.md` — описание библиотек `loader/lib`.
-- `loader/steps/README.md` — описание шагов и env-параметров.
-- `docs/config-ownership.md` — ownership runtime-артефактов.
+- [Библиотеки loader](lib/README.md).
+- [Шаги и переменные окружения](steps/README.md).
+- [Владение runtime-конфигами](../docs/config-ownership.md).
