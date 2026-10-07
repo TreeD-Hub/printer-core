@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -210,7 +210,10 @@ class CoreUpdateTests(unittest.TestCase):
             core.apply("v0.2.0", OPERATION, self.env, selection)
         self.assertEqual(camera.read_bytes(), manual + b"# newer edit\n")
         camera.write_bytes(manual)
-        result = core.apply("v0.2.0", OPERATION, self.env, selection)
+        with patch.object(core.os, "fchown", create=True) as chown:
+            result = core.apply("v0.2.0", OPERATION, self.env, selection)
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
         self.assertEqual(result["status"], "applied")
         journal = core.journal_path(self.env, OPERATION)
         entries = {row["path"]: row for row in core.read_json(journal)["entries"]}
