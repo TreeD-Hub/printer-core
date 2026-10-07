@@ -12,7 +12,7 @@ from jinja2 import Environment, StrictUndefined
 # Блок 1: Настоящие шаблоны Klipper и минимальное состояние для проверки команд.
 PROFILE = Path(__file__).resolve().parents[2] / "klipper/profiles/treed_v2_corexy_v1"
 CFG = configparser.ConfigParser(interpolation=None, strict=False)
-for filename in ["macros_start_purge.cfg", "macros_pause_resume.cfg"]:
+for filename in ["macros_start_purge.cfg", "macros_pause_resume.cfg", "macros_core.cfg"]:
     CFG.read(PROFILE / filename, encoding="utf-8")
 ENV = Environment(variable_start_string="{", variable_end_string="}", undefined=StrictUndefined)
 
@@ -84,6 +84,23 @@ class Harness:
 
 # Блок 2: Одна линия, безопасные переезды и восстановление после отмены.
 class PurgeTests(unittest.TestCase):
+    def test_pause_uses_travel_y_max_and_preserves_explicit_override(self):
+        default_y = ast.literal_eval(CFG["gcode_macro _TREED_PAUSE_PARK_CFG"]["variable_park_y_raw"])
+        for travel_max, override, expected in [(245, default_y, 243), (300, default_y, 298),
+                                               (300, 0, 0), (300, 270, 270)]:
+            with self.subTest(travel_max=travel_max, override=override):
+                h = Harness()
+                h.printer["toolhead"].update(axis_minimum={"x": 0, "y": 0},
+                                             axis_maximum={"x": 245, "y": travel_max})
+                h.printer["gcode_macro _TREED_PAUSE_PARK_CFG"] = {"park_x_raw": 122.5, "park_y_raw": override}
+                h.printer["extruder"]["target"] = 220
+                h.printer["heater_bed"] = {"target": 60}
+                h.printer["gcode_macro _TREED_IDLE_TIMEOUT_STATE"] = {"timeout": 600}
+                h.printer["gcode_macro _TREED_CAM_STATE"] = {"enabled": 0, "generation": 0}
+                h.run("_TREED_PAUSE_PREP_STATE")
+                self.assertIn(f"SET_GCODE_VARIABLE MACRO=_TREED_PAUSE_EXEC_STATE VARIABLE=park_y VALUE={float(expected)}",
+                              h.commands)
+
     def test_one_line_geometry_amount_speed_and_state(self):
         h = Harness(pa=0.06)
         h.run("_TREED_LINE_PURGE")
