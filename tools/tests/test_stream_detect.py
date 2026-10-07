@@ -4,6 +4,8 @@ import importlib.util
 import io
 from pathlib import Path
 import unittest
+import tempfile
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("stream_detect", ROOT / "runtime-scripts/treed-cam/stream_detect.py")
@@ -51,6 +53,32 @@ class StreamTests(unittest.TestCase):
         camera.latest = (4, module.time.monotonic() - 1, b"old")
         with self.assertRaises(TimeoutError):
             camera.next(3)
+
+    def test_reaction_is_local_and_retries_unconfirmed_reset(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            directory = root / "part"
+            directory.mkdir()
+            marker = root / "marker"
+            marker.write_text(str(directory), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                module.Reaction("http://192.168.0.197", root, marker, 1)
+            reaction = module.Reaction("http://localhost:7125", root, marker, 1)
+            status = {"active": True, "session_id": "1:part", "cancel_requested": False}
+            reaction.request = Mock(return_value=status)
+            self.assertTrue(reaction.prepare())
+            reaction.frame = b"JPEG"
+            reaction.request = Mock(side_effect=OSError("offline"))
+            reaction.break_series()
+            self.assertTrue(reaction.reset_pending)
+            reaction.request = Mock(side_effect=[status, OSError("offline")])
+            with self.assertRaises(OSError):
+                reaction.prepare()
+            self.assertTrue(reaction.reset_pending)
+            marker.write_text(str(root.parent), encoding="utf-8")
+            reaction.request = Mock(return_value=status)
+            with self.assertRaises(ValueError):
+                reaction.prepare()
 
 
 if __name__ == "__main__":

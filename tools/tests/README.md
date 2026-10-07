@@ -11,13 +11,15 @@
 
 - `test_light_events.py` — рендер реальных Jinja-макросов: дефолты/сохранение света, wire-событие и guard филамента при печати, паузе и прочистке. Запуск `python -B tools/tests/test_light_events.py` в окружении с Jinja2; без принтера.
 
-- `test_start_purge.py` — рендер двух purge-линий: подача 1 мм E на 1 мм хода, скорости, безопасные переезды, границы и восстановление PA при отмене. Запуск `python -B tools/tests/test_start_purge.py` в окружении с Jinja2; без принтера, фактическую ширину дорожек не проверяет.
+- `test_start_purge.py` — рендер двух purge-линий: стартовая подача E10, расчёт объёма тонких участков, смена скорости, безопасные переезды, границы, лимит расхода и восстановление PA при отмене. Запуск `python -B tools/tests/test_start_purge.py` в окружении с Jinja2; без принтера, фактическое заполнение сопла и ширину дорожек не проверяет.
+
+- `test_docs_consistency.py` — порядок шагов loader, локальные ссылки документации и пометка об именах релизных артефактов для совместимости. Запуск `python -B tools/tests/test_docs_consistency.py`; без устройства.
 
 - `test_print_cancel.py` — отмена нагрева/охлаждения и остатка макроса, завершение текущего движения, cleanup и сброс сигнала для следующей задачи. Запуск `python -B tools/tests/test_print_cancel.py`; `PRINT_CANCEL_GCODE_SOURCE` задаёт путь к `gcode.py` закреплённого Klipper для проверки на его настоящем диспетчере. Без устройства.
 
 - `test_stream_detect.py` — MJPEG, handshake, привязка ответа и отказ от устаревшего кадра; запуск `python -B tools/tests/test_stream_detect.py`. Без камеры и сервера, не оценивает модель.
 
-- `test_treed_detection.py` — порог трёх обнаружений, сброс серии, повторы, порядок кадров, смена сессии, параллельные ответы и отказ отмены на реальном Moonraker-компоненте с mock API; также статическая проверка регистрации/защиты макроса. Запуск `python -B tools/tests/test_treed_detection.py`; серверный транспорт и аппаратное выполнение не проверяет.
+- `test_treed_detection.py` — порог трёх обнаружений, сброс серии, повторы, порядок кадров, смена сессии, параллельные ответы и отказ отмены на реальном Moonraker-компоненте с mock API; адаптер `stream_detect.py` проверяется вместе с компонентом, HTTP заменён. Запуск `python -B tools/tests/test_treed_detection.py`; аппаратное выполнение не проверяет.
 
 - `test_z_recovery.py` — одна проба DIAG, измеренный ход до Eddy Z0, ограничение Z, сброс при отказах, восстановление TMC и интеграция cfg; запуск `python -B tools/tests/test_z_recovery.py`. Это офлайн-модель, не аппаратный допуск. С `Z_RECOVERY_KLIPPER_SOURCE` дополнительно проверяет HomingMove, CoreXY и Coord закреплённого Klipper (`extras_homing.py`, `kinematics_corexy.py`, `gcode.py`).
 - `test_clog_recovery.py` — один импульс энкодера за каждую из пяти попыток не подтверждает подачу; проверяет счётчик и порог без устройства. Запуск `python -B tools/tests/test_clog_recovery.py`.
@@ -49,6 +51,12 @@
 и команды приведены в [приёмке Z/Eddy](../../docs/z-eddy-acceptance.md).
 
 ## Запуск
+
+Если Jinja2 отсутствует в текущем Python, при установленном `uv` purge-тест можно запустить в изолированном окружении. При первом запуске `uv` загрузит зависимости; файлы проекта и пакеты текущего Python не меняются:
+
+```powershell
+uv run --no-project --with jinja2 python -B tools/tests/test_start_purge.py
+```
 
 Полный offline набор: `python -B tools/tests/run_offline.py` (Python, `pwsh` 7,
 Bash; на Windows предпочтён Git Bash). `test_z_acceptance.py` проверяет mesh

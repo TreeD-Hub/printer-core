@@ -16,6 +16,10 @@ spec = importlib.util.spec_from_file_location(
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+stream_spec = importlib.util.spec_from_file_location(
+    "stream_detect", ROOT / "runtime-scripts/treed-cam/stream_detect.py")
+stream = importlib.util.module_from_spec(stream_spec)
+stream_spec.loader.exec_module(stream)
 
 
 # Блок 1: Модель только внешнего Moonraker API; проверяется реальный компонент.
@@ -31,6 +35,9 @@ class Request:
         if not isinstance(value, str):
             raise ValueError(key)
         return value
+
+    def get_action(self):
+        return self.get("action", "GET")
 
 
 class DetectionTests(unittest.IsolatedAsyncioTestCase):
@@ -56,9 +63,9 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                     register_endpoint=lambda path, methods, handler, **kwargs:
                     self.endpoints.update({path: (methods, handler)}))
         values = {"frames_root": str(self.frames), "session_file": str(self.marker)}
-        self.component = module.TreeDDetection(NS(
-            get_server=lambda: server, get=lambda key, default=None: values.get(key, default)))
-        self.session_id = f"1:{self.session.name}"
+        self.config = NS(get_server=lambda: server, get=lambda key, default=None: values.get(key, default))
+        self.component = module.TreeDDetection(self.config)
+        self.session_id = f"1:0:{self.session.name}"
 
     async def result(self, index, critical=True, **overrides):
         frame_id = f"img_{index}.jpg"
@@ -83,6 +90,54 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         await self.result(4)
         self.api.run_gcode.assert_awaited_once_with("_TREED_DETECTION_CANCEL GENERATION=1")
 
+    async def test_stream_adapter_reset_failure_and_pause_before_cancel(self):
+        # Настоящий адаптер и компонент; заменён только HTTP и внешний Klipper API.
+        loop = asyncio.get_running_loop()
+        reaction = stream.Reaction("http://127.0.0.1:7125", self.frames, self.marker, 1)
+
+        def request(endpoint, data=None):
+            operation = (self.component._handle_status(None) if data is None
+                         else self.component._handle_result(Request(**data)))
+            return asyncio.run_coroutine_threadsafe(operation, loop).result(timeout=2)
+
+        reaction.request = request
+        self.component._decision.count = 2  # Остаток серии до перезапуска клиента.
+        self.assertTrue(await asyncio.to_thread(reaction.prepare))
+        self.assertTrue(reaction.reset_pending)
+        await asyncio.to_thread(reaction.publish, None, b"JPEG")
+        for _ in range(2):
+            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+        await asyncio.to_thread(reaction.publish, False, b"JPEG")
+        self.assertEqual(self.component._decision.count, 0)
+        for _ in range(2):
+            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+        await asyncio.to_thread(reaction.break_series)
+        self.assertEqual(self.component._decision.count, 0)
+        for _ in range(2):
+            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+        self.objects["print_stats"]["state"] = "paused"
+        self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "paused"
+        self.objects["gcode_macro _TREED_CAM_STATE"]["enabled"] = 0
+        self.objects["gcode_macro _TREED_CAM_STATE"]["generation"] = 2
+        with self.assertRaises(ValueError):
+            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+        self.assertFalse(await asyncio.to_thread(reaction.prepare))
+        self.assertFalse(await asyncio.to_thread(reaction.prepare))
+        self.assertEqual(self.component._decision.count, 0)
+        self.api.run_gcode.assert_not_awaited()
+        self.objects["print_stats"]["state"] = "printing"
+        self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "printing"
+        self.objects["gcode_macro _TREED_CAM_STATE"]["enabled"] = 1
+        self.assertTrue(await asyncio.to_thread(reaction.prepare))
+        await asyncio.to_thread(reaction.publish, None, b"JPEG")
+        for _ in range(2):
+            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+        self.api.run_gcode.assert_not_awaited()
+        await asyncio.to_thread(reaction.publish, True, b"JPEG")
+        self.api.run_gcode.assert_awaited_once_with("_TREED_DETECTION_CANCEL GENERATION=2")
+        self.assertFalse(await asyncio.to_thread(reaction.prepare))
+        self.assertEqual(len(list(self.session.glob("detect_*.jpg"))), 3)
+
     async def test_normal_unknown_or_other_defect_breaks_series(self):
         for critical, defect in ((False, "spaghetti"), (None, "spaghetti"), (True, "crack")):
             self.component._decision = module.DetectionDecision(count=2)
@@ -93,6 +148,32 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             state = await self.result(3)
             self.assertEqual(state["counter"], 2)
         self.api.run_gcode.assert_not_awaited()
+
+    async def test_persistent_switch_resets_series_and_rejects_inflight_results(self):
+        self.assertEqual(await self.component._handle_settings(Request()), {"enabled": True})
+        await self.result(1)
+        await self.result(2)
+        for invalid in (None, "false", 0):
+            with self.assertRaises(ValueError):
+                await self.component._handle_settings(Request(action="POST", enabled=invalid))
+        await self.component._handle_settings(Request(action="POST", enabled=False))
+        status = await self.component._handle_status(None)
+        self.assertFalse(status["enabled"])
+        self.assertFalse(status["active"])
+        self.assertEqual(status["counter"], 0)
+        with self.assertRaises(ValueError):
+            await self.result(3)
+        restored = module.TreeDDetection(self.config)
+        self.assertEqual(await restored._handle_settings(Request()), {"enabled": False})
+        await self.component._handle_settings(Request(action="POST", enabled=True))
+        with self.assertRaises(ValueError):
+            await self.result(3)
+        self.session_id = (await self.component._handle_status(None))["session_id"]
+        for index in (4, 5):
+            await self.result(index)
+        self.api.run_gcode.assert_not_awaited()
+        await self.result(6)
+        self.api.run_gcode.assert_awaited_once()
 
     async def test_duplicate_and_old_frames_cannot_count(self):
         await self.result(2)
@@ -124,7 +205,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.objects["gcode_macro _TREED_CAM_STATE"]["generation"] = 2
         with self.assertRaises(ValueError):
             await self.result(3)
-        self.session_id = f"2:{self.session.name}"
+        self.session_id = f"2:0:{self.session.name}"
         state = await self.result(4)
         self.assertEqual(state["counter"], 1)
         self.api.run_gcode.assert_not_awaited()

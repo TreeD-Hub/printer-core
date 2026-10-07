@@ -126,7 +126,7 @@
 - `TREED_CAMERA_REQUIRED` (`1` переводит шаг камеры в fail-fast; при `0` отсутствие `crowsnest.service` очищает webcam-fragment и не блокирует loader)
 - `TREED_CAM_RESOLUTION` (default `1920x1080`)
 - `TREED_CAM_FPS` (default `30`)
-- `TREED_CAM_STREAM_URL`, `TREED_DETECT_SERVER_URL`, `DETECT_API_KEY` — экспортируемые runtime-настройки диагностического клиента `stream_detect.py`; [запуск и handshake](../../runtime-scripts/treed-cam/README.md#диагностический-запуск-потока). Loader доставляет клиент, но не запускает его и не генерирует ключ.
+- `TREED_CAM_STREAM_URL`, `TREED_DETECT_SERVER_URL`, `DETECT_API_KEY` — runtime-настройки клиента `stream_detect.py`; [запуск и handshake](../../runtime-scripts/treed-cam/README.md#диагностический-запуск-потока). Loader доставляет клиент и создаёт опциональный `treed-detection.service`; автоотмена включается только при наличии локального `${PI_HOME}/treed/cam/config/detect.env`. Ключ loader не генерирует. `TREED_DETECT_MOONRAKER_URL` и `MOONRAKER_API_KEY` задают локальный endpoint и его ключ при необходимости; [режим реакции](../../runtime-scripts/treed-cam/README.md#автоотмена-после-трёх-кадров).
 - `TREED_CAM_FORMAT` (default `MJPEG`; передается в ustreamer через `custom_flags`)
 - `TREED_CAM_ENCODER` (default `HW`; использует pre-encoded MJPEG frames камеры, если поддерживается)
 - `TREED_CAM_USTREAMER_CUSTOM_FLAGS` (override всех ustreamer `custom_flags`, default `--format=${TREED_CAM_FORMAT} --encoder=${TREED_CAM_ENCODER}`)
