@@ -91,9 +91,9 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual(len(extrusion), 8)
         for index, (axes, position, pa) in enumerate(extrusion):
             segment = index % 4
-            self.assertEqual(position, {"x": 20.0 + segment * 10, "y": 5.0 + (index // 4) * 2, "z": 0.2})
-            self.assertEqual(axes["F"] / 60, 2.4)
-            self.assertEqual(axes["E"], 10.0)
+            self.assertEqual(position, {"x": 30.0 + segment * 10, "y": 5.0 + (index // 4) * 7, "z": 0.2})
+            self.assertEqual(axes["F"] / 60, [2.4, 40, 10, 40][segment])
+            self.assertAlmostEqual(axes["E"], 10.0 if segment == 0 else 0.2969129201286744)
             self.assertEqual(pa, 0 if index < 4 else 0.06)
         self.assertEqual(h.printer["extruder"]["pressure_advance"], 0.06)
         self.assertEqual(h.printer["gcode_move"]["speed_factor"], 0.73)
@@ -101,6 +101,21 @@ class PurgeTests(unittest.TestCase):
         self.assertFalse(h.printer["gcode_move"]["absolute_coordinates"])
         self.assertTrue(h.printer["gcode_move"]["absolute_extrude"])
         self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["saved_pa"], -1)
+
+    def test_prime_amount_and_thin_volume_are_independent(self):
+        for diameter in [1.75, 1.6]:
+            with self.subTest(diameter=diameter):
+                h = Harness()
+                h.printer["configfile"]["settings"]["extruder"]["filament_diameter"] = diameter
+                h.printer["gcode_macro _TREED_START_PURGE_CFG"].update(prime_amount=6, line_width=0.6)
+                h.run("_TREED_LINE_PURGE")
+                extrusion = [axes for axes, _, _ in h.moves if "E" in axes]
+                for index, axes in enumerate(extrusion):
+                    if index % 4 == 0:
+                        self.assertEqual(axes["E"], 6)
+                    else:
+                        volume = axes["E"] * math.pi * diameter ** 2 / 4
+                        self.assertAlmostEqual(volume, 1.1141592653589794)
 
     def test_wait_at_start_and_safe_transfers_from_other_points(self):
         for x, z in [(10, 0.2), (100, 0.2), (100, 20)]:
@@ -144,9 +159,9 @@ class PurgeTests(unittest.TestCase):
         h.printer["gcode_macro _TREED_START_PURGE_CFG"].update(x_inset=244, y_inset=244)
         h.run("_TREED_SMART_PARK")
         h.run("_TREED_LINE_PURGE")
-        self.assertTrue(all(pos["x"] <= 244.5 and pos["y"] <= 244.5 for _, pos, _ in h.moves))
+        self.assertTrue(all(pos["x"] <= 241.75 and pos["y"] <= 241.75 for _, pos, _ in h.moves))
         extrusion = [pos for axes, pos, _ in h.moves if "E" in axes]
-        self.assertEqual(sorted({pos["y"] for pos in extrusion}), [242.5, 244.5])
+        self.assertEqual(sorted({pos["y"] for pos in extrusion}), [234.75, 241.75])
 
     def test_purge_start_uses_print_coordinates_with_raw_offset(self):
         h = Harness()
@@ -157,7 +172,9 @@ class PurgeTests(unittest.TestCase):
     def test_invalid_settings_fail_before_motion_or_pa_changes(self):
         for key, value in [("heat_wait_height", 0), ("heat_wait_height", 0.3),
                            ("purge_height", -1), ("prime_length", 300), ("segment_length", 100),
-                           ("line_spacing", 1), ("line_spacing", 300), ("prime_width", 0.1),
+                           ("line_spacing", 6.5), ("line_spacing", 300), ("prime_width", 1),
+                           ("prime_amount", 0), ("prime_amount", math.nan), ("prime_amount", 11),
+                           ("line_width", 7),
                            ("fast_speed", 0), ("slow_speed", math.nan),
                            ("prime_speed", math.inf), ("x_inset", -1), ("y_inset", -1)]:
             for macro in ["_TREED_SMART_PARK", "_TREED_LINE_PURGE"]:
@@ -184,6 +201,27 @@ class PurgeTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     h.run("_TREED_LINE_PURGE")
                 self.assertEqual(h.commands, [])
+
+    def test_invalid_filament_diameter_fails_before_state_changes(self):
+        for diameter in [0, -1, math.nan, math.inf]:
+            for macro in ["_TREED_SMART_PARK", "_TREED_LINE_PURGE"]:
+                with self.subTest(diameter=diameter, macro=macro):
+                    h = Harness()
+                    h.printer["configfile"]["settings"]["extruder"]["filament_diameter"] = diameter
+                    with self.assertRaises(RuntimeError):
+                        h.run(macro)
+                    self.assertEqual(h.commands, [])
+
+    def test_excessive_flow_fails_even_with_large_placement_reserve(self):
+        for settings in [dict(prime_amount=45), dict(line_width=26)]:
+            for macro in ["_TREED_SMART_PARK", "_TREED_LINE_PURGE"]:
+                with self.subTest(settings=settings, macro=macro):
+                    h = Harness()
+                    h.printer["gcode_macro _TREED_START_PURGE_CFG"].update(
+                        prime_width=30, line_spacing=31, **settings)
+                    with self.assertRaises(RuntimeError):
+                        h.run(macro)
+                    self.assertEqual(h.commands, [])
 
 
 if __name__ == "__main__":

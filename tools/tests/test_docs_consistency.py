@@ -44,9 +44,9 @@ def main() -> None:
                 fail(f"broken Markdown link in {markdown_file.relative_to(ROOT)}: {target}")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    required_legacy_note = "legacy compatibility asset names"
-    if required_legacy_note not in readme:
-        fail("README.md must identify retained release asset names as legacy compatibility asset names")
+    required_legacy_note = "имена артефактов для совместимости релизного процесса"
+    if required_legacy_note not in " ".join(readme.split()):
+        fail("README.md должен пояснять сохранение имён артефактов для совместимости релизов")
     for asset in ("treed-mainshellos-source.zip", "treed-mainshellos-release.json"):
         if asset not in readme:
             fail(f"README.md is missing the compatibility asset name: {asset}")
