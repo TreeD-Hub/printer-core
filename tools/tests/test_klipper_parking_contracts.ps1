@@ -185,9 +185,9 @@ Assert-ContainsBefore $endPrint '(?m)^\s*TURN_OFF_HEATERS\s*$' '(?m)^\s*_TREED_Z
 Assert-Contains $endPrint '"x" in toolhead\.homed_axes and "y" in toolhead\.homed_axes and "z" in toolhead\.homed_axes' "END_PRINT must require homed XYZ before parking"
 
 Assert-Contains $pauseCfg 'variable_park_x_raw: 122\.5' "PAUSE default X park is the middle of the 245 mm X travel"
-Assert-Contains $pauseCfg 'variable_park_y_raw: 0\.0' "PAUSE default Y park is the front service edge"
+Assert-Contains $pauseCfg 'variable_park_y_raw: None' "PAUSE по умолчанию выбирает текущий Y max перемещения"
 Assert-Contains $localOverrides 'park_x_raw VALUE=122\.5' "local override example documents the PAUSE X middle default"
-Assert-Contains $localOverrides 'park_y_raw VALUE=0\.0' "local override example documents the PAUSE Y0 default"
+Assert-Contains $localOverrides 'park_y_raw VALUE=None' "Пример PAUSE сохраняет автоматический выбор Y max перемещения"
 $pauseParkMove = '(?m)^\s*G1 X\{exec_state\.park_x\|float - x_now\} Y\{exec_state\.park_y\|float - y_now\} F6000\s*$'
 Assert-ContainsBefore $pauseExec '(?m)^\s*_TREED_PRINT_OFFSET_DISABLE\s*$' $pauseParkMove "PAUSE и прочистка отключают смещение печати перед парковкой"
 Assert-ContainsBefore $pauseExec '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' $pauseParkMove "PAUSE must run Z-hop before parking XY"
