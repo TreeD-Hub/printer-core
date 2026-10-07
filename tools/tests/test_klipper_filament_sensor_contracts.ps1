@@ -64,7 +64,12 @@ Assert-Contains $sensor 'source == "filament_motion".*switch\.filament_detected\
 Assert-Contains $sensor '(?m)^variable_extrude_length:\s*25\.0\s*$' "each recovery attempt must extrude 25 mm"
 Assert-Contains $sensor '(?m)^variable_extrude_speed:\s*5\.0\s*$' "recovery extrusion speed must be 5 mm/s"
 Assert-Contains $sensor '(?m)^variable_max_attempts:\s*5\s*$' "clog recovery must stop after five attempts"
-Assert-Contains $sensor '(?ms)M109 S\{recovery_target\}.*?SET_TMC_CURRENT STEPPER=extruder CURRENT=\{recovery_current\}' "recovery must heat before raising extruder current"
+$recoveryStart = [regex]::Match($sensor, '(?ms)^\[gcode_macro _TREED_CLOG_RECOVERY_START\]\s*.*?(?=^\[|\z)').Value
+$recoveryAttempt = [regex]::Match($sensor, '(?ms)^\[gcode_macro _TREED_CLOG_RECOVERY_ATTEMPT\]\s*.*?(?=^\[|\z)').Value
+Assert-NotContains $recoveryStart '(?m)^\s*M10[49]\s+S\{' "прочистка не должна повышать температуру или ждать догрева"
+Assert-NotContains $sensor 'temperature_multiplier|temperature_max|recovery_target' "параметры догрева не должны оставаться в алгоритме прочистки"
+Assert-Contains $recoveryStart '(?ms)elif not printer\.extruder\.can_extrude.*?clog_failed DETAIL=cold_hotend.*?SET_TMC_CURRENT STEPPER=extruder CURRENT=\{recovery_current\}.*?_TREED_CLOG_RECOVERY_ATTEMPT' "прочистка проверяет текущую температуру и сразу начинает подачу после повышения тока"
+Assert-Contains $recoveryAttempt '(?ms)if not printer\.extruder\.can_extrude.*?_TREED_CLOG_RECOVERY_FINISH SUCCESS=0 REASON=cold_hotend.*?elif motion\.pulse_count.*?G1 E' "каждая попытка запрещает холодную экструзию и завершает прочистку с восстановлением тока"
 Assert-Contains $sensor '(?ms)^\[gcode_macro _TREED_CLOG_RECOVERY_ATTEMPT\].*?G1 E\{recovery\.extrude_length\|float\} F\{recovery\.extrude_speed\|float \* 60\.0\}.*?M400.*?UPDATE_DELAYED_GCODE ID=_TREED_CLOG_RECOVERY_CHECK' "each attempt must finish its 25 mm extrusion before checking motion"
 Assert-Contains $sensor '(?ms)^\[gcode_macro _TREED_CLOG_RECOVERY_ATTEMPT\].*?VARIABLE=start_pulses VALUE=\{motion\.pulse_count\|int\}.*?G1 E' "each attempt must capture the encoder count before extrusion"
 Assert-Contains $sensor '(?ms)^\[delayed_gcode _TREED_CLOG_RECOVERY_CHECK\].*?motion\.pulse_count\|int - recovery\.start_pulses\|int.*?_TREED_CLOG_RECOVERY_FINISH SUCCESS=1.*?recovery\.attempt\|int >= recovery\.max_attempts\|int.*?_TREED_CLOG_RECOVERY_FINISH SUCCESS=0.*?_TREED_CLOG_RECOVERY_ATTEMPT' "motion check must require measured advance and retry no more than five times"

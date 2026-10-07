@@ -17,7 +17,7 @@ class TreedZRecovery:
     AUTO_REMOVE_SPEED = 50.
     AUTO_REMOVE_CYCLES = 5
 
-    # Блок 1: Отдельные параметры и DIAG, не заменяющий endstop рельса Z.
+    # Блок 1: Параметры поиска и DIAG, не заменяющий endstop рельса Z.
     def __init__(self, config):
         self.printer = config.get_printer()
         self.running = False
@@ -31,9 +31,10 @@ class TreedZRecovery:
         self.mesh_dispatch = None
         self.last_mesh = {}
         self.motor_epoch = 0
-        self.sgt = config.getint('sgt', 3, minval=-64, maxval=63)
+        if config.get('sgt', None) is not None or config.get('current', None) is not None:
+            raise config.error('Z recovery: перенесите sgt/current из [treed_z_recovery] '
+                               'в driver_SGT/run_current секции [tmc5160 stepper_z]')
         self.speed = config.getfloat('speed', 5., above=0.)
-        self.current = config.getfloat('current', 0.9, above=0.)
         self.accel = config.getfloat('accel', 100., above=0.)
         self.clearance = config.getfloat('bottom_clearance_mm', 5., above=0.)
         self.pause = config.getfloat('stallguard_pause', 2., minval=2.)
@@ -44,7 +45,7 @@ class TreedZRecovery:
         self.bottom = config.getfloat('bottom_position', high)
         self.max_seek = config.getfloat('max_seek', high - low, above=0., maxval=210.)
         values = (low, high, self.bottom, self.max_seek, self.speed,
-                  self.current, self.accel, self.clearance, self.pause)
+                  self.accel, self.clearance, self.pause)
         if (not all(math.isfinite(v) for v in values)
                 or not low < self.bottom <= high
                 or self.bottom - self.clearance <= low
@@ -56,8 +57,6 @@ class TreedZRecovery:
         self.driver = self.printer.load_object(config, 'tmc5160 stepper_z')
         # В закреплённом TMC5160 get_status экспортирован из TMCCommandHelper.
         self.current_helper = self.driver.get_status.__self__.current_helper
-        if self.current > self.current_helper.get_current()[3]:
-            raise config.error('Z recovery: current превышает предел TMC5160')
         self.endstop = self.printer.lookup_object('pins').setup_pin(
             'endstop', 'tmc5160_stepper_z:virtual_endstop')
         self.printer.register_event_handler('klippy:mcu_identify', self._connect)
@@ -260,7 +259,8 @@ class TreedZRecovery:
         self.last_run = dict(timestamp=datetime.now(timezone.utc).isoformat(),
                              start_state=dict(position=self.toolhead.get_position(),
                                               homed_axes=self.kin.get_status(0)['homed_axes']),
-                             probes=[], sgt=self.sgt, current=self.current,
+                             probes=[], sgt=self.driver.fields.get_field('sgt'),
+                             current=self.current_helper.get_current()[0],
                              motor_epoch=self.motor_epoch,
                              mode=('auto_remove' if auto_remove else
                                    'manual_park' if force else 'recovery'),
@@ -299,18 +299,20 @@ class TreedZRecovery:
                   'tcoolthrs', 'thigh', 'globalscaler', 'irun', 'ihold')
         saved = {f: self.driver.fields.get_field(f) for f in fields}
         self.last_run['tmc_before'] = dict(saved)
-        requested_hold = self.current_helper.get_current()[2]
+        current, _, requested_hold, max_current = self.current_helper.get_current()
+        if not math.isfinite(current) or not 0. < current <= max_current:
+            raise gcmd.error('Z recovery: неверный рабочий ток драйвера Z')
+        self.last_run.update(sgt=saved['sgt'], current=current)
         limits = (self.toolhead.max_velocity, self.toolhead.max_accel,
                   self.toolhead.square_corner_velocity, self.toolhead.min_cruise_ratio)
         self.running = True
         success = restored = False
         try:
             self.toolhead.set_max_velocities(None, min(self.accel, limits[1]), None, None)
-            self.current_helper.set_current(self.current, self.current,
+            # Используем текущие SGT и run_current драйвера Z; hold на время поиска
+            # равен run, как прежде. Исходные поля и hold возвращаются в finally.
+            self.current_helper.set_current(current, current,
                                             self.toolhead.get_last_move_time())
-            bits = self.driver.fields.set_field('sgt', self.sgt)
-            self.driver.mcu_tmc.set_register(self.driver.fields.lookup_register('sgt'),
-                                             bits, self.toolhead.get_last_move_time())
             # Ненулевой рабочий TCOOLTHRS stock helper не заменяет: для поиска
             # нужен полный диапазон StallGuard, независимо от рабочих настроек.
             bits = self.driver.fields.set_field('tcoolthrs', 0xfffff)
