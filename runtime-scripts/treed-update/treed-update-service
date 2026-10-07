@@ -126,7 +126,12 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
     paths = set()
     for row in reset_configs:
         if (not isinstance(row, dict) or not isinstance(row.get("path"), str)
-                or not re.fullmatch(r"config/(?:printer\.cfg|profiles/treed_v2_corexy_v1/[a-zA-Z0-9_-]+\.cfg)", row["path"])
+                or not re.fullmatch(
+                    r"(?:config/(?:printer\.cfg|moonraker\.conf|"
+                    r"profiles/treed_v2_corexy_v1/[a-zA-Z0-9_-]+\.cfg|moonraker/base/[a-zA-Z0-9_-]+\.conf)|"
+                    r"(?:klipper|moonraker)/treed_[a-z0-9_]+\.py|"
+                    r"camera/(?:cam_env\.sh|session_start\.sh|session_stop\.sh|snapshot\.sh|stream_detect\.py)|"
+                    r"sbin/(?:treed-core-update|treed-update-service|treed-update-apply|treed-ui))", row["path"])
                 or not isinstance(row.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
                 or row["path"] in paths):
             raise ValueError("invalid config reset file")

@@ -508,8 +508,6 @@ def config_conflicts(env):
     conflicts = []
     for row in previous["files"]:
         key = row["path"]
-        if not key.startswith("config/") or not key.endswith(".cfg"):
-            continue
         data, _info = read_file(destination(key, roots(env)))
         if data is not None and not matches_managed_file(key, data, row["runtimeSha256"]):
             conflicts.append({"path": key, "sha256": sha(data)})
@@ -524,9 +522,9 @@ def validate_config_resets(value):
         if not isinstance(row, dict) or not isinstance(row.get("sha256"), str):
             raise ValueError("Некорректный файл сброса")
         key = row.get("path")
-        group, relative = allowed(key)
-        if group != "config" or relative.suffix != ".cfg" or key in selected or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"]):
-            raise ValueError("Сброс допустим только для управляемых Klipper cfg")
+        allowed(key)
+        if key in selected or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"]):
+            raise ValueError("Некорректный сброс управляемого файла")
         selected[key] = row["sha256"]
     return selected
 
@@ -541,8 +539,8 @@ def prepare(manifest, payload, env, journal, reset_configs=None):
     old_files = {row["path"]: row for row in previous["files"]}
     selected = validate_config_resets([] if reset_configs is None else reset_configs)
     for key in selected:
-        if key not in old_files or key not in payload:
-            raise ValueError(f"Файл сброса отсутствует в установленном или новом выпуске: {key}")
+        if key not in old_files:
+            raise ValueError(f"Файл сброса отсутствует в установленном выпуске: {key}")
     entries, installed = [], []
     for index, key in enumerate(sorted(payload.keys() | old_files.keys())):
         path = destination(key, locations)
@@ -550,7 +548,7 @@ def prepare(manifest, payload, env, journal, reset_configs=None):
         if key in selected and (old is None or sha(old) != selected[key]):
             raise ValueError(f"Файл изменился после выбора сброса: {key}; повторите проверку")
         if old is not None and key in old_files and key not in selected and not matches_managed_file(key, old, old_files[key]["runtimeSha256"]):
-            raise ValueError(f"Локально изменён управляемый файл: {key}; перенесите настройки в overrides")
+            raise ValueError(f"Локально изменён управляемый файл: {key}; выберите сброс при обновлении")
         if old is not None and key not in old_files:
             raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
         backup = str(index)
