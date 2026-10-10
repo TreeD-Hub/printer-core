@@ -14,13 +14,21 @@
 [Команды и сохранение режима](../klipper/profiles/treed_v2_corexy_v1/ui-driver-modes-contract.md).
 
 `treed_print_cancel.py` подключается секцией `[treed_print_cancel]` в `ui.cfg`.
-Штатный `/printer/print/cancel` и одиночный `CANCEL_PRINT` через Moonraker
+Штатный `/printer/print/cancel` и одиночный `CANCEL_PRINT` (включая `REASON=...`) через Moonraker
 сигнализируют отмену до ожидания G-code mutex: нагрев выключается, SD-чтение
 останавливается, `M109`/`M190`/`TEMPERATURE_WAIT` прерываются, остаток макроса
 не выполняется. Затем штатный `CANCEL_PRINT` закрывает задачу как `cancelled`.
 Текущая команда движения/homing завершается штатно; для немедленного отключения
-движения нужен аварийный стоп. При обновлении Klipper сверять GCodeDispatch,
-`PrinterHeaters._wait_for_temperature` и регистрацию `TEMPERATURE_WAIT`.
+движения нужен аварийный стоп. После cleanup команда
+`_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z=...` готовит переданную Z-поправку штатным
+`Z_OFFSET_APPLY_PROBE` и обновляет действующий `EddyCalibration` в памяти.
+Временный live offset для штатной команды восстанавливается и при ошибке записи.
+Следующий Z-home использует новую кривую без перезапуска и повторного babystep.
+Команда запрещена при активной или приостановленной SD-печати. Запись на диск
+остаётся отдельным `TREED_SAVE_CONFIG` в простое; несохранённая поправка теряется
+при перезапуске. При обновлении Klipper сверять GCodeDispatch,
+`PrinterHeaters._wait_for_temperature`, регистрацию `TEMPERATURE_WAIT`,
+`EddyCalibration.get_calibration` / `_load_calibration` и `Z_OFFSET_APPLY_PROBE`.
 
 `treed_filament_motion_sensor.py` расширяет штатный encoder sensor: публикует
 `pulse_count` и совместимое имя объекта `filament_motion_sensor filament_motion`.

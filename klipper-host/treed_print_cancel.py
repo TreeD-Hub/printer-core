@@ -1,6 +1,9 @@
 # Назначение: отмена через штатный API Moonraker прерывает температурные
 # ожидания и остаток макроса до выполнения штатного CANCEL_PRINT.
+# После отмены применяет Z-поправку к работающей калибровке Eddy без перезапуска.
 # Контур: required для профиля; движение внутри уже начатой команды не прерывается.
+import math
+
 import gcode
 
 
@@ -45,6 +48,8 @@ class TreedPrintCancel:
             raise self.config_error('TREED_PRINT_CANCEL: нет TEMPERATURE_WAIT')
         self.gcode.register_command('TEMPERATURE_WAIT', self._temperature_wait,
                                     desc=help_text)
+        self.gcode.register_command('_TREED_EDDY_APPLY_LIVE_Z_OFFSET',
+                                    self._apply_live_z_offset)
 
         self.command_script = self.gcode.run_script_from_command
         self.gcode.run_script = self._run_script
@@ -53,8 +58,9 @@ class TreedPrintCancel:
 
     # Блок 3: Сигнал отмены поступает до G-code mutex, cleanup — после его освобождения.
     def _run_script(self, script):
-        if script.strip().upper() == 'CANCEL_PRINT':
-            return self._cancel()
+        lines = script.strip().splitlines()
+        if len(lines) == 1 and lines[0].split(None, 1)[0].upper() == 'CANCEL_PRINT':
+            return self._cancel(script)
         with self.gcode.get_mutex():
             self._check_cancel()
             try:
@@ -65,7 +71,7 @@ class TreedPrintCancel:
                 if not self.virtual_sd.is_cmd_from_sd():
                     raise
 
-    def _cancel(self):
+    def _cancel(self, script):
         if self.cancel_pending:
             return
         self.cancel_pending = True
@@ -78,7 +84,7 @@ class TreedPrintCancel:
             with self.gcode.get_mutex():
                 self.cleanup_active = True
                 try:
-                    self.command_script('CANCEL_PRINT')
+                    self.command_script(script)
                 finally:
                     self.cleanup_active = False
         finally:
@@ -132,6 +138,36 @@ class TreedPrintCancel:
             return minimum <= temperature <= maximum
 
         self._wait_until(ready)
+
+    # Блок 5: После отмены следующий Z-home использует поправку без SAVE_CONFIG.
+    def _apply_live_z_offset(self, gcmd):
+        state = self.printer.lookup_object('print_stats').get_status(
+            self.reactor.monotonic())['state']
+        if state in ('printing', 'paused') or self.virtual_sd.current_file is not None:
+            raise gcmd.error('Eddy: поправка допустима только после остановки печати')
+        offset = gcmd.get_float('Z')
+        if not math.isfinite(offset):
+            raise gcmd.error('Eddy: Z-offset должен быть конечным числом')
+        if offset == 0.:
+            return
+        probe = self.printer.lookup_object('probe_eddy_current btt_eddy', None)
+        calibration = getattr(probe, 'calibration', None)
+        if any(not callable(getattr(calibration, name, None)) for name in
+               ('verify_calibrated', 'get_calibration', '_load_calibration')):
+            raise gcmd.error('Eddy: несовместимая live-калибровка Klipper')
+        calibration.verify_calibrated()
+        frequencies, heights = calibration.get_calibration()
+        shifted = [(height - offset, freq) for height, freq in zip(heights, frequencies)]
+        self.printer.lookup_object('toolhead').wait_moves()
+        self._check_cancel()
+        # Штатная команда читает live offset; восстанавливаем его и при ошибке записи.
+        original_offset = self.printer.lookup_object('gcode_move').get_status()['homing_origin'].z
+        try:
+            self.command_script('SET_GCODE_OFFSET Z=%s MOVE=0' % offset)
+            self.command_script('Z_OFFSET_APPLY_PROBE')
+        finally:
+            self.command_script('SET_GCODE_OFFSET Z=%s MOVE=0' % original_offset)
+        calibration._load_calibration(shifted)
 
 
 def load_config(config):
