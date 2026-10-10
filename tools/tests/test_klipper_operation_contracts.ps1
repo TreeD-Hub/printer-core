@@ -42,6 +42,7 @@ $resumeExec = Get-Macro $pause "_TREED_RESUME_HEAT_PURGE_WIPE"
 $shaperRun = Get-Macro $shaper "_TREED_SHAPER_CALIBRATE_RUN"
 $m600 = Get-Macro $features "M600"
 $m600Unload = Get-Macro $features "_TREED_M600_UNLOAD"
+$service = Get-Macro $motion "TREED_UI_SERVICE_MODE"
 
 Assert-Has $core '"idle", "preparing", "printing", "paused", "calibrating", "auto_remove"' "all operational phases must be represented"
 Assert-Has $core 'state != "idle" and not \(state == "paused" and \(paused == 1 or print_state == "paused"\)\)' "filament must be allowed only at idle or native pause"
@@ -71,6 +72,10 @@ Assert-Has $macros '(?m)^\[include macros_filament\.cfg\]\s*$' "macros.cfg must 
 Assert-Has $filament '(?m)^\[gcode_macro UNLOAD_FILAMENT\]\s*$' "UNLOAD_FILAMENT must be available to M600"
 if ($m600Unload -match 'fallback_unload_len|M600_UNLOAD_STATE|gcode_macro UNLOAD_FILAMENT') { throw "FAIL: M600 must not keep a manual unload fallback" }
 Assert-Before $motion '_TREED_OPERATION_REQUIRE OP=ui_move' 'SAVE_GCODE_STATE NAME=TREED_UI_MOVE_AXIS_STATE' "UI move must check admission before motion"
+Assert-Before $service '_TREED_OPERATION_REQUIRE OP=service_mode' '(?m)^\s*TREED_Z_PARK_BOTTOM_MANUAL\s*$' "service mode must check admission before motion"
+Assert-Before $service '(?m)^\s*TREED_Z_PARK_BOTTOM_MANUAL\s*$' '(?m)^\s*G28 X Y\s*$' "service mode must lower the bed before homing XY"
+Assert-Before $service '(?m)^\s*G28 X Y\s*$' '(?m)^\s*G1 X\{center_x\} Y\{center_y\} F6000\s*$' "service mode must home XY before centering the nozzle"
+if ($service -match 'G28 Z|PROBE|M10[49]|M1[49]0|M84|^\s*TREED_Z_PARK_BOTTOM\s*$') { throw "FAIL: service mode must only park the bed and nozzle" }
 Assert-Has $shaper '_TREED_OPERATION_REQUIRE OP=shaper' "shaper must use shared admission"
 Assert-Before $shaperRun '_TREED_OPERATION_REQUIRE OP=shaper_run' 'SHAPER_CALIBRATE AXIS=X' "direct shaper runner must not bypass admission"
 if ($shaper -match 'SOURCE\s*!=\s*"start_print"|SOURCE=start_print|set SOURCE =') { throw "FAIL: SOURCE must not authorize calibration" }
