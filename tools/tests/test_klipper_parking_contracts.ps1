@@ -151,7 +151,7 @@ Assert-Contains $homeXy '(?m)^[ \t]*_TREED_SENSORLESS_PREPARE[ \t]*\r?\n[ \t]*G2
 Assert-NotContains $g28 '(?m)^\s*SET_TMC_(CURRENT|FIELD)\b' "G28 must not change driver settings"
 Assert-NotContains $sensorlessPrepare '(?m)^\s*SET_TMC_(CURRENT|FIELD)\b' "Sensorless preparation must not change driver settings"
 Assert-Contains $steppers '(?ms)^\[stepper_x\].*?position_endstop:\s*0\b.*?homing_positive_dir:\s*false\b' "X homing must define the left edge as raw X0"
-Assert-Contains $steppers '(?ms)^\[stepper_y\].*?position_endstop:\s*245\b.*?homing_positive_dir:\s*true\b' "Y homing must keep the far edge as raw Y245"
+Assert-Contains $steppers '(?ms)^\[stepper_y\].*?position_endstop:\s*257\b.*?homing_positive_dir:\s*true\b' "Y homing must keep the far edge as raw Y257"
 Assert-Contains $stepperX '(?m)^\s*step_pin:\s*PG0\s*$' "CoreXY X mirror correction must route stepper_x to MOTOR1"
 Assert-Contains $stepperX '(?m)^\s*dir_pin:\s*!PG1\s*$' "CoreXY X mirror correction must invert MOTOR1 direction"
 Assert-Contains $stepperY '(?m)^\s*step_pin:\s*PF13\s*$' "CoreXY X mirror correction must route stepper_y to MOTOR0"
@@ -169,8 +169,8 @@ Assert-Contains $g28 'printer\.gcode_move\.absolute_coordinates' "G28 must prese
 Assert-Contains $geometry '(?m)^variable_bed_origin_x:\s*0\.0\s*$' "Eddy bed origin X must be the left edge"
 Assert-Contains $geometry '(?m)^variable_print_offset_y:\s*0\.0\s*$' "Print Y offset must start at the raw Y0 movement edge"
 Assert-Contains $geometry '(?m)^variable_bed_origin_y:\s*0\.0\s*$' "Eddy bed origin Y must start at the raw Y0 movement edge"
-Assert-Contains $geometry '(?m)^variable_print_size_y:\s*245\.0\s*$' "Print area Y must match the full Y movement area"
-Assert-Contains $geometry '(?m)^variable_bed_size_y:\s*245\.0\s*$' "Eddy bed Y size must match the full Y movement area"
+Assert-Contains $geometry '(?m)^variable_print_size_y:\s*257\.0\s*$' "Print area Y must match the full Y movement area"
+Assert-Contains $geometry '(?m)^variable_bed_size_y:\s*257\.0\s*$' "Eddy bed Y size must match the full Y movement area"
 Assert-Contains $geometry '(?m)^variable_bed_dir_x:\s*1\.0\s*$' "Eddy bed X direction must increase from the left edge"
 Assert-Contains $geometry '(?m)^variable_bed_dir_y:\s*1\.0\s*$' "Eddy bed Y direction must increase from the front print edge"
 
@@ -185,7 +185,7 @@ Assert-ContainsBefore $endPrint '(?m)^\s*TURN_OFF_HEATERS\s*$' '(?m)^\s*G1 E-2 F
 Assert-ContainsBefore $endPrint '(?m)^\s*TURN_OFF_HEATERS\s*$' '(?m)^\s*_TREED_Z_HOP_BEFORE_XY\s*$' "END_PRINT must disable heaters before parking"
 Assert-Contains $endPrint '"x" in toolhead\.homed_axes and "y" in toolhead\.homed_axes and "z" in toolhead\.homed_axes' "END_PRINT must require homed XYZ before parking"
 
-Assert-Contains $pauseCfg 'variable_park_x_raw: 122\.5' "PAUSE default X park is the middle of the 245 mm X travel"
+Assert-Contains $pauseCfg 'variable_park_x_raw: 122\.5' "PAUSE must preserve its configured X park"
 Assert-Contains $pauseCfg 'variable_park_y_raw: None' "PAUSE по умолчанию выбирает текущий Y min перемещения"
 Assert-Contains $pausePrep 'set park_y = y_min if park_cfg\.park_y_raw is none' "PAUSE выбирает механический Y min без смещения печатной области"
 Assert-Contains $localOverrides 'park_x_raw VALUE=122\.5' "local override example documents the PAUSE X middle default"
