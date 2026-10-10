@@ -121,9 +121,9 @@ foreach ($macro in @("TREED_BED_MESH_CALIBRATE_EDDY", "_TREED_EDDY_APPLY_CAPTURE
   Assert-Contains (Get-GcodeMacroBlock $probe $macro) '_TREED_UI_RESET_Z_OFFSET' "$macro must clear live Z offset and counter"
 }
 Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") '(?s)_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET.*_TREED_UI_RESET_Z_OFFSET' "END_PRINT must capture before clearing live Z offset"
-Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") '_TREED_UI_RESET_Z_OFFSET' "CANCEL_PRINT must discard live babystep"
+Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") '(?s)_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET.*_TREED_UI_RESET_Z_OFFSET' "CANCEL_PRINT must capture before clearing live babystep"
 Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") 'VARIABLE=has_pending VALUE=0' "END_PRINT must clear stale autosave state"
-Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") 'VARIABLE=has_pending VALUE=0' "CANCEL_PRINT must clear pending Eddy autosave"
+Assert-Contains (Get-GcodeMacroBlock $pause "CANCEL_PRINT") '(?s)M400\s+_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET' "CANCEL_PRINT must persist captured babystep after motion completes"
 if ($eddyAutosaveState -match '(?m)^variable_enabled:') { throw 'FAIL: Eddy autosave must not have an enable flag' }
 if ($eddyAutosaveApply -match 'enabled == 0') { throw 'FAIL: Eddy autosave must not have a disabled branch' }
 Assert-Contains (Get-GcodeMacroBlock $printFlow "END_PRINT") '(?m)^\s*_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET\s*$' "END_PRINT always captures live Z offset"
