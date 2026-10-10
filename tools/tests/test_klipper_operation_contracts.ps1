@@ -51,7 +51,7 @@ Assert-Has $core 'state != "idle" or paused == 1' "shaper must require idle"
 Assert-Has $core 'phase != "calibrating" or paused == 1' "shaper runner must require an active calibration phase"
 
 Assert-Before $start '(?m)^\s*_TREED_OPERATION_REQUIRE OP=start\s*$' '(?m)^\s*_TREED_START_MACHINE_PREP\s*$' "print start must check admission before heating"
-Assert-Before $start "VALUE=`"'preparing'`"" '(?m)^\s*_TREED_START_PREHEAT\s*$' "print start must mark preparation before heating"
+Assert-Before $start "VALUE=`"'preparing'`"" '(?m)^\s*_TREED_START_MACHINE_PREP\s*$' "print start must mark preparation before heating"
 Assert-Has $flow 'params\.SHAPER is defined or params\.SHAPER_ACCEL is defined' "START_PRINT must reject old shaper parameters"
 if ($start -match 'SHAPER|TREED_SHAPER_CALIBRATE|_TREED_START_INPUT_SHAPER') { throw "FAIL: START_PRINT must not calibrate input shaper" }
 if ($core -match 'start_calibrating' -or $shaper -match 'start_calibrating') { throw "FAIL: service calibration must not keep internal start phase" }
