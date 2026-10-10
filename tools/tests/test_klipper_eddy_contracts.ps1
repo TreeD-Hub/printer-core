@@ -129,7 +129,7 @@ Assert-NotContains $macrosCore 'variable_park_y_raw_fallback' "PAUSE has no alte
 Assert-Contains $pausePrep 'PAUSE: координаты парковки вне пределов осей' "PAUSE rejects invalid park coordinates"
 Assert-Contains $zHop 'printer\["gcode_macro _TREED_EDDY_Z0_CFG"\]\.z_hop' "XY hop uses the Eddy baseline"
 Assert-NotContains $zHop 'fallback_z_hop' "XY hop has no alternate height"
-Assert-Contains $probeEddy '(?m)^\s*y_offset:\s*-30\.0\s*$' "Eddy Y offset must place the sensing point 30mm closer to Y0 than the nozzle at Y245"
+Assert-Contains $probeEddy '(?m)^\s*y_offset:\s*-30\.0\s*$' "Eddy Y offset must place the sensing point 30mm closer to Y0 than the nozzle"
 
 Assert-NotContains $probeEddy $RemovedZ0Adjust "Eddy profile must not use fixed base Z adjustment"
 Assert-NotContains $probeEddy 'Eddy Z0 adjust applied' "Eddy profile must not report fixed SET_GCODE_OFFSET Z adjustment"
@@ -169,16 +169,17 @@ Assert-ContainsBefore $eddyMesh '(?m)^\s*_TREED_PRINT_OFFSET_DISABLE\s*$' '(?m)^
 Assert-NotContains $eddyMesh '(?m)^\s*_TREED_PRINT_OFFSET_ENABLE\s*$' "Сервисный Eddy mesh не восстанавливает старые print coords"
 
 # Блок 5: Eddy mesh использует отдельную scan area без изменения механики.
-Assert-Contains $geometry '(?m)^variable_print_size_y:\s*245\.0\s*$' "Print area Y must stay 245"
-Assert-Contains $geometry '(?m)^variable_bed_size_y:\s*245\.0\s*$' "Bed area Y must stay 245"
-Assert-Contains $steppers '(?ms)^\[stepper_y\].*?^position_max:\s*245\s*$' "Stepper Y max must stay 245"
-Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_x:\s*10\.0\s*$' "Eddy scan min X must be explicit"
-Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_y:\s*10\.0\s*$' "Eddy scan min Y must be explicit"
-Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_x:\s*235\.0\s*$' "Eddy scan max X must be explicit"
-Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_y:\s*210\.0\s*$' "Eddy scan max Y must be explicit"
+Assert-Contains $geometry '(?m)^variable_print_size_y:\s*257\.0\s*$' "Print area Y must match travel 257"
+Assert-Contains $geometry '(?m)^variable_bed_size_y:\s*257\.0\s*$' "Bed area Y must match travel 257"
+Assert-Contains $steppers '(?ms)^\[stepper_y\].*?^position_max:\s*257\s*$' "Stepper Y max must be 257"
+Assert-Contains $steppers '(?ms)^\[stepper_x\].*?^position_max:\s*250\s*$' "Stepper X max must be 250"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_x:\s*25\.0\s*$' "Eddy scan min X must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_min_y:\s*25\.0\s*$' "Eddy scan min Y must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_x:\s*225\.0\s*$' "Eddy scan max X must be explicit"
+Assert-Contains $eddyMeshCfg '(?m)^\s*variable_scan_max_y:\s*222\.0\s*$' "Eddy scan max Y must be explicit"
 Assert-NotContains $eddyMeshCfg '(?m)^\s*variable_speed:' "Eddy mesh must not expose an unused speed variable"
-Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_min:\s*10,10\s*$' "bed_mesh parser fallback must use Eddy scan min"
-Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_max:\s*235,210\s*$' "bed_mesh parser fallback must use Eddy scan max"
+Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_min:\s*25,25\s*$' "bed_mesh parser fallback must use Eddy scan min"
+Assert-Contains $probeEddy '(?ms)^\[bed_mesh\].*?^mesh_max:\s*225,222\s*$' "bed_mesh parser fallback must use Eddy scan max"
 Assert-Contains $eddyMesh 'params\.MESH_MIN\|default\(default_mesh_min\)' "Eddy mesh must honor MESH_MIN with a safe default"
 Assert-Contains $eddyMesh 'params\.MESH_MAX\|default\(default_mesh_max\)' "Eddy mesh must honor MESH_MAX with a safe default"
 Assert-Contains $eddyMesh 'mesh_min_raw\.split\(","\)' "Eddy mesh must parse MESH_MIN coordinates"
@@ -220,16 +221,15 @@ if ([double]::Parse($bedMin.Groups[1].Value, $invariant) -ne $safeMinX -or
 }
 
 foreach ($case in @(
-  @{ Name='full safe area'; Min=@(10,10); Max=@(235,210); Accept=$true },
+  @{ Name='full safe area'; Min=@(25,25); Max=@(225,222); Accept=$true },
   @{ Name='narrower area'; Min=@(40,40); Max=@(205,180); Accept=$true },
-  @{ Name='previous X min'; Min=@(7.5,10); Max=@(235,210); Accept=$false },
-  @{ Name='previous X max'; Min=@(10,10); Max=@(237.5,210); Accept=$false },
-  @{ Name='old X min'; Min=@(5,10); Max=@(235,210); Accept=$false },
-  @{ Name='old X max'; Min=@(10,10); Max=@(240,210); Accept=$false },
-  @{ Name='old Y min'; Min=@(10,5); Max=@(235,210); Accept=$false },
-  @{ Name='old Y max'; Min=@(10,10); Max=@(235,215); Accept=$false },
-  @{ Name='outside Y min'; Min=@(10,9.9); Max=@(235,210); Accept=$false },
-  @{ Name='outside Y max'; Min=@(10,10); Max=@(235,210.1); Accept=$false }
+  @{ Name='previous X min'; Min=@(10,25); Max=@(225,222); Accept=$false },
+  @{ Name='previous X max'; Min=@(25,25); Max=@(235,222); Accept=$false },
+  @{ Name='previous Y min'; Min=@(25,10); Max=@(225,222); Accept=$false },
+  @{ Name='outside X min'; Min=@(24.9,25); Max=@(225,222); Accept=$false },
+  @{ Name='outside X max'; Min=@(25,25); Max=@(225.1,222); Accept=$false },
+  @{ Name='outside Y min'; Min=@(25,24.9); Max=@(225,222); Accept=$false },
+  @{ Name='outside Y max'; Min=@(25,25); Max=@(225,222.1); Accept=$false }
 )) {
   $accepted = $case.Min[0] -ge $safeMinX -and $case.Min[1] -ge $safeMinY -and
               $case.Max[0] -le $safeMaxX -and $case.Max[1] -le $safeMaxY -and
@@ -239,8 +239,8 @@ foreach ($case in @(
 $offsetX = Get-ConfigNumber $probeEddy 'x_offset'
 $offsetY = Get-ConfigNumber $probeEddy 'y_offset'
 if ($offsetX -ne 0 -or $offsetY -ne -30 -or
-    $safeMinX - $offsetX -ne 10 -or $safeMaxX - $offsetX -ne 235 -or
-    $safeMinY - $offsetY -ne 40 -or $safeMaxY - $offsetY -ne 240) {
+    $safeMinX - $offsetX -ne 25 -or $safeMaxX - $offsetX -ne 225 -or
+    $safeMinY - $offsetY -ne 55 -or $safeMaxY - $offsetY -ne 252) {
   throw 'FAIL: Eddy probe-to-tool coordinates differ from the safe area contract'
 }
 

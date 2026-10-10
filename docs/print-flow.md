@@ -30,10 +30,11 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 
 1. Проверяет параметры температур и данные объектов.
 2. Очищает прошлую mesh и G-code offsets.
-3. Начинает прогрев стола и preheat сопла.
+3. Прогревает стол до `BED_TEMP`, а сопло до 175 °C.
 4. Выполняет полный `G28` через sensorless X/Y и Eddy Z-home.
-5. Строит новую Eddy mesh методом `rapid_scan` вокруг объектов с adaptive margin.
-6. Включает print-offset, паркуется у максимального Y, догревает сопло и проводит одну purge-линию вдоль X длиной в половину ширины стола.
+5. На Z1 переезжает к скребку `X40 Y257`, выполняет пять циклов `X100 Z1 → X40 Z0,3` с текущей максимальной скоростью XY и завершает на Z1.
+6. Строит новую Eddy mesh методом `rapid_scan` вокруг объектов с adaptive margin.
+7. Синхронизирует область печати с полным ходом осей без XY-смещения, паркуется у минимального Y, догревает сопло и проводит одну purge-линию вдоль X длиной в половину ширины стола.
 
 Параметры `ADAPTIVE_MARGIN` и `HOTEND_READY_MARGIN` можно задавать в вызове;
 значения по умолчанию и полный контракт перечислены в
@@ -47,8 +48,8 @@ START_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzl
 TREED_BED_MESH_CALIBRATE_EDDY PROFILE=default METHOD=scan
 ```
 
-Обёртка ограничивает sensing point безопасной Eddy scan area `X10..235 / Y10..210`.
-Это не полный скан области печати `X0..245 / Y0..245`: смещение датчика не
+Обёртка ограничивает sensing point безопасной Eddy scan area `X25..225 / Y25..222`.
+Это не полный скан области печати `X0..250 / Y0..257`: смещение датчика не
 позволяет покрыть заднюю часть стола. Допустимые методы и параметры описаны в
 [`macros-usage.md`](../klipper/profiles/treed_v2_corexy_v1/macros-usage.md#7-bed-mesh-и-eddy).
 
