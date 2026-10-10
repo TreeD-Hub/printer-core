@@ -30,6 +30,10 @@ class Harness:
         position = {"x": 10.0, "y": 5.0, "z": 0.4}
         self.printer = {
             "gcode_macro _TREED_START_PURGE_CFG": settings,
+            "gcode_macro _TREED_START_STATE": {
+                key.removeprefix("variable_"): ast.literal_eval(value)
+                for key, value in CFG["gcode_macro _TREED_START_STATE"].items()
+                if key.startswith("variable_")},
             "gcode_macro _TREED_PRINT_AREA_CFG": {"print_offset_enabled": 1},
             "gcode_macro _TREED_GEOMETRY_CFG": {
                 key.removeprefix("variable_"): ast.literal_eval(value)
@@ -42,38 +46,43 @@ class Harness:
                 key.removeprefix("variable_"): ast.literal_eval(value)
                 for key, value in CFG["gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE"].items()
                 if key.startswith("variable_")},
-            "toolhead": {"homed_axes": "xyz", "position": position, "max_velocity": 600,
+            "toolhead": {"homed_axes": "xyz", "position": position, "max_velocity": 600, "max_accel": 25000,
                          "axis_minimum": {axis: CFG.getfloat("stepper_" + axis, "position_min") for axis in "xyz"},
                          "axis_maximum": {axis: CFG.getfloat("stepper_" + axis, "position_max") for axis in "xyz"}},
             "gcode_move": {"gcode_position": position, "speed_factor": 0.73,
                            "extrude_factor": 1.15, "absolute_coordinates": False, "absolute_extrude": True,
                            "homing_origin": {"x": 0.0, "y": 0.0, "z": 0.0}},
-            "extruder": {"pressure_advance": pa, "can_extrude": True},
+            "extruder": {"pressure_advance": pa, "can_extrude": True, "temperature": 175},
+            "print_stats": {"info": {"total_layer": 0}},
             "configfile": {"settings": {"extruder": {
                 "filament_diameter": 1.75, "max_extrude_cross_section": 5, "pressure_advance": 0.08}}},
         }
         self.commands = []
         self.moves = []
+        self.move_accels = []
+        self.wait_positions = []
         self.saved = {}
         self.pending_probe_offset = None
         self.saved_offsets = []
 
-    def run(self, name, stop_after=None):
+    def run(self, name, stop_after=None, params=None):
         script = ENV.from_string(CFG["gcode_macro " + name]["gcode"]).render(
-            printer=self.printer, params={}, action_raise_error=fail)
+            printer=self.printer, params=params or {}, action_raise_error=fail)
         for line in script.splitlines():
             line = line.split("#", 1)[0].strip()
             if not line:
                 continue
             tokens = line.split()
             command = tokens[0]
+            fields = dict(token.split("=", 1) for token in tokens[1:] if "=" in token)
             if command.startswith("_TREED_PURGE_") or command in [
                     "_TREED_EDDY_CAPTURE_LIVE_Z_OFFSET", "_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET",
-                    "_TREED_UI_RESET_Z_OFFSET"]:
-                self.run(command)
+                    "_TREED_UI_RESET_Z_OFFSET", "_TREED_START_WAIT_PREHEAT_NOZZLE",
+                    "_TREED_START_NOZZLE_WIPE_RUN"]:
+                if self.run(command, stop_after=stop_after, params=fields):
+                    return True
                 continue
             self.commands.append(line)
-            fields = dict(token.split("=", 1) for token in tokens[1:] if "=" in token)
             gm = self.printer["gcode_move"]
             if command == "SET_GCODE_VARIABLE":
                 state = self.printer.get("gcode_macro " + fields["MACRO"])
@@ -90,6 +99,10 @@ class Harness:
                 self.printer["toolhead"]["homed_axes"] = ""
             elif command == "SET_PRESSURE_ADVANCE":
                 self.printer["extruder"]["pressure_advance"] = float(fields["ADVANCE"])
+            elif command == "SET_VELOCITY_LIMIT":
+                self.printer["toolhead"]["max_accel"] = float(fields["ACCEL"])
+            elif command in ["M109", "M190"]:
+                self.wait_positions.append((command, deepcopy(gm["gcode_position"])))
             elif command == "SAVE_GCODE_STATE":
                 self.saved[fields["NAME"]] = {key: value for key, value in gm.items() if key != "gcode_position"}
             elif command == "RESTORE_GCODE_STATE":
@@ -104,30 +117,36 @@ class Harness:
                     if axis in axes:
                         gm["gcode_position"][axis.lower()] = axes[axis]
                 self.moves.append((axes, deepcopy(gm["gcode_position"]), self.printer["extruder"]["pressure_advance"]))
+                self.move_accels.append(self.printer["toolhead"]["max_accel"])
             if line == stop_after:
-                return
+                return True
 
 
 # Блок 2: Одна линия, безопасные переезды и восстановление после отмены.
 class PurgeTests(unittest.TestCase):
-    def test_wipe_heats_then_runs_five_cycles_at_runtime_speed(self):
-        for velocity in [200, 600]:
-            with self.subTest(velocity=velocity):
+    def test_wipe_parks_before_heat_and_uses_half_runtime_limits(self):
+        for velocity, accel in [(200, 8000), (600, 25000)]:
+            with self.subTest(velocity=velocity, accel=accel):
                 h = Harness(pa=0.06)
-                h.printer["toolhead"]["max_velocity"] = velocity
+                h.printer["toolhead"].update(max_velocity=velocity, max_accel=accel)
                 h.run("_TREED_START_NOZZLE_WIPE")
-                self.assertLess(h.commands.index("M109 S175"), h.commands.index("G0 Z1 F1500"))
+                self.assertLess(h.commands.index("G0 X40 Y257.0 F6000"), h.commands.index("M109 S175.0"))
+                self.assertLess(h.commands.index("M109 S175.0"), h.commands.index("G0 Z0.15 F1500"))
+                self.assertEqual(h.wait_positions, [("M109", {"x": 40, "y": 257, "z": 1})])
                 self.assertEqual(h.moves[0][1]["z"], 1)
                 self.assertEqual(h.moves[1][1], {"x": 40, "y": 257, "z": 1})
                 strokes = [move for move in h.moves if "X" in move[0] and "Z" in move[0]]
                 self.assertEqual([axes for axes, _, _ in strokes],
-                                 [{"X": 100, "Z": 1, "F": velocity * 60},
-                                  {"X": 40, "Z": 0.3, "F": velocity * 60}] * 5)
+                                 [{"X": 100, "Z": 0.5, "F": velocity * 30},
+                                  {"X": 40, "Z": 0.15, "F": velocity * 30}] * 5)
+                self.assertEqual([limit for (axes, _, _), limit in zip(h.moves, h.move_accels)
+                                  if "X" in axes and "Z" in axes], [accel / 2] * 10)
                 self.assertTrue(all(pos["y"] == 257 for _, pos, _ in strokes))
                 self.assertEqual(h.moves[-1][1], {"x": 40, "y": 257, "z": 1})
                 self.assertFalse(any("E" in axes for axes, _, _ in h.moves))
                 self.assertEqual(h.printer["extruder"]["pressure_advance"], 0.06)
                 self.assertEqual(h.printer["gcode_move"]["speed_factor"], 0.73)
+                self.assertEqual(h.printer["toolhead"]["max_accel"], accel)
                 self.assertFalse(h.printer["gcode_move"]["absolute_coordinates"])
                 self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["state_saved"], 0)
 
@@ -149,28 +168,57 @@ class PurgeTests(unittest.TestCase):
                     h.run("_TREED_START_NOZZLE_WIPE")
                 self.assertEqual(h.commands, [])
 
-    def test_cancel_during_wipe_restores_speed_and_clears_pending_state(self):
-        h = Harness()
-        h.run("_TREED_START_NOZZLE_WIPE", stop_after="G1 X100 Z1 F36000.0")
-        self.assertEqual(h.printer["gcode_move"]["speed_factor"], 1)
-        self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["state_saved"], 1)
-        h.run("CANCEL_PRINT")
-        self.assertEqual(h.printer["gcode_move"]["speed_factor"], 0.73)
-        self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["state_saved"], 0)
+    def test_cancel_during_heat_or_wipe_restores_speed_and_accel(self):
+        for stop in ["M109 S175.0", "G1 X100 Z0.5 F18000.0"]:
+            with self.subTest(stop=stop):
+                h = Harness()
+                self.assertTrue(h.run("_TREED_START_NOZZLE_WIPE", stop_after=stop))
+                self.assertEqual(h.printer["gcode_move"]["speed_factor"], 1)
+                self.assertEqual(h.printer["toolhead"]["max_accel"], 25000 if stop.startswith("M109") else 12500)
+                self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["state_saved"], 1)
+                h.run("CANCEL_PRINT")
+                self.assertEqual(h.printer["gcode_move"]["speed_factor"], 0.73)
+                self.assertEqual(h.printer["toolhead"]["max_accel"], 25000)
+                self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["state_saved"], 0)
+                self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["saved_accel"], 0)
 
-    def test_start_preheats_to_175_and_wipes_between_homing_and_mesh(self):
+    def test_start_heats_early_waits_at_scraper_and_reprobes_after_bed_heat(self):
         h = Harness()
-        h.printer["gcode_macro _TREED_START_STATE"] = {"bed_temp": 60, "extruder_temp": 170}
+        h.printer["gcode_macro _TREED_START_STATE"].update(bed_temp=60, extruder_temp=170)
         h.printer["extruder"]["temperature"] = 20
         h.run("_TREED_START_MACHINE_PREP")
-        h.run("_TREED_START_PREHEAT")
-        self.assertEqual(h.commands.count("M104 S175.0"), 2)
-        self.assertIn("_TREED_START_WAIT_PREHEAT_NOZZLE TARGET=175.0", h.commands)
+        self.assertIn("M104 S175", h.commands)
+        self.assertIn("M140 S60.0", h.commands)
+        self.assertEqual(h.wait_positions, [])
+        h.run("_TREED_START_NOZZLE_WIPE")
+        h.run("_TREED_START_WAIT_BED")
+        self.assertEqual(h.wait_positions, [("M109", {"x": 40, "y": 257, "z": 1}),
+                                            ("M190", {"x": 40, "y": 257, "z": 1})])
         start = ENV.from_string(CFG["gcode_macro START_PRINT"]["gcode"]).render(rawparams="")
-        phases = ["_TREED_START_PREHEAT", "_TREED_HOME_ALL", "_TREED_START_NOZZLE_WIPE",
+        phases = ["_TREED_START_MACHINE_PREP", "_TREED_HOME_ALL", "_TREED_START_NOZZLE_WIPE", "_TREED_START_WAIT_BED", "G28 Z",
                   "_TREED_START_ADAPTIVE_MESH", "_TREED_PRINT_OFFSET_ENABLE", "_TREED_SMART_PARK",
                   "_TREED_START_FINAL_HEAT", "_TREED_LINE_PURGE"]
         self.assertEqual([start.index(phase) for phase in phases], sorted(start.index(phase) for phase in phases))
+
+    def test_optional_mesh_validates_before_start_and_requires_objects_only_when_enabled(self):
+        base = {"BED_TEMP": "60", "EXTRUDER_TEMP": "220"}
+        for mesh in [None, "0", "1", "2", "0.5", "nan"]:
+            for objects in [False, True]:
+                with self.subTest(mesh=mesh, objects=objects):
+                    h = Harness()
+                    if objects:
+                        h.printer["exclude_object"] = {"objects": [{"polygon": [[50, 50], [100, 50], [75, 100]]}]}
+                    params = {**base, **({"MESH": mesh} if mesh is not None else {})}
+                    valid = mesh == "0" or (objects and mesh in [None, "1"])
+                    if not valid:
+                        with self.assertRaises(RuntimeError):
+                            h.run("_TREED_START_PREP_STATE", params=params)
+                        self.assertEqual(h.commands, [])
+                        continue
+                    h.run("_TREED_START_PREP_STATE", params=params)
+                    self.assertIn("BED_MESH_CLEAR", h.commands)
+                    h.run("_TREED_START_ADAPTIVE_MESH")
+                    self.assertEqual(any(line.startswith("TREED_BED_MESH_CALIBRATE_EDDY") for line in h.commands), mesh != "0")
 
     def test_print_area_uses_travel_limits_and_clears_old_xy_offset(self):
         for origin, size in [(0, 245), (5, 220)]:
