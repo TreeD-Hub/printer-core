@@ -17,7 +17,7 @@
 
 - `test_docs_consistency.py` — порядок шагов loader, локальные ссылки документации и пометка об именах релизных артефактов для совместимости. Запуск `python -B tools/tests/test_docs_consistency.py`; без устройства.
 
-- `test_print_cancel.py` — отмена нагрева/охлаждения и остатка макроса, завершение текущего движения, cleanup и сброс сигнала для следующей задачи. Запуск `python -B tools/tests/test_print_cancel.py`; `PRINT_CANCEL_GCODE_SOURCE` задаёт путь к `gcode.py` закреплённого Klipper для проверки на его настоящем диспетчере. Без устройства.
+- `test_print_cancel.py` — отмена нагрева/охлаждения и остатка макроса, завершение текущего движения, cleanup, сброс сигнала и применение Z-поправки к действующей калибровке Eddy без перезапуска. Проверяет знак, накопление поправок, запрет во время печати и отказ без изменения рабочей кривой при ошибке подготовки записи. Запуск `python -B tools/tests/test_print_cancel.py`; `PRINT_CANCEL_GCODE_SOURCE` задаёт путь к `gcode.py` закреплённого Klipper, `PRINT_CANCEL_EDDY_SOURCE` — к `extras/probe_eddy_current.py` для проверки на настоящих классах калибровки и интерполяции. Без устройства и записи printer.cfg.
 
 - `test_stream_detect.py` — MJPEG, handshake, привязка ответа и отказ от устаревшего кадра; запуск `python -B tools/tests/test_stream_detect.py`. Без камеры и сервера, не оценивает модель.
 

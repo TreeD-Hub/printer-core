@@ -13,7 +13,7 @@ from jinja2 import Environment, StrictUndefined
 PROFILE = Path(__file__).resolve().parents[2] / "klipper/profiles/treed_v2_corexy_v1"
 CFG = configparser.ConfigParser(interpolation=None, strict=False)
 for filename in ["macros_start_purge.cfg", "macros_pause_resume.cfg", "macros_core.cfg",
-                 "macros_ui_tune.cfg", "probe_eddy_duo.cfg", "macros_print_flow.cfg", "geometry.cfg", "steppers.cfg"]:
+                 "macros_ui_tune.cfg", "probe_eddy_duo.cfg", "macros_print_flow.cfg", "macros_utils.cfg", "geometry.cfg", "steppers.cfg"]:
     CFG.read(PROFILE / filename, encoding="utf-8")
 ENV = Environment(variable_start_string="{", variable_end_string="}", undefined=StrictUndefined)
 
@@ -63,6 +63,8 @@ class Harness:
         self.wait_positions = []
         self.saved = {}
         self.pending_probe_offset = None
+        self.live_probe_offset = 0.0
+        self.staged_offsets = []
         self.saved_offsets = []
 
     def run(self, name, stop_after=None, params=None):
@@ -91,8 +93,12 @@ class Harness:
             elif command == "SET_GCODE_OFFSET":
                 gm["homing_origin"] = {**gm["homing_origin"],
                                        **{axis.lower(): float(fields[axis]) for axis in "XYZ" if axis in fields}}
-            elif command == "Z_OFFSET_APPLY_PROBE":
-                self.pending_probe_offset = gm["homing_origin"]["z"]
+            elif command in ["Z_OFFSET_APPLY_PROBE", "_TREED_EDDY_APPLY_LIVE_Z_OFFSET"]:
+                offset = float(fields["Z"]) if command == "_TREED_EDDY_APPLY_LIVE_Z_OFFSET" else gm["homing_origin"]["z"]
+                self.pending_probe_offset = self.live_probe_offset + offset
+                self.staged_offsets.append(offset)
+                if command == "_TREED_EDDY_APPLY_LIVE_Z_OFFSET":
+                    self.live_probe_offset = self.pending_probe_offset
             elif command == "SAVE_CONFIG":
                 self.saved_offsets.append(self.pending_probe_offset)
             elif command == "M84":
@@ -358,13 +364,14 @@ class PurgeTests(unittest.TestCase):
         h.run("_TREED_LINE_PURGE")
         self.assertEqual(h.moves[0][1], {"x": 10, "y": 5, "z": 0.4})
 
-    def test_cancel_saves_live_babystep_once_after_cleanup(self):
+    def test_cancel_stages_live_babystep_once_after_cleanup_without_restart(self):
         for offset in [-0.05, 0.01, 0.05]:
             with self.subTest(offset=offset):
                 h = Harness()
                 h.printer["gcode_move"]["homing_origin"]["z"] = offset
                 h.run("CANCEL_PRINT")
-                self.assertEqual(h.saved_offsets, [offset])
+                self.assertEqual(h.staged_offsets, [offset])
+                self.assertEqual(h.saved_offsets, [])
                 self.assertEqual(h.printer["gcode_move"]["homing_origin"]["z"], 0)
                 self.assertEqual(h.printer["gcode_macro _TREED_UI_TUNE_STATE"]["applied_babystep"], 0)
                 self.assertEqual(h.printer["gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE"]["has_pending"], 0)
@@ -372,16 +379,104 @@ class PurgeTests(unittest.TestCase):
                 capture = f"SET_GCODE_VARIABLE MACRO=_TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE VARIABLE=pending_z VALUE={offset}"
                 self.assertLess(h.commands.index("CANCEL_PRINT_BASE"), h.commands.index(capture))
                 self.assertLess(h.commands.index(capture), h.commands.index("SET_GCODE_OFFSET Z=0 MOVE=0"))
-                self.assertLess(h.commands.index("M400"), h.commands.index("SAVE_CONFIG"))
+                self.assertLess(h.commands.index("M400"), h.commands.index(f"_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z={offset}"))
+                self.assertNotIn(f"SET_GCODE_OFFSET Z={offset} MOVE=0", h.commands)
+                self.assertEqual(h.live_probe_offset, offset)
+                self.assertFalse(any(line.split()[0] in ["SAVE_CONFIG", "RESTART", "FIRMWARE_RESTART"]
+                                     for line in h.commands))
                 h.run("CANCEL_PRINT")
-                self.assertEqual(h.saved_offsets, [offset])
+                self.assertEqual(h.staged_offsets, [offset])
+                self.assertEqual(h.saved_offsets, [])
+                self.assertEqual(h.pending_probe_offset, offset)
+                self.assertEqual(h.live_probe_offset, offset)
+
+    def test_cancel_leaves_babystep_for_explicit_save_config(self):
+        h = Harness()
+        h.printer["gcode_move"]["homing_origin"]["z"] = 0.15
+        h.run("CANCEL_PRINT")
+        self.assertEqual(h.saved_offsets, [])
+        self.assertEqual(h.pending_probe_offset, 0.15)
+        h.printer["print_stats"]["state"] = "cancelled"
+        h.run("TREED_SAVE_CONFIG")
+        self.assertEqual(h.saved_offsets, [0.15])
+
+    def test_ui_babystep_rejects_non_numbers_before_commands(self):
+        for delta, current in [('nan', 0.), ('inf', 0.), ('-inf', 0.), ('invalid', 0.),
+                               ('0.01', math.nan), ('0.05', 0.99)]:
+            with self.subTest(delta=delta, current=current):
+                h = Harness()
+                h.printer['print_stats']['state'] = 'printing'
+                h.printer['gcode_move']['homing_origin']['z'] = current
+                h.printer['gcode_macro _TREED_UI_TUNE_STATE'].update(babystep_total_min=-1., babystep_total_max=1.)
+                with self.assertRaises(RuntimeError):
+                    h.run('TREED_UI_ADJUST_Z_OFFSET', params={'DELTA': delta})
+                self.assertEqual(h.commands, [])
+
+    def test_ui_babystep_accepts_valid_range_boundaries(self):
+        for delta, current, expected in [('0.05', 0.95, 1.), ('-0.05', -0.95, -1.)]:
+            h = Harness()
+            h.printer['print_stats']['state'] = 'printing'
+            h.printer['gcode_move']['homing_origin']['z'] = current
+            h.printer['gcode_macro _TREED_UI_TUNE_STATE'].update(babystep_total_min=-1., babystep_total_max=1.)
+            h.run('TREED_UI_ADJUST_Z_OFFSET', params={'DELTA': delta})
+            self.assertIn(f'SET_GCODE_OFFSET Z_ADJUST={delta} MOVE=1 MOVE_SPEED=5', h.commands)
+            self.assertEqual(h.printer['gcode_macro _TREED_UI_TUNE_STATE']['applied_babystep'], expected)
+
+    def test_start_rejects_unapplied_offset_before_resetting_state(self):
+        h = Harness()
+        h.printer['gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE'].update(has_pending=1, pending_z=0.15)
+        with self.assertRaisesRegex(RuntimeError, 'неприменённая Z-поправка'):
+            h.run('_TREED_START_PREP_STATE', params={'BED_TEMP': '60', 'EXTRUDER_TEMP': '210', 'MESH': '0'})
+        self.assertEqual(h.commands, [])
+        h.run('CANCEL_PRINT')
+        self.assertEqual(h.live_probe_offset, 0.15)
+        h.run('_TREED_START_PREP_STATE', params={'BED_TEMP': '60', 'EXTRUDER_TEMP': '210', 'MESH': '0'})
+        self.assertIn('BED_MESH_CLEAR', h.commands)
+
+    def test_captured_offset_at_threshold_is_cleared_without_applying(self):
+        for offset in (-0.005, 0.005):
+            h = Harness()
+            state = h.printer['gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE']
+            state.update(has_pending=1, pending_z=offset)
+            h.run('_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET', params={'SAVE': '0'})
+            self.assertEqual(h.staged_offsets, [])
+            self.assertEqual(state['has_pending'], 0)
+            self.assertEqual(state['pending_z'], 0.)
+
+    def test_next_print_keeps_cancelled_correction_and_adds_only_new_babystep(self):
+        h = Harness()
+        h.printer["gcode_move"]["homing_origin"]["z"] = 0.15
+        h.run("CANCEL_PRINT")
+        h.run("_TREED_UI_RESET_Z_OFFSET")
+        self.assertEqual(h.live_probe_offset, 0.15)
+        self.assertEqual(h.printer["gcode_move"]["homing_origin"]["z"], 0)
+        h.printer["gcode_move"]["homing_origin"]["z"] = -0.05
+        h.run("CANCEL_PRINT")
+        self.assertAlmostEqual(h.live_probe_offset, 0.10)
+        self.assertEqual(h.staged_offsets, [0.15, -0.05])
+        self.assertEqual(h.saved_offsets, [])
+        h.printer["gcode_move"]["homing_origin"]["z"] = 0.02
+        h.run("END_PRINT")
+        self.assertEqual(h.staged_offsets, [0.15, -0.05, 0.02])
+        self.assertEqual(len(h.saved_offsets), 1)
+        self.assertAlmostEqual(h.saved_offsets[0], 0.12)
+
+    def test_autosave_rejects_invalid_save_flag_before_staging(self):
+        for save in ["2", "invalid"]:
+            with self.subTest(save=save):
+                h = Harness()
+                h.printer["gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE"].update(has_pending=1, pending_z=0.05)
+                with self.assertRaisesRegex(RuntimeError, "SAVE должен быть 0 или 1"):
+                    h.run("_TREED_EDDY_APPLY_CAPTURED_Z_OFFSET", params={"SAVE": save})
+                self.assertEqual(h.commands, [])
 
     def test_cancel_captures_babystep_before_purge_state_restore(self):
         h = Harness()
         h.run("_TREED_LINE_PURGE", stop_after="M221 S100")
         h.printer["gcode_move"]["homing_origin"] = {"z": 0.05}
         h.run("CANCEL_PRINT")
-        self.assertEqual(h.saved_offsets, [0.05])
+        self.assertEqual(h.staged_offsets, [0.05])
+        self.assertEqual(h.saved_offsets, [])
         self.assertEqual(h.printer["gcode_macro _TREED_START_PURGE_CFG"]["state_saved"], 0)
 
     def test_cancel_preserves_offset_already_captured_by_end_print(self):
@@ -389,7 +484,8 @@ class PurgeTests(unittest.TestCase):
         h.printer["toolhead"]["homed_axes"] = "xy"
         h.printer["gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE"].update(has_pending=1, pending_z=0.03)
         h.run("CANCEL_PRINT")
-        self.assertEqual(h.saved_offsets, [0.03])
+        self.assertEqual(h.staged_offsets, [0.03])
+        self.assertEqual(h.saved_offsets, [])
         self.assertFalse(h.moves)
 
     def test_cancel_skips_save_without_trustworthy_or_significant_offset(self):
@@ -399,6 +495,7 @@ class PurgeTests(unittest.TestCase):
                 h.printer["toolhead"]["homed_axes"] = homed
                 h.printer["gcode_move"]["homing_origin"]["z"] = offset
                 h.run("CANCEL_PRINT")
+                self.assertEqual(h.staged_offsets, [])
                 self.assertEqual(h.saved_offsets, [])
                 self.assertIn("CANCEL_PRINT_BASE", h.commands)
                 self.assertEqual(h.printer["gcode_move"]["homing_origin"]["z"], 0)

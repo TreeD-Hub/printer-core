@@ -2,6 +2,8 @@
 # через штатный CANCEL_PRINT, включая очистку SD-задачи и повторный запуск.
 # Контур: read-only, без устройства; PRINT_CANCEL_GCODE_SOURCE подключает
 # настоящий gcode.py закреплённого Klipper вместо локальной модели диспетчера.
+import ast
+import bisect
 import importlib.util
 import os
 from pathlib import Path
@@ -29,13 +31,15 @@ class Command:
     def get_command(self):
         return self.name
 
-    def get(self, key):
+    def get(self, key, default=None):
         if key not in self.params:
+            if default is not None:
+                return default
             raise self.error('Missing ' + key)
         return self.params[key]
 
-    def get_float(self, key, default, above=None):
-        value = float(self.params.get(key, default))
+    def get_float(self, key, default=None, above=None):
+        value = float(self.get(key, default))
         if above is not None and value <= above:
             raise self.error('Invalid ' + key)
         return value
@@ -73,6 +77,37 @@ class GCode:
     def respond_raw(self, _message):
         pass
 
+    def respond_info(self, _message):
+        pass
+
+
+class Calibration:
+    def __init__(self, config):
+        self.printer = config.get_printer()
+        self._load_calibration([(2., 100.), (1., 200.), (0., 300.)])
+
+    def verify_calibrated(self):
+        if len(self.cal_freqs) <= 2:
+            raise self.printer.command_error('Must calibrate probe_eddy_current first')
+
+    def get_calibration(self):
+        return list(self.cal_freqs), list(self.cal_zpos)
+
+    def _load_calibration(self, pairs):
+        ordered = sorted((freq, height) for height, freq in pairs)
+        self.cal_freqs = [freq for freq, _height in ordered]
+        self.cal_zpos = [height for _freq, height in ordered]
+
+
+# Проверка тех же команд и интерполяции на классах закреплённого Klipper.
+eddy_source = os.environ.get('PRINT_CANCEL_EDDY_SOURCE')
+if eddy_source:
+    tree = ast.parse(Path(eddy_source).read_text(encoding='utf-8'))
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)
+               and node.name in ('DummyDriftCompensation', 'EddyCalibration', 'EddyCalibrationTool')]
+    namespace = {'bisect': bisect, 'OUT_OF_RANGE': 99.9}
+    exec(compile(ast.Module(body=classes, type_ignores=[]), eddy_source, 'exec'), namespace)
+    Calibration = namespace['EddyCalibration']
 
 gcode_module = SimpleNamespace(CommandError=CommandError)
 source = os.environ.get('PRINT_CANCEL_GCODE_SOURCE')
@@ -124,6 +159,7 @@ class Heater:
 
 
 class Rig:
+    command_error = CommandError
     # Блок 2: Модель SD-печати с реальной конкуренцией за G-code mutex.
     def __init__(self):
         self.reactor = Reactor()
@@ -132,6 +168,10 @@ class Rig:
         self.state = 'printing'
         self.from_sd = False
         self.cleanup_error = False
+        self.cancel_reason = None
+        self.staging_error = False
+        self.pending_calibration = None
+        self.move_waits = 0
         self.move_entered = threading.Event()
         self.move_release = threading.Event()
         self.heater = Heater()
@@ -142,23 +182,44 @@ class Rig:
             heaters={'heater_bed': self.heater}, available_sensors=['heater_bed'],
             turn_off_all_heaters=self.turn_off, _get_temp=lambda _time: 'T:25',
             _wait_for_temperature=lambda _heater: None)
+        self.origin = SimpleNamespace(z=0.)
+        config = SimpleNamespace(get_printer=lambda: self, error=ValueError,
+                                 get=lambda _key, _default=None: '2:100,1:200,0:300')
+        self.calibration = Calibration(config)
         self.objects = {'heaters': self.heaters, 'pause_resume': self.pause,
                         'virtual_sdcard': self.sd,
-                        'toolhead': SimpleNamespace(get_last_move_time=lambda: 0.)}
+                        'toolhead': SimpleNamespace(get_last_move_time=lambda: 0., wait_moves=self.wait_moves),
+                        'print_stats': SimpleNamespace(get_status=lambda _time: {'state': self.state}),
+                        'gcode_move': SimpleNamespace(get_status=lambda: {'homing_origin': self.origin}),
+                        'probe_eddy_current btt_eddy': SimpleNamespace(calibration=self.calibration),
+                        'configfile': SimpleNamespace(set=self.stage_calibration)}
         self.gcode = GCode(self)
+        self.command_error = self.gcode.error
         self.objects['gcode'] = self.gcode
         for name in ('M109', 'M190', 'TEMPERATURE_WAIT', 'CANCEL_PRINT',
                      'TURN_OFF_HEATERS', 'CANCEL_PRINT_BASE', 'RESET', 'PURGE',
-                     'START_PRINT', 'BLOCK_MOVE', 'NOOP', 'FAIL'):
+                     'START_PRINT', 'BLOCK_MOVE', 'NOOP', 'FAIL', 'Z_OFFSET_APPLY_PROBE', 'SET_GCODE_OFFSET'):
             self.gcode.register_command(name, self.dispatch)
-        config = SimpleNamespace(get_printer=lambda: self, error=ValueError)
+        if eddy_source:
+            self.eddy_tool = namespace['EddyCalibrationTool'].__new__(namespace['EddyCalibrationTool'])
+            self.eddy_tool.printer = self
+            self.eddy_tool.name = 'probe_eddy_current btt_eddy'
+            self.eddy_tool.calibration = self.calibration
         self.extra = module.TreedPrintCancel(config)
         self.extra._connect()
         if source:
             self.gcode._handle_ready()
 
-    def lookup_object(self, name):
-        return self.objects[name]
+    def lookup_object(self, name, default=None):
+        return self.objects.get(name, default)
+
+    def wait_moves(self):
+        self.move_waits += 1
+
+    def stage_calibration(self, _section, _option, value):
+        if self.staging_error:
+            raise self.gcode.error('Ошибка подготовки configfile')
+        self.pending_calibration = value
 
     def get_reactor(self):
         return self.reactor
@@ -191,6 +252,7 @@ class Rig:
         elif name == 'START_PRINT':
             self.gcode.run_script_from_command('M190\nPURGE')
         elif name == 'CANCEL_PRINT':
+            self.cancel_reason = command.get('REASON', 'operator')
             if self.cleanup_error:
                 raise self.gcode.error('Ошибка cleanup')
             self.gcode.run_script_from_command('TURN_OFF_HEATERS\nCANCEL_PRINT_BASE\nRESET')
@@ -206,8 +268,17 @@ class Rig:
                 raise self.gcode.error('Движение не завершено')
         elif name == 'FAIL':
             raise self.gcode.error('Обычная ошибка команды')
+        elif name == 'Z_OFFSET_APPLY_PROBE':
+            if eddy_source:
+                self.eddy_tool.cmd_Z_OFFSET_APPLY_PROBE(command)
+            else:
+                freqs, heights = self.calibration.get_calibration()
+                self.stage_calibration('', '', ','.join('%.6f:%.3f' % (height - self.origin.z, freq)
+                                                       for height, freq in zip(heights, freqs)))
+        elif name == 'SET_GCODE_OFFSET':
+            self.origin.z = command.get_float('Z')
 
-    def cancel_wait(self, script, event=None):
+    def cancel_wait(self, script, event=None, cancel_script='CANCEL_PRINT'):
         errors = []
 
         def run():
@@ -227,7 +298,7 @@ class Rig:
 
         def cancel():
             try:
-                self.gcode.run_script('CANCEL_PRINT')
+                self.gcode.run_script(cancel_script)
             except BaseException as exc:
                 errors.append(exc)
             finally:
@@ -240,6 +311,18 @@ class Rig:
 
 class PrintCancelTests(unittest.TestCase):
     # Блок 3: Прерывание, валидация и восстановление после отмены.
+    def test_cancel_with_reason_interrupts_wait_and_preserves_parameter(self):
+        rig = Rig()
+        worker, cancel, done, errors = rig.cancel_wait('M190\nPURGE',
+                                                     cancel_script='CANCEL_PRINT REASON=spaghetti')
+        worker.join(3.)
+        cancel.join(3.)
+        self.assertTrue(done.is_set())
+        self.assertEqual(errors, [])
+        self.assertEqual(rig.cancel_reason, 'spaghetti')
+        self.assertEqual(rig.state, 'cancelled')
+        self.assertNotIn('PURGE', rig.commands)
+
     def test_cancel_interrupts_heating_cooling_and_nested_macro(self):
         scripts = ('M109\nPURGE', 'M190\nPURGE', 'START_PRINT\nPURGE',
                    'TEMPERATURE_WAIT SENSOR=heater_bed MINIMUM=200\nPURGE',
@@ -315,6 +398,76 @@ class PrintCancelTests(unittest.TestCase):
         with self.assertRaises(rig.gcode.error):
             rig.gcode.run_script('FAIL\nNOOP')
         self.assertNotIn('NOOP', rig.commands)
+
+    # Блок 4: Следующий probe использует новую кривую, запись на диск отложена.
+    def test_cancelled_offset_updates_live_and_pending_calibration_once(self):
+        for offset in (-0.15, 0.15):
+            with self.subTest(offset=offset):
+                rig = Rig()
+                rig.gcode.run_script('CANCEL_PRINT')
+                rig.origin.z = 0.03
+                rig.gcode.run_script('_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z=%s' % offset)
+                self.assertEqual(rig.origin.z, 0.03)
+                self.assertEqual(rig.calibration.cal_freqs, [100., 200., 300.])
+                self.assertEqual(rig.calibration.cal_zpos, [2. - offset, 1. - offset, -offset])
+                pending = sorted([list(map(float, pair.split(':')))
+                                  for pair in rig.pending_calibration.split(',')], key=lambda pair: pair[1])
+                self.assertEqual(pending, [[2. - offset, 100.], [1. - offset, 200.], [-offset, 300.]])
+                # Следующий G28 сбросит live offset, но сохранит изменённую кривую.
+                rig.origin.z = 0.
+                rig.gcode.run_script('_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z=0')
+                self.assertEqual(rig.commands.count('Z_OFFSET_APPLY_PROBE'), 1)
+                self.assertEqual(rig.move_waits, 1)
+                if eddy_source:
+                    self.assertAlmostEqual(rig.calibration.freq_to_height(150.), 1.5 - offset)
+                self.assertFalse(rig.shutdowns)
+
+    def test_offsets_from_successive_prints_accumulate(self):
+        rig = Rig()
+        rig.gcode.run_script('CANCEL_PRINT')
+        for offset in (0.15, -0.05):
+            rig.gcode.run_script('_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z=%s' % offset)
+        for actual, expected in zip(rig.calibration.cal_zpos, (1.9, 0.9, -0.1)):
+            self.assertAlmostEqual(actual, expected)
+        pending = sorted([list(map(float, pair.split(':')))
+                          for pair in rig.pending_calibration.split(',')], key=lambda pair: pair[1])
+        self.assertEqual(pending, [[1.9, 100.], [0.9, 200.], [-0.1, 300.]])
+
+    def test_live_offset_rejects_active_print_and_invalid_state_before_staging(self):
+        for state, current_file in (('printing', None), ('paused', None), ('cancelled', object())):
+            rig = Rig()
+            rig.state, rig.sd.current_file = state, current_file
+            rig.origin.z = 0.15
+            with self.assertRaises(rig.gcode.error):
+                rig.gcode.run_script('_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z=0.15')
+            self.assertIsNone(rig.pending_calibration)
+            self.assertEqual(rig.calibration.cal_zpos, [2., 1., 0.])
+        for invalid in ('nan', 'inf', '-inf', 'uncalibrated', 'incompatible'):
+            rig = Rig()
+            rig.gcode.run_script('CANCEL_PRINT')
+            rig.origin.z = 0.15
+            if invalid == 'uncalibrated':
+                rig.calibration._load_calibration([])
+            elif invalid == 'incompatible':
+                rig.calibration._load_calibration = None
+            else:
+                rig.origin.z = float(invalid)
+            before = rig.calibration.get_calibration()
+            with self.assertRaises(rig.gcode.error):
+                rig.gcode.run_script('_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z=%s' % rig.origin.z)
+            self.assertIsNone(rig.pending_calibration)
+            self.assertEqual(rig.calibration.get_calibration(), before)
+
+    def test_staging_failure_leaves_live_calibration_unchanged(self):
+        rig = Rig()
+        rig.gcode.run_script('CANCEL_PRINT')
+        rig.origin.z = 0.03
+        rig.staging_error = True
+        with self.assertRaises(rig.gcode.error):
+            rig.gcode.run_script('_TREED_EDDY_APPLY_LIVE_Z_OFFSET Z=0.15')
+        self.assertEqual(rig.origin.z, 0.03)
+        self.assertIsNone(rig.pending_calibration)
+        self.assertEqual(rig.calibration.cal_zpos, [2., 1., 0.])
 
 
 if __name__ == '__main__':
