@@ -1,5 +1,6 @@
 """Проверка путей камеры в изолированной установке; без сервисов и устройства."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -17,7 +18,7 @@ class CameraPathsTest(unittest.TestCase):
         self.bin.mkdir(parents=True)
         source = Path(__file__).resolve().parents[2] / "runtime-scripts/treed-cam"
         self.marker = self.root / "session_marker"
-        for name in ("cam_env.sh", "session_start.sh", "snapshot.sh"):
+        for name in ("cam_env.sh", "session_start.sh", "session_stop.sh", "session_metadata.py", "snapshot.sh"):
             content = (source / name).read_text(encoding="utf-8")
             content = content.replace("/tmp/treed_cam_session_dir", str(self.marker))
             (self.bin / name).write_text(content, encoding="utf-8")
@@ -47,6 +48,46 @@ class CameraPathsTest(unittest.TestCase):
         self.env["PI_HOME"] = str(override)
         self.run_script("session_start.sh", "sample.gcode")
         self.assertEqual(Path(self.marker.read_text().strip()).parent, override / "treed/cam/prints")
+
+    def test_repeat_sessions_and_stop_preserve_full_filename(self):
+        filename = "folder with spaces/part test.gcode"
+        self.run_script("session_start.sh", filename)
+        first = Path(self.marker.read_text().strip())
+        self.run_script("session_stop.sh")
+        first_metadata = json.loads((first / "session.json").read_text(encoding="utf-8"))
+        self.assertEqual(first_metadata["filename"], filename)
+        self.assertTrue(first_metadata["closed"])
+        self.run_script("session_stop.sh")
+        self.assertEqual(json.loads((first / "session.json").read_text(encoding="utf-8")), first_metadata)
+        self.run_script("session_start.sh", filename)
+        second = Path(self.marker.read_text().strip())
+        self.assertNotEqual(first, second)
+        latest = json.loads((second.parent / ".latest_session").read_text())
+        self.assertEqual(latest["sessionId"], second.name)
+
+    def test_delayed_stop_cannot_close_or_remove_new_session(self):
+        self.run_script("session_start.sh", "101:part.gcode")
+        first = Path(self.marker.read_text().strip())
+        self.run_script("session_start.sh", "202:part.gcode")
+        second = Path(self.marker.read_text().strip())
+
+        self.run_script("session_stop.sh", "101")
+        self.assertEqual(Path(self.marker.read_text().strip()), second)
+        self.assertFalse(json.loads((second / "session.json").read_text())["closed"])
+
+        self.run_script("session_stop.sh", "202")
+        self.assertFalse(self.marker.exists())
+        self.assertTrue(json.loads((second / "session.json").read_text())["closed"])
+
+    def test_failed_metadata_invalidates_prior_same_filename(self):
+        self.run_script("session_start.sh", "part.gcode")
+        self.run_script("session_stop.sh")
+        (self.bin / "session_metadata.py").write_text("raise SystemExit(1)\n")
+        self.run_script("session_start.sh", "part.gcode")
+        session = Path(self.marker.read_text().strip())
+        self.assertFalse((session.parent / ".latest_session").exists())
+        self.assertTrue(Path(str(self.marker) + ".feedback-unavailable").exists())
+        self.assertEqual(len(list(session.glob("*.jpg"))), 1)
 
     def test_runtime_env_uses_install_home(self):
         config = self.home / "treed/cam/config"
