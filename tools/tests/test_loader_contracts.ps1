@@ -291,4 +291,43 @@ Assert-Contains "loader/steps/crowsnest-webcam.sh" 'if \[ -f "\$\{MOONRAKER_ASVC
 Assert-Contains "loader/README.md" 'TREED_LOADER_MODE' "loader docs describe apply/check mode"
 Assert-Contains "loader/steps/README.md" 'TREED_LOADER_MODE' "loader step docs describe apply/check mode"
 
+# Блок: проверка настоящего JSON-валидатора без restart или runtime-операций.
+$MoonrakerLoader = Read-RepoFile "loader/steps/moonraker-config.sh"
+$ComponentCheck = [regex]::Match($MoonrakerLoader, '(?s)if ! "\$\{MOONRAKER_ENV_DIR\}/bin/python" - "\$\{tmp\}" "\$\{required_components\[@\]\}" <<''PY''\r?\n(?<code>.*?)\r?\nPY\r?\n')
+if (-not $ComponentCheck.Success) { throw "FAIL: loader must parse the server/info component lists" }
+$CheckerBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($ComponentCheck.Groups['code'].Value))
+$ComponentFixtures = @'
+import base64
+import io
+import json
+import sys
+from unittest.mock import patch
+
+checker = base64.b64decode("__CHECKER__").decode("utf-8")
+required = ["treed_resonance", "treed_host_network"]
+fixtures = [
+    ({"result": {"components": required, "failed_components": []}}, True),
+    ({"result": {"components": ["treed_host_network"], "failed_components": ["treed_resonance"]}}, False),
+    ({"result": {"components": required, "failed_components": ["treed_resonance"]}}, False),
+    ({"result": {"components": required}}, False),
+    ({"result": {"components": "treed_resonance", "failed_components": []}}, False),
+    ({"result": {"components": [], "failed_components": []}}, False),
+    (None, False),
+    ("{broken JSON", False),
+]
+for payload, expected in fixtures:
+    with patch.object(sys, "argv", ["checker", "info.json", *required]):
+        with patch("builtins.open", return_value=io.StringIO(payload if isinstance(payload, str) else json.dumps(payload))):
+            try:
+                exec(compile(checker, "loader_component_check", "exec"), {})
+                accepted = True
+            except SystemExit:
+                accepted = False
+    assert accepted == expected, (payload, accepted, expected)
+print("PASS: Moonraker component list fixtures")
+'@
+$ComponentFixtures = $ComponentFixtures.Replace('__CHECKER__', $CheckerBase64)
+$ComponentFixtures | & python -B -
+if ($LASTEXITCODE -ne 0) { throw "FAIL: Moonraker component list fixtures" }
+
 Write-Output "PASS: loader contracts"

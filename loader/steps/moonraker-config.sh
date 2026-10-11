@@ -145,7 +145,7 @@ restart_and_verify_moonraker_components() {
   local tmp=""
   local code=""
   local attempt=""
-  local component=""
+  local required_components=(treed_shell_command treed_detection treed_print_feedback treed_host_network treed_resonance treed_filament_sensor treed_update treed_recovery)
   local retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
 
   systemctl restart moonraker.service
@@ -163,13 +163,32 @@ restart_and_verify_moonraker_components() {
     rm -f "${tmp}"
     exit 1
   fi
-  for component in treed_shell_command treed_detection treed_host_network treed_filament_sensor treed_update treed_recovery; do
-    if ! grep -Fq "\"${component}\"" "${tmp}"; then
-      log_error "Moonraker component is not loaded: ${component}"
-      rm -f "${tmp}"
-      exit 1
-    fi
-  done
+  # Имя в failed_components не подтверждает загрузку; проверяем поля штатного JSON API.
+  if ! "${MOONRAKER_ENV_DIR}/bin/python" - "${tmp}" "${required_components[@]}" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        result = json.load(source)["result"]
+    loaded = result["components"]
+    failed = result["failed_components"]
+    if not all(isinstance(items, list) and all(isinstance(item, str) for item in items)
+               for items in (loaded, failed)):
+        raise ValueError("invalid component lists")
+except (OSError, KeyError, TypeError, ValueError) as error:
+    raise SystemExit(f"Invalid Moonraker server/info: {error}")
+
+required = set(sys.argv[2:])
+unavailable = (required - set(loaded)) | (required & set(failed))
+if unavailable:
+    raise SystemExit("Moonraker components are not loaded: " + ", ".join(sorted(unavailable)))
+PY
+  then
+    log_error "Moonraker required component verification failed"
+    rm -f "${tmp}"
+    exit 1
+  fi
   rm -f "${tmp}"
   log_info "moonraker-config: all required TreeD components loaded"
 }

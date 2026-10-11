@@ -8,10 +8,12 @@
 
 - `treed_shell_command.py`
 - `treed_host_network.py`
+- `treed_resonance.py`
 - `treed_filament_sensor.py`
 - `treed_update.py`
 - `treed_recovery.py`
 - `treed_detection.py`
+- `treed_print_feedback.py`
 
 ## Назначение `treed_shell_command.py`
 
@@ -31,6 +33,27 @@
 - `scan` ожидает завершения `nmcli --rescan yes`, сохраняет UTF-8 SSID и исключает скрытые сети без имени;
 - возвращает raw `HostNetworkStatus` без Moonraker `result` wrapper;
 - не содержит UI-правила фильтрации, сортировки или выбора сети.
+
+## Назначение `treed_resonance.py`
+
+- `GET /server/treed/resonances?mode=full|light` использует штатную авторизацию и `result` wrapper Moonraker;
+- возвращает `{mode, axes: {x, y}}`; ось равна `null`, если файла нет, иначе содержит исходный `csv` и `revision` (mtime в наносекундах и SHA-256 содержимого);
+- читает только `/tmp/calibration_data_x_treed_full.csv`, `/tmp/calibration_data_y_treed_full.csv`, `/tmp/calibration_data_x_treed_light_x.csv` и `/tmp/calibration_data_y_treed_light_y.csv`, которые создают штатные макросы input shaper;
+- отклоняет ссылки, специальные файлы, пустой или некорректный CSV, файлы больше 2 МиБ и изменения во время чтения; ошибки доступны клиенту, отсутствующая ось не подменяется примером;
+- не запускает команды и не сохраняет настройки. CSV в `/tmp` исчезают после перезагрузки; revision сравнивают до и после своего запуска, чтобы не показать прежний результат как новый.
+
+Для live-графиков нужны этот компонент и секция `[treed_resonance]` в `base/00-core.conf`. Loader доставляет модуль и проверяет его загрузку; до обновления backend клиент сообщает о недоступном API. Формат имён и столбцов соответствует [закреплённой версии Klipper](https://github.com/Klipper3d/klipper/blob/ce7002bedf37e938bb483572949f3703ac6476cb/klippy/extras/resonance_tester.py). Офлайн-проверка чтения и API: `python -B tools/tests/test_treed_resonance.py`.
+
+## Назначение `treed_print_feedback.py`
+
+- `GET/POST /server/treed/print-feedback` использует штатную авторизацию Moonraker и возвращает raw `{sessionId, filename, rating}`; `rating` равен `good`, `bad` или `null`;
+- GET принимает полный относительный `filename` и доступен только при совпадающем `print_stats.filename`, состоянии `complete`, выключенной камере, отсутствии активного marker и совпадающем токене runtime-камеры с `session.json`;
+- `frames_root` совпадает с `${PI_HOME}/treed/cam/prints`. GET читает `.latest_session` и проверяет закрытый `session.json` и наличие сохранённых `img_*.jpg`; каталог по basename не угадывается. Старый latest не открывает оценку после новой печати того же файла, если камера не смогла обновить метаданные;
+- POST принимает `{sessionId, filename, rating}` и атомарно сохраняет `rating.json` у явно выбранной закрытой сессии. Начало следующей печати не переадресует оценку на новую сессию;
+- ссылки, выход из `frames_root`, неподходящий filename, незакрытая сессия и некорректный JSON возвращают видимую ошибку. Сбой записи сохраняет прежний `rating.json`;
+- `/tmp/treed_cam_session_dir.feedback-unavailable` блокирует GET после сбоя начала метаданных, пока следующий успешный старт не снимет marker. Сессии, запущенные вручную без токена, можно использовать для снимков, но оценить их через этот API нельзя. Старые сессии без `session.json` также недоступны.
+
+Компонент включён секцией `[treed_print_feedback]` в `base/00-core.conf`; loader доставляет модуль и проверяет его загрузку. Кадры остаются без преобразования. Проверка без устройства: `python -B tools/tests/test_treed_print_feedback.py`.
 
 ## Назначение `treed_filament_sensor.py`
 
