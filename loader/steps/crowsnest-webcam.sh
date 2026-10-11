@@ -113,17 +113,19 @@ resolve_cam_device() {
 
 skip_webcam_deploy() {
   local reason="${1:-camera is not resolved}"
+  local removed_fragment=0
 
   # Если webcam-контур недоступен, очищаем ранее развернутые runtime-артефакты.
   log_warn "crowsnest-webcam: ${reason}, skipping webcam deployment (set TREED_CAMERA_REQUIRED=1 for fail-fast)"
 
   if [ -f "${MOONRAKER_WEBCAM_FRAGMENT}" ]; then
-    rm -f "${MOONRAKER_WEBCAM_FRAGMENT}"
+    rm -f "${MOONRAKER_WEBCAM_FRAGMENT}" || return $?
+    removed_fragment=1
     log_info "Removed stale Moonraker webcam fragment: ${MOONRAKER_WEBCAM_FRAGMENT}"
   fi
 
   if [ -f "${CROWSNEST_CONF}" ]; then
-    rm -f "${CROWSNEST_CONF}"
+    rm -f "${CROWSNEST_CONF}" || return $?
     log_info "Removed stale crowsnest config: ${CROWSNEST_CONF}"
   fi
 
@@ -132,7 +134,7 @@ skip_webcam_deploy() {
     log_info "Stopped crowsnest.service (no camera deployed)"
   fi
 
-  if systemctl cat moonraker.service >/dev/null 2>&1; then
+  if [ "${removed_fragment}" = "1" ] && systemctl cat moonraker.service >/dev/null 2>&1; then
     systemctl restart moonraker.service || true
     log_info "Restarted moonraker.service after skipping webcam deployment"
   fi

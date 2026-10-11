@@ -53,8 +53,19 @@ TREED_UI_ENV_FILE="${TREED_UI_ENV_FILE:-/etc/default/treed-ui}"
 TREED_SHELL_START_TIMEOUT="${TREED_SHELL_START_TIMEOUT:-45}"
 UI_MODE="$(resolve_treed_ui_mode ts)"
 BROWSER_BIN=""
+APT_INDEX_UPDATED=0
 
 # Блок 3: Helper-функции system package/runtime.
+ensure_apt_index() {
+  if [ "${APT_INDEX_UPDATED}" = "1" ]; then
+    return 0
+  fi
+
+  # Неудачный optional refresh не отменяет обязательную повторную попытку.
+  apt_update_noninteractive || return $?
+  APT_INDEX_UPDATED=1
+}
+
 package_installed() {
   local package="$1"
 
@@ -76,7 +87,7 @@ install_missing_packages() {
     return 0
   fi
 
-  apt_update_noninteractive
+  ensure_apt_index || return $?
   apt_get_noninteractive install "${missing[@]}"
 }
 
@@ -85,7 +96,7 @@ install_optional_unclutter() {
     return 0
   fi
 
-  if ! apt_update_noninteractive; then
+  if ! ensure_apt_index; then
     log_warn "treed-shell-install: optional package update failed, continuing"
     return 0
   fi
@@ -121,7 +132,7 @@ ensure_browser_runtime() {
     return 0
   fi
 
-  apt_update_noninteractive
+  ensure_apt_index || return $?
   if apt_get_noninteractive install chromium; then
     BROWSER_BIN="$(resolve_browser_bin)"
     log_info "treed-shell-install: installed browser ${BROWSER_BIN}"
