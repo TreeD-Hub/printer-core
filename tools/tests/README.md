@@ -5,6 +5,10 @@
 
 ## Состав
 
+- `test_treed_calibration.py` — XY geometry/idle guards, атомарная запись overrides,
+  height stamp после restart, подача/cleanup и сохранение rotation_distance.
+  Запуск `python -B tools/tests/test_treed_calibration.py`; без Klipper и устройства.
+
 - `test_driver_modes.py` — офлайн-модель допуска XYZ, частичных SPI-отказов и отката, сохранения, профилей обдува и доставки. Запуск `python -B tools/tests/test_driver_modes.py`; аппаратную приёмку не заменяет.
 
 - `test_loader_progress.py` — настоящий apply-цикл на временных шагах: TTY-шкала/спиннер, сохранение логов, счётчики, required fail-fast/exit status, optional skip/failure и режим `off`. Запуск на Linux/WSL: `python3 -B tools/tests/test_loader_progress.py`; без установки пакетов, сервисов или подключения к устройству.
