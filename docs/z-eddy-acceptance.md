@@ -32,18 +32,26 @@ runner их не меняет, а сохраняет снимки состоян
   Допустим START_Z > 0 и не выше bottom-clearance. Повторных попыток при ошибке нет.
 - `TREED_EDDY_ACCEPTANCE_HOME CONFIRM=1`: требует известные XYZ; очищает runtime
   mesh/offsets и выполняет штатные coarse/probe/final_z0 с отметками стадий.
-- `TREED_EDDY_ACCEPTANCE_MESH CONFIRM=1`: требует известные XYZ; один обычный
-  METHOD=scan, ADAPTIVE=0 в штатной безопасной области. Сетка остаётся активной
-  в runtime. Эта диагностика read-only относительно config, но изменяет
+- `TREED_EDDY_ACCEPTANCE_MESH CONFIRM=1`: требует известные XYZ; один
+  METHOD=scan, ADAPTIVE=0 в штатной безопасной области без нормализации по
+  `zero_reference_position`, чтобы обе матрицы сохраняли абсолютное смещение Z.
+  Сетка остаётся активной в runtime. Эта диагностика read-only относительно
+  config, но изменяет
   runtime координаты, offsets и mesh; после неё требуется обычная подготовка печати.
 
 ## Защита pending autosave
 
 В Klipper `ce7002bed` probe_finalize вызывает set_mesh, затем save_profile,
 который вызывает configfile.set даже без SAVE_CONFIG. Диагностический extra
-сохраняет оригинальный callback и временно заменяет только save_profile на
+сохраняет оригинальный callback и временно заменяет save_profile на
 no-op. set_mesh остаётся штатным. До замены снимается deepcopy configfile status
 (config, settings, save_config_pending, save_config_pending_items).
+
+На время синхронного scan `cmd_mesh_run` отключает runtime
+`bed_mesh.bmc.probe_mgr.zero_ref_pos` и восстанавливает исходное значение в
+`finally`, включая ошибку измерения. Это не меняет конфиг или pending autosave.
+Автоматическая и scan mesh используют профильную Z-опору; диагностический
+mesh показывает также общий сдвиг, который нормализация скрыла бы.
 
 Общий reentrancy guard запрещает второй диагностический scan. Во время
 подавления заблокированы public BED_MESH_CALIBRATE, BASE и обычный Eddy wrapper.

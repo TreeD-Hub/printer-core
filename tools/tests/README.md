@@ -5,6 +5,10 @@
 
 ## Состав
 
+- `test_treed_calibration.py` — XY geometry/idle guards, атомарная запись overrides,
+  height stamp после restart, подача/cleanup и сохранение rotation_distance.
+  Запуск `python -B tools/tests/test_treed_calibration.py`; без Klipper и устройства.
+
 - `test_driver_modes.py` — офлайн-модель допуска XYZ, частичных SPI-отказов и отката, сохранения, профилей обдува и доставки. Запуск `python -B tools/tests/test_driver_modes.py`; аппаратную приёмку не заменяет.
 
 - `test_loader_progress.py` — настоящий apply-цикл на временных шагах: TTY-шкала/спиннер, сохранение логов, счётчики, required fail-fast/exit status, optional skip/failure и режим `off`. Запуск на Linux/WSL: `python3 -B tools/tests/test_loader_progress.py`; без установки пакетов, сервисов или подключения к устройству.
@@ -36,6 +40,7 @@
 - `test_moonraker_host_network_contracts.ps1` — PowerShell-проверка host network Moonraker endpoints и deploy/provisioning contract.
 - `test_moonraker_update_contracts.ps1` — runnable-проверка fail-closed запрета update во время печати.
 - `test_treed_shell_update_contracts.ps1` — статическая проверка atomic publish, readiness и rollback UI bundle.
+- `test_loader_optimizations.ps1` — runnable-проверка кэша APT-индекса и очистки webcam-конфигов на временных fixtures.
 - `test_treed_update_service.py` — request idempotency, busy lock, durable state, UI recovery и dispatch/recovery core worker. Запуск `python -B tools/tests/test_treed_update_service.py`; без systemd и устройства.
 - `test_treed_update_component.py` — быстрый POST, локальный polling, runtime manifest/capability и отказ для source-only release. Запуск `python -B tools/tests/test_treed_update_component.py`; без сети и устройства.
 - `test_treed_core_update.py` — пакет, checksum/allowlist, сохранение локальных данных, полный rollback и journal recovery после частичной установки. Запуск `python -B tools/tests/test_treed_core_update.py`; services/network изолированы, symlink и Linux dir_fd требуют соответствующих возможностей среды.

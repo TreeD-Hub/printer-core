@@ -3,6 +3,7 @@
 Контур: mocks и временные локальные пакеты; реальных движений и HTTP нет.
 """
 import copy
+import configparser
 import importlib.util
 import json
 import math
@@ -16,6 +17,9 @@ from unittest.mock import Mock
 import test_z_recovery as recovery
 
 ROOT = Path(__file__).resolve().parents[2]
+PROFILE_CFG = configparser.ConfigParser(interpolation=None, strict=False)
+PROFILE_CFG.read(ROOT/'klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg', encoding='utf-8')
+ZERO_REF = [float(value) for value in PROFILE_CFG.get('bed_mesh', 'zero_reference_position').split(',')]
 spec = importlib.util.spec_from_file_location('z_acceptance', ROOT/'tools/z_acceptance.py')
 acceptance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(acceptance)
@@ -51,13 +55,16 @@ class MeshRig:
         self.config_set = Mock(side_effect=lambda section, key, value:
                                self.pending['save_config_pending_items'].update({section: {key: value}}))
         self.original = Mock(side_effect=self.persist)
-        self.bedmesh = NS(save_profile=self.original, get_status=lambda _: copy.deepcopy(self.mesh))
+        self.probe_mgr = NS(zero_ref_pos=ZERO_REF.copy())
+        self.bedmesh = NS(bmc=NS(probe_mgr=self.probe_mgr), save_profile=self.original,
+                          get_status=lambda _: copy.deepcopy(self.mesh))
         self.bedmesh.get_mesh = lambda: NS(get_mesh_params=lambda: {'algo': 'bicubic'},
                                            get_z_range=lambda: (0., .03))
         self.mesh = {}
         self.calls = 0
         self.failure = failure
         self.during = None
+        self.zero_ref_during_scan = None
         self.handlers = {'BED_MESH_CALIBRATE': self.scan, 'BED_MESH_CALIBRATE_BASE': self.scan}
         self.original_handlers = dict(self.handlers)
         self.rig.objects.update(
@@ -75,10 +82,11 @@ class MeshRig:
 
     def script(self, text):
         assert 'ACCEPTANCE=1' in text
-        self.extra.cmd_mesh_run(Command())
+        self.extra.cmd_mesh_run(Command(METHOD='scan'))
 
     def scan(self, gcmd):
         self.calls += 1
+        self.zero_ref_during_scan = self.probe_mgr.zero_ref_pos
         if self.during:
             self.during()
         if self.failure:
@@ -96,6 +104,8 @@ class MeshPersistenceTests(unittest.TestCase):
         self.assertEqual(rig.pending, rig.saved_pending)
         self.assertEqual(rig.extra.last_mesh['save_profile_restored'], 1)
         self.assertEqual(rig.extra.last_mesh['pending_config_changed'], 0)
+        self.assertIsNone(rig.zero_ref_during_scan)
+        self.assertEqual(rig.probe_mgr.zero_ref_pos, ZERO_REF)
 
     def test_success_preserves_pending_and_runtime_matrix(self):
         rig = MeshRig()
@@ -104,6 +114,8 @@ class MeshPersistenceTests(unittest.TestCase):
         rig.original.assert_not_called()
         rig.config_set.assert_not_called()
         self.assertEqual(rig.calls, 1)
+        self.assertIsNone(rig.zero_ref_during_scan)
+        self.assertEqual(rig.probe_mgr.zero_ref_pos, ZERO_REF)
         self.assertEqual(rig.extra.last_mesh['mesh']['probed_matrix'], mesh()['probed_matrix'])
         self.assertEqual(rig.extra.last_mesh['mesh']['mesh_params'], {'algo': 'bicubic'})
         self.assertEqual(rig.extra.last_mesh['result'], 'passed')
@@ -157,11 +169,14 @@ class MeshPersistenceTests(unittest.TestCase):
         self.assertEqual(rig.extra.last_mesh['result'], 'fault')
         self.assertTrue(rig.extra.mesh_fault)
         self.assertTrue(rig.rig.shutdown)
+        self.assertIsNone(rig.zero_ref_during_scan)
+        self.assertEqual(rig.probe_mgr.zero_ref_pos, ZERO_REF)
 
     def test_restore_failure_blocks_further_diagnostics(self):
         rig = MeshRig()
         class BrokenRestore:
             def __init__(self):
+                self.bmc = rig.bedmesh.bmc
                 self.handler = rig.original
             @property
             def save_profile(self):
@@ -181,9 +196,19 @@ class MeshPersistenceTests(unittest.TestCase):
             rig.extra.cmd_mesh_test(Command())
         self.assertEqual(rig.extra.last_mesh['result'], 'fault')
         self.assertTrue(rig.extra.mesh_fault)
+        self.assertIsNone(rig.zero_ref_during_scan)
+        self.assertEqual(rig.probe_mgr.zero_ref_pos, ZERO_REF)
         with self.assertRaises(ValueError):
             rig.extra.cmd_mesh_test(Command())
         self.assertEqual(rig.calls, 1)
+
+    def test_missing_pinned_zero_reference_api_fails_before_scan(self):
+        rig = MeshRig()
+        del rig.probe_mgr.zero_ref_pos
+        with self.assertRaisesRegex(ValueError, 'raw mesh недоступен'):
+            rig.extra.cmd_mesh_test(Command())
+        self.assertEqual(rig.calls, 0)
+        self.assertEqual(rig.extra.last_mesh['result'], 'failed')
 
 
 # Блок 2: Moonraker модель проверяет порядок, fail-fast и сырые данные.

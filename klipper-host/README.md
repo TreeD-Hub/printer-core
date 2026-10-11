@@ -6,6 +6,29 @@
 
 ## Модули и контракты
 
+`treed_calibration.py` подключается `[treed_calibration]` в `ui.cfg`.
+`TREED_EDDY_SET_OFFSETS X=... Y=...` проверяет область mesh и винтов, сохраняет
+XY в `local_overrides.cfg` и перезапускает Klipper. Зависимые результаты
+инвалидируются до записи; Z-home остаётся закрытым до новой калибровки высоты.
+`TREED_EDDY_HEIGHT_SAVE_MARK` вызывается после первичного `ACCEPT`: сохраняет
+hash новой кривой и XY. Следующий ready снимает запрет только при совпадении
+фактически загруженных значений. Ошибка `SAVE_CONFIG` не подтверждает высоту.
+`TREED_EDDY_TEMPERATURE_SAVE_MARK` проверяет свежие pending коэффициенты drift:
+штатный Klipper сообщает ошибку fit без исключения. Флаг завершения серии
+устанавливается только на следующем ready после сверки сохранённой кривой.
+
+`TREED_EXTRUDER_CALIBRATION_EXTRUDE LENGTH=100 SPEED=2 TEMP=200` нагревает сопло,
+выполняет ограниченную относительную подачу и возвращает E-режим/исходный target.
+`TREED_EXTRUDER_ROTATION_DISTANCE DISTANCE=... SAVE=0|1` применяет значение
+в текущей сессии либо записывает override с restart. Команды запрещены при
+печати, ручном probe, температурной серии и другом сервисе; сохраняющие
+команды требуют отсутствия pending config. Публикуемый `rotation_distance`
+берётся из действующего stepper, а не из устаревшей копии configfile.settings.
+Запись сохраняет прочие секции, комментарии, кодировку UTF-8 и переводы строк;
+неоднозначная секция, многострочная числовая опция и symlink требуют ручной правки.
+При обновлении Klipper сверять status configfile/manual_probe/temperature_probe,
+extruder_stepper.stepper и stock SET_EXTRUDER_ROTATION_DISTANCE.
+
 `treed_driver_mode.py` управляет режимом TMC5160 XYZ, с допуском и групповым откатом.
 `treed_driver_fan_mode.py` включает обдув по нагрузке и защитному таймеру
 только на 100%: подключённые вентиляторы не вращаются при меньшем PWM.
