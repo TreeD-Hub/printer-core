@@ -604,9 +604,20 @@ class TreedZRecovery:
     def cmd_mesh_run(self, gcmd):
         if not self.mesh_active or self.mesh_dispatch is None:
             raise gcmd.error('Acceptance: диагностический mesh не ожидается или уже запущен')
+        if gcmd.get_command_parameters().get('METHOD', '').lower() != 'scan':
+            raise gcmd.error('Acceptance: диагностический mesh требует METHOD=scan')
+        bedmesh = self.printer.lookup_object('bed_mesh')
+        probe_mgr = getattr(getattr(bedmesh, 'bmc', None), 'probe_mgr', None)
+        if probe_mgr is None or not hasattr(probe_mgr, 'zero_ref_pos'):
+            raise gcmd.error('Acceptance: API bed_mesh для raw mesh недоступен')
         handler = self.mesh_dispatch
         self.mesh_dispatch = None  # Одноразовый вход закрывается до вызова probe.
-        handler(gcmd)
+        zero_ref_pos = probe_mgr.zero_ref_pos
+        try:
+            probe_mgr.zero_ref_pos = None
+            handler(gcmd)
+        finally:
+            probe_mgr.zero_ref_pos = zero_ref_pos
 
 
 def load_config(config):

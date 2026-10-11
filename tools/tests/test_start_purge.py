@@ -16,6 +16,7 @@ for filename in ["macros_start_purge.cfg", "macros_pause_resume.cfg", "macros_co
                  "macros_ui_tune.cfg", "probe_eddy_duo.cfg", "macros_print_flow.cfg", "macros_utils.cfg", "geometry.cfg", "steppers.cfg"]:
     CFG.read(PROFILE / filename, encoding="utf-8")
 ENV = Environment(variable_start_string="{", variable_end_string="}", undefined=StrictUndefined)
+ZERO_REF = [float(value) for value in CFG.get("bed_mesh", "zero_reference_position").split(",")]
 
 
 def fail(message):
@@ -46,6 +47,15 @@ class Harness:
                 key.removeprefix("variable_"): ast.literal_eval(value)
                 for key, value in CFG["gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE"].items()
                 if key.startswith("variable_")},
+            "gcode_macro _TREED_EDDY_Z0_CFG": {
+                key.removeprefix("variable_"): ast.literal_eval(value)
+                for key, value in CFG["gcode_macro _TREED_EDDY_Z0_CFG"].items()
+                if key.startswith("variable_")},
+            "gcode_macro _TREED_EDDY_MESH_CFG": {
+                key.removeprefix("variable_"): ast.literal_eval(value)
+                for key, value in CFG["gcode_macro _TREED_EDDY_MESH_CFG"].items()
+                if key.startswith("variable_")},
+            "save_variables": {"variables": {"treed_eddy_offsets_changed": 0}},
             "toolhead": {"homed_axes": "xyz", "position": position, "max_velocity": 600, "max_accel": 25000,
                          "axis_minimum": {axis: CFG.getfloat("stepper_" + axis, "position_min") for axis in "xyz"},
                          "axis_maximum": {axis: CFG.getfloat("stepper_" + axis, "position_max") for axis in "xyz"}},
@@ -55,7 +65,11 @@ class Harness:
             "extruder": {"pressure_advance": pa, "can_extrude": True, "temperature": 175},
             "print_stats": {"info": {"total_layer": 0}},
             "configfile": {"settings": {"extruder": {
-                "filament_diameter": 1.75, "max_extrude_cross_section": 5, "pressure_advance": 0.08}}},
+                "filament_diameter": 1.75, "max_extrude_cross_section": 5, "pressure_advance": 0.08},
+                "bed_mesh": {"speed": 120, "mesh_pps": [2, 2],
+                             "zero_reference_position": ZERO_REF.copy()},
+                "probe_eddy_current btt_eddy": {"x_offset": 0.0, "y_offset": -30.0}}},
+            "treed_z_recovery": {"mesh_active": False},
         }
         self.commands = []
         self.moves = []
@@ -224,7 +238,11 @@ class PurgeTests(unittest.TestCase):
                     h.run("_TREED_START_PREP_STATE", params=params)
                     self.assertIn("BED_MESH_CLEAR", h.commands)
                     h.run("_TREED_START_ADAPTIVE_MESH")
-                    self.assertEqual(any(line.startswith("TREED_BED_MESH_CALIBRATE_EDDY") for line in h.commands), mesh != "0")
+                    mesh_commands = [line for line in h.commands
+                                     if line.startswith("TREED_BED_MESH_CALIBRATE_EDDY")]
+                    self.assertEqual(bool(mesh_commands), mesh != "0")
+                    if mesh_commands:
+                        self.assertIn("METHOD=rapid_scan ADAPTIVE=1 ADAPTIVE_MARGIN=5", mesh_commands[0])
 
     def test_print_area_uses_travel_limits_and_clears_old_xy_offset(self):
         for origin, size in [(0, 245), (5, 220)]:
@@ -271,6 +289,68 @@ class PurgeTests(unittest.TestCase):
                 self.assertIn("G1 X125.0 Y158.5 F12000", script)
         h.run("_TREED_PRINT_OFFSET_ENABLE")
         self.assertEqual(h.printer["gcode_macro _TREED_GEOMETRY_CFG"], before)
+
+    def test_eddy_home_uses_configured_datum_before_motion_and_falls_back_to_center(self):
+        def render(h):
+            return ENV.from_string(CFG["gcode_macro _TREED_EDDY_HOME_Z"]["gcode"]).render(
+                printer=h.printer, params={}, action_raise_error=fail)
+
+        h = Harness()
+        self.assertEqual(ZERO_REF, [125., 128.5])
+        self.assertIn("G1 X125.0 Y158.5 F12000", render(h))
+        h.printer["toolhead"]["axis_minimum"].update(x=10, y=20)
+        h.printer["toolhead"]["axis_maximum"].update(x=230, y=237)
+        h.printer["configfile"]["settings"]["bed_mesh"]["zero_reference_position"] = [140., 150.]
+        self.assertIn("G1 X140.0 Y180.0 F12000", render(h))
+        h.printer["configfile"]["settings"]["bed_mesh"]["zero_reference_position"] = None
+        self.assertIn("G1 X120.0 Y158.5 F12000", render(h))
+
+    def test_eddy_datum_rejects_invalid_points_before_home_or_mesh_commands(self):
+        invalid = [(math.nan, 128.5, 0., -30.), (math.inf, 128.5, 0., -30.),
+                   (300., 128.5, 0., -30.), (230., 128.5, 0., -30.),
+                   (125., 128.5, 0., -130.)]
+        for name in ["_TREED_EDDY_HOME_Z", "TREED_BED_MESH_CALIBRATE_EDDY"]:
+            for x, y, x_offset, y_offset in invalid:
+                with self.subTest(name=name, x=x, y=y, y_offset=y_offset):
+                    h = Harness()
+                    h.printer["configfile"]["settings"]["bed_mesh"]["zero_reference_position"] = [x, y]
+                    h.printer["configfile"]["settings"]["probe_eddy_current btt_eddy"].update(
+                        x_offset=x_offset, y_offset=y_offset)
+                    with self.assertRaises(RuntimeError):
+                        h.run(name)
+                    self.assertEqual(h.commands, [])
+
+    def test_zero_reference_rejects_direct_mesh_pps_only_for_production_mesh(self):
+        template = ENV.from_string(CFG["gcode_macro TREED_BED_MESH_CALIBRATE_EDDY"]["gcode"])
+
+        def render(h, params):
+            return template.render(printer=h.printer, params=params, action_raise_error=fail)
+
+        for pps in ([0, 0], [0]):
+            for method in ["scan", "automatic", "rapid_scan"]:
+                with self.subTest(pps=pps, method=method):
+                    h = Harness()
+                    h.printer["configfile"]["settings"]["bed_mesh"]["mesh_pps"] = pps
+                    with self.assertRaisesRegex(RuntimeError, "double|двойн"):
+                        render(h, {"METHOD": method})
+                    self.assertEqual(h.commands, [])
+
+        allowed = [
+            ([0, 2], {"METHOD": "scan"}, False),
+            ([2, 0], {"METHOD": "rapid_scan"}, False),
+            ([0, 0], {"METHOD": "manual"}, False),
+            ([0], {"METHOD": "manual"}, False),
+            ([0, 0], {"METHOD": "scan", "ACCEPTANCE": "1"}, False),
+            ([0], {"METHOD": "scan", "ACCEPTANCE": "1"}, False),
+            ([0, 0], {"METHOD": "scan"}, True),
+        ]
+        for pps, params, no_zero_ref in allowed:
+            with self.subTest(pps=pps, params=params, no_zero_ref=no_zero_ref):
+                h = Harness()
+                h.printer["configfile"]["settings"]["bed_mesh"]["mesh_pps"] = pps
+                if no_zero_ref:
+                    h.printer["configfile"]["settings"]["bed_mesh"]["zero_reference_position"] = None
+                self.assertTrue(render(h, params))
 
     def test_pause_uses_travel_y_min_and_preserves_explicit_override(self):
         default_y = ast.literal_eval(CFG["gcode_macro _TREED_PAUSE_PARK_CFG"]["variable_park_y_raw"])
