@@ -5,6 +5,7 @@ Z_RECOVERY_KLIPPER_SOURCE позволяет дополнительно пров
 """
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -89,6 +90,14 @@ class Rig:
         self.moves, self.move_speeds, self.seeks, self.pauses, self.writes = [], [], [], [], []
         self.seek_driver_settings = []
         self.fail_move = None
+        self.approach_end_z = None
+        self.approach_trigger_time = 0.
+        self.approach_no_mcu_movement = False
+        self.approach_error = None
+        self.approach_reference_loss = False
+        self.approach_pause_at_move = False
+        self.cleanup_reference_loss = False
+        self.session_cleanup_error = None
         self.fields = Fields()
         self.saved_fields = self.fields.values.copy()
         self.current = NS(req_hold_current=2., get_current=lambda: (.9, .4, 2., 3.),
@@ -110,7 +119,7 @@ class Rig:
         self.kin = NS(rails=[None, None, self.rail],
                       limits=[(0., 245.), (0., 245.), (1., -1.)],
                       axes_max=NS(x=245., y=245., z=203.),
-                      max_z_velocity=25., get_status=lambda _: dict(homed_axes=self.homed),
+                      max_z_velocity=50., get_status=lambda _: dict(homed_axes=self.homed),
                       clear_homing_state=self.clear, get_position=lambda: list(self.kin_pos))
         self.toolhead = NS(max_velocity=300., max_accel=3000., square_corner_velocity=5.,
                            min_cruise_ratio=.5, get_kinematics=lambda: self.kin,
@@ -120,9 +129,14 @@ class Rig:
                            wait_moves=lambda: None, dwell=self.pauses.append, move=self.move)
         self.endstop = NS(add_stepper=Mock())
         self.enable = NS(motor_enable=Mock(), register_state_callback=Mock())
+        self.analog = NS(get_last_trigger_time=lambda: self.approach_trigger_time)
+        self.probe_session = NS(hw_probe_session=NS(_trigger_analog=self.analog),
+                                end_probe_session=self.end_probe_session)
         self.objects = {
             'toolhead': self.toolhead,
-            'gcode': NS(register_command=Mock()),
+            'gcode': NS(register_command=Mock(), create_gcode_command=self.create_gcode_command),
+            'probe': NS(start_probe_session=Mock(side_effect=self.start_probe_session)),
+            'homing': NS(manual_home=self.manual_home),
             'gcode_move': NS(get_status=lambda _: dict(position=list(self.gcode_pos),
                                                        gcode_position=list(self.gcode_pos))),
             'pins': NS(setup_pin=Mock(return_value=self.endstop)),
@@ -151,6 +165,40 @@ class Rig:
 
     def write(self, reg, value, time):
         self.writes.append((reg, value))
+
+    def create_gcode_command(self, command, name, params):
+        return NS(command=command, name=name, params=params,
+                  get=lambda key, default=None: params.get(key, default))
+
+    def start_probe_session(self, gcmd):
+        assert gcmd.get('METHOD') == 'descend'
+        if self.approach_reference_loss:
+            self.extra.z_travel = {}
+        return self.probe_session
+
+    def end_probe_session(self):
+        if self.session_cleanup_error is not None:
+            raise self.session_cleanup_error
+        self.probe_session.hw_probe_session = None
+        if self.cleanup_reference_loss:
+            self.extra.z_travel = {}
+
+    def manual_home(self, toolhead, endstops, pos, speed, **kwargs):
+        assert endstops == [(self.analog, 'eddy')]
+        assert speed == 60.
+        assert kwargs == dict(probe_pos=True, triggered=True, check_triggered=False)
+        if self.approach_error is not None:
+            raise self.approach_error
+        if self.approach_pause_at_move:
+            self.objects['pause_resume'].is_paused = True
+        end_z = self.approach_end_z
+        if end_z is None:
+            end_z = pos[2]
+        if not self.approach_no_mcu_movement and math.isfinite(end_z):
+            self.physical_z += end_z - self.pos[2]
+        self.pos[2] = self.kin_pos[2] = end_z
+        self.gcode_pos[2] = end_z
+        return list(self.pos)
 
     def stop(self, reason):
         self.shutdown = True
@@ -618,6 +666,10 @@ class RecoveryTests(unittest.TestCase):
         for params in (dict(speed=float('nan')), dict(current=float('inf')),
                         dict(max_seek=211), dict(bottom_position=204),
                         dict(bottom_clearance_mm=208), dict(bottom_clearance_mm=210),
+                        dict(eddy_approach_z=float('nan')),
+                        dict(eddy_approach_speed=float('inf')),
+                        dict(eddy_approach_z=0), dict(eddy_approach_speed=-1),
+                        dict(eddy_approach_z=199),
                        dict(sgt=64), dict(stallguard_pause=1), dict(current=4)):
             with self.subTest(params=params), self.assertRaises(ValueError):
                 Rig(**params)
@@ -625,6 +677,138 @@ class RecoveryTests(unittest.TestCase):
             with self.subTest(params=params), self.assertRaisesRegex(
                     ValueError, 'driver_SGT/run_current'):
                 Rig(**params)
+        with self.assertRaisesRegex(ValueError, 'toolhead.max_velocity'):
+            Rig(eddy_approach_speed=301.)
+
+    def test_eddy_fast_approach_reaches_z50_with_armed_eddy_and_restores_velocity(self):
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        ref = rig.extra.z_travel
+        counter = rig.stepper.get_mcu_position()
+        rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.pos[2], 50.)
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+        self.assertEqual(rig.toolhead.max_accel, 3000.)
+        self.assertNotEqual(rig.stepper.get_mcu_position(), counter)
+        self.assertEqual(rig.mcu_offset_steps, 1234567)
+        self.assertEqual(rig.homed, 'xyz')
+        self.assertIs(rig.extra.z_travel, ref)
+        self.assertEqual(ref['state'], 'pending_eddy')
+        self.assertIsNone(rig.probe_session.hw_probe_session)
+        self.assertEqual(rig.objects['probe'].start_probe_session.call_count, 1)
+
+    def test_eddy_fast_approach_skips_at_or_below_target(self):
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.pos[2] = rig.kin_pos[2] = 45.
+        rig.extra.cmd_eddy_fast_approach(rig.command)
+        rig.objects['probe'].start_probe_session.assert_not_called()
+        self.assertEqual(rig.pos[2], 45.)
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+    def test_eddy_fast_approach_fails_closed_on_trigger_or_incomplete_move(self):
+        for end_z, trigger_time, no_mcu_move in (
+                (80., 1., False), (50., 1., False), (80., 0., False),
+                (50., 0., True), (float('nan'), 0., False),
+                (50., float('nan'), False)):
+            with self.subTest(end_z=end_z, trigger_time=trigger_time,
+                              no_mcu_move=no_mcu_move):
+                rig = Rig()
+                rig.run()
+                rig.homed = 'xyz'
+                rig.approach_end_z = end_z
+                rig.approach_trigger_time = trigger_time
+                rig.approach_no_mcu_movement = no_mcu_move
+                with self.assertRaises(ValueError):
+                    rig.extra.cmd_eddy_fast_approach(rig.command)
+                self.assertEqual(rig.extra.z_travel, {})
+                self.assertNotIn('z', rig.homed)
+                self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.approach_error = ValueError('manual_home failed')
+        with self.assertRaisesRegex(ValueError, 'manual_home failed'):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+        self.assertEqual(rig.extra.z_travel, {})
+
+    def test_eddy_fast_approach_invalidates_lost_reference_and_restores_on_cleanup_error(self):
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.approach_reference_loss = True
+        with self.assertRaises(ValueError):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.extra.z_travel, {})
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.toolhead.wait_moves = lambda: setattr(
+            rig.objects['pause_resume'], 'is_paused', True)
+        with self.assertRaisesRegex(ValueError, 'запрошена пауза'):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.extra.z_travel, {})
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.approach_pause_at_move = True
+        with self.assertRaisesRegex(ValueError, 'запрошена пауза'):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.extra.z_travel, {})
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.cleanup_reference_loss = True
+        with self.assertRaises(ValueError):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.extra.z_travel, {})
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.toolhead.max_velocity = 55.
+        with self.assertRaisesRegex(ValueError, 'toolhead.max_velocity'):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.extra.z_travel, {})
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.extra.motor_epoch += 1
+        with self.assertRaises(ValueError):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.extra.z_travel, {})
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        ref = rig.extra.z_travel
+        rig.objects['print_stats'].get_status = lambda _: dict(state='printing')
+        with self.assertRaises(ValueError):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertIs(rig.extra.z_travel, ref)
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
+
+        rig = Rig()
+        rig.run()
+        rig.homed = 'xyz'
+        rig.session_cleanup_error = ValueError('cleanup failed')
+        with self.assertRaisesRegex(ValueError, 'cleanup failed'):
+            rig.extra.cmd_eddy_fast_approach(rig.command)
+        self.assertEqual(rig.extra.z_travel, {})
+        self.assertEqual(rig.kin.max_z_velocity, 50.)
 
     def test_active_config_and_delivery(self):
         profile = ROOT / 'klipper/profiles/treed_v2_corexy_v1'
@@ -639,7 +823,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn('position_max: 203', steppers)
         z_axis = steppers.split('[stepper_z]')[1].split('[tmc5160 stepper_z]')[0]
         z_driver = steppers.split('[tmc5160 stepper_z]')[1]
-        self.assertIn('homing_speed: 60', z_axis)
+        self.assertIn('homing_speed: 10', z_axis)
+        self.assertIn('second_homing_speed: 5', z_axis)
         self.assertIn('driver_SGT: 1', z_driver)
         self.assertIn('run_current: 0.9', z_driver)
         self.assertIn('[force_move]', (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8'))
@@ -650,6 +835,8 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn('speed: 50', recovery)
         self.assertIn('accel: 1000', recovery)
         self.assertIn('bottom_position: 203', recovery)
+        self.assertIn('eddy_approach_z: 50', recovery)
+        self.assertIn('eddy_approach_speed: 60', recovery)
         self.assertIn('max_seek: 210', recovery)
         self.assertNotIn('verify_backoff_mm', recovery)
         self.assertNotIn('tolerance:', recovery)
@@ -661,6 +848,10 @@ class RecoveryTests(unittest.TestCase):
         eddy = (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8')
         home = eddy.split('[gcode_macro _TREED_EDDY_HOME_Z]')[1].split('[gcode_macro')[0]
         correction = eddy.split('[gcode_macro SET_Z_FROM_PROBE]')[1].split('[gcode_macro')[0]
+        self.assertLess(home.index('G1 X{zero_tool_x} Y{zero_tool_y} F12000'),
+                        home.index('_TREED_EDDY_FAST_APPROACH'))
+        self.assertLess(home.index('_TREED_EDDY_FAST_APPROACH'),
+                        home.index('_TREED_Z_TRAVEL_BEGIN'))
         self.assertLess(home.index('_TREED_Z_TRAVEL_BEGIN'), home.index('G28.1 Z'))
         self.assertLess(correction.index('_RELOAD_Z_OFFSET_FROM_PROBE'), correction.index('_TREED_Z_TRAVEL_APPLY'))
         self.assertLess(correction.index('_TREED_Z_TRAVEL_APPLY'), correction.index('G1 Z{cfg.z_hop'))
@@ -764,6 +955,76 @@ class RecoveryTests(unittest.TestCase):
                     self.assertAlmostEqual(rig.pos[2], 202.525)
             self.assertEqual([call.args[0] for call in rig.printer.send_event.call_args_list],
                              ['homing:homing_move_begin', 'homing:homing_move_end'])
+
+    @unittest.skipUnless(os.environ.get('Z_RECOVERY_KLIPPER_SOURCE'), 'upstream source not supplied')
+    def test_upstream_fast_approach_uses_manual_home_probe_pos(self):
+        source = Path(os.environ['Z_RECOVERY_KLIPPER_SOURCE']) / 'extras_homing.py'
+        upstream_spec = importlib.util.spec_from_file_location('_z_fast_real_homing', source)
+        real = importlib.util.module_from_spec(upstream_spec)
+        upstream_spec.loader.exec_module(real)
+
+        for end_z, hit in ((50., False), (80., True), (50., True)):
+            with self.subTest(end_z=end_z, hit=hit):
+                rig = Rig()
+                rig.run()
+                rig.homed = 'xyz'
+                rig.approach_end_z = end_z
+                physical_offset = rig.physical_z - rig.pos[2]
+                bottom_contact_z = rig.contact_z
+                ref = rig.extra.z_travel
+                start_counter = rig.stepper.get_mcu_position()
+
+                rig.stepper.get_mcu_position = lambda cmd=None: round(
+                    (rig.physical_z if cmd is None else cmd + physical_offset) / .001
+                ) + rig.mcu_offset_steps
+                rig.stepper.mcu_to_commanded_position = lambda value: (
+                    value - rig.mcu_offset_steps) * .001 - physical_offset
+                rig.stepper.get_commanded_position = lambda: rig.pos[2]
+                rig.stepper.get_past_mcu_position = lambda _: rig.stepper.get_mcu_position()
+                rig.stepper.calc_position_from_coord = lambda pos: pos[2]
+                rig.kin.get_steppers = lambda: [rig.stepper]
+                rig.kin.calc_position = lambda positions: [
+                    rig.pos[0], rig.pos[1], positions['stepper_z']]
+                rig.toolhead.flush_step_generation = lambda: None
+                rig.toolhead.get_last_move_time = lambda: 1.
+                rig.toolhead.dwell = lambda _: None
+                def drip_move(target, speed, completion):
+                    self.assertEqual(speed, 60.)
+                    self.assertIsNotNone(completion)
+                    rig.physical_z = end_z + physical_offset
+                rig.toolhead.drip_move = drip_move
+                rig.printer.send_event = Mock()
+                rig.analog.get_steppers = lambda: [rig.stepper]
+                def home_start(*args, **kwargs):
+                    rig.approach_trigger_time = 0.
+                    return object()
+                rig.analog.home_start = home_start
+                def home_wait(_):
+                    rig.approach_trigger_time = 1. if hit else 0.
+                    return rig.approach_trigger_time
+                rig.analog.home_wait = home_wait
+                homing = real.PrinterHoming.__new__(real.PrinterHoming)
+                homing.printer = rig.printer
+                rig.objects['homing'] = homing
+
+                if hit:
+                    with self.assertRaises(ValueError):
+                        rig.extra.cmd_eddy_fast_approach(rig.command)
+                    self.assertEqual(rig.extra.z_travel, {})
+                    self.assertNotIn('z', rig.homed)
+                else:
+                    rig.extra.cmd_eddy_fast_approach(rig.command)
+                    self.assertAlmostEqual(rig.pos[2], 50.)
+                    self.assertIs(rig.extra.z_travel, ref)
+                    self.assertEqual(rig.homed, 'xyz')
+                    self.assertNotEqual(rig.stepper.get_mcu_position(), start_counter)
+                    self.assertEqual(rig.mcu_offset_steps, 1234567)
+                    rig.finish_eddy()
+                    self.assertAlmostEqual(rig.extra.z_travel['contact_z'], bottom_contact_z)
+                    self.assertAlmostEqual(rig.extra.z_travel['z_max'], bottom_contact_z - 5.)
+                self.assertEqual(rig.kin.max_z_velocity, 50.)
+                self.assertEqual([call.args[0] for call in rig.printer.send_event.call_args_list],
+                                 ['homing:homing_move_begin', 'homing:homing_move_end'])
 
 
 if __name__ == '__main__':
