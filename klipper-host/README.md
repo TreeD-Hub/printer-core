@@ -6,6 +6,14 @@
 
 ## Модули и контракты
 
+`treed_hotend_limit.py` подключается `[treed_hotend_limit]` в `ebb42_can.cfg`.
+`max_target: 285` ограничивает цели хотэнда для `M104`, `M109`,
+`SET_HEATER_TEMPERATURE`, API и `PID_CALIBRATE`: запрос 390 °C становится 285 °C.
+Аварийный предел датчика задаётся отдельно через `[extruder] max_temp: 300`.
+Модуль сохраняет штатный PID, выключение нагрева и проверку нижнего предела;
+неконечные числа отклоняет. При обновлении Klipper сверять `Heater.set_temp`,
+`Heater.alter_target` и создание `ControlAutoTune` в `PID_CALIBRATE`.
+
 `treed_calibration.py` подключается `[treed_calibration]` в `ui.cfg`.
 `TREED_EDDY_SET_OFFSETS X=... Y=...` проверяет область mesh и винтов, сохраняет
 XY в `local_overrides.cfg` и перезапускает Klipper. Зависимые результаты

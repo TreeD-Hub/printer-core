@@ -13,7 +13,7 @@ from jinja2 import Environment, StrictUndefined
 PROFILE = Path(__file__).resolve().parents[2] / "klipper/profiles/treed_v2_corexy_v1"
 CFG = configparser.ConfigParser(interpolation=None, strict=False)
 for filename in ["macros_start_purge.cfg", "macros_pause_resume.cfg", "macros_core.cfg",
-                 "macros_ui_tune.cfg", "probe_eddy_duo.cfg", "macros_print_flow.cfg", "macros_utils.cfg", "geometry.cfg", "steppers.cfg"]:
+                 "macros_ui_tune.cfg", "probe_eddy_duo.cfg", "macros_print_flow.cfg", "macros_utils.cfg", "geometry.cfg", "steppers.cfg", "ebb42_can.cfg"]:
     CFG.read(PROFILE / filename, encoding="utf-8")
 ENV = Environment(variable_start_string="{", variable_end_string="}", undefined=StrictUndefined)
 ZERO_REF = [float(value) for value in CFG.get("bed_mesh", "zero_reference_position").split(",")]
@@ -66,6 +66,7 @@ class Harness:
             "print_stats": {"info": {"total_layer": 0}},
             "configfile": {"settings": {"extruder": {
                 "filament_diameter": 1.75, "max_extrude_cross_section": 5, "pressure_advance": 0.08},
+                "treed_hotend_limit": {"max_target": CFG.getfloat("treed_hotend_limit", "max_target")},
                 "bed_mesh": {"speed": 120, "mesh_pps": [2, 2],
                              "zero_reference_position": ZERO_REF.copy()},
                 "probe_eddy_current btt_eddy": {"x_offset": 0.0, "y_offset": -30.0}}},
@@ -219,6 +220,17 @@ class PurgeTests(unittest.TestCase):
                   "_TREED_START_ADAPTIVE_MESH", "_TREED_PRINT_OFFSET_ENABLE", "_TREED_SMART_PARK",
                   "_TREED_START_FINAL_HEAT", "_TREED_LINE_PURGE"]
         self.assertEqual([start.index(phase) for phase in phases], sorted(start.index(phase) for phase in phases))
+
+    def test_start_normalizes_hotend_target_before_temperature_wait(self):
+        for requested, expected in [(250, 250), (285, 285), (390, 285)]:
+            with self.subTest(requested=requested):
+                h = Harness()
+                h.run("_TREED_START_PREP_STATE", params={
+                    "BED_TEMP": "60", "EXTRUDER_TEMP": str(requested), "MESH": "0"})
+                self.assertEqual(h.printer["gcode_macro _TREED_START_STATE"]["extruder_temp"], expected)
+                h.run("_TREED_START_FINAL_HEAT")
+                self.assertIn(f"M104 S{expected}.0", h.commands)
+                self.assertIn(f"TEMPERATURE_WAIT SENSOR=extruder MINIMUM={expected - 3}.0", h.commands)
 
     def test_optional_mesh_validates_before_start_and_requires_objects_only_when_enabled(self):
         base = {"BED_TEMP": "60", "EXTRUDER_TEMP": "220"}
