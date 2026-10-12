@@ -21,9 +21,11 @@ def render(filename, section, printer, **params):
 class LightEventTests(unittest.TestCase):
     def render_start(self, total_layer=None, **params):
         printer = {
+            "gcode_macro _TREED_EDDY_Z_OFFSET_AUTOSAVE_STATE": {"has_pending": 0},
             "print_stats": {"info": {"total_layer": total_layer}},
             "configfile": {"settings": {"extruder": {
-                "min_extrude_temp": 170, "max_extrude_cross_section": 5}}},
+                "min_extrude_temp": 170, "max_extrude_cross_section": 5},
+                "treed_hotend_limit": {"max_target": 285}}},
             "exclude_object": {"objects": [{"polygon": [[10, 10], [20, 20]]}]},
         }
         return render("macros_print_flow.cfg", "gcode_macro _TREED_START_PREP_STATE",

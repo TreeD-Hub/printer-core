@@ -6,6 +6,14 @@
 
 ## Модули и контракты
 
+`treed_hotend_limit.py` подключается `[treed_hotend_limit]` в `ebb42_can.cfg`.
+`max_target: 285` ограничивает цели хотэнда для `M104`, `M109`,
+`SET_HEATER_TEMPERATURE`, API и `PID_CALIBRATE`: запрос 390 °C становится 285 °C.
+Аварийный предел датчика задаётся отдельно через `[extruder] max_temp: 300`.
+Модуль сохраняет штатный PID, выключение нагрева и проверку нижнего предела;
+неконечные числа отклоняет. При обновлении Klipper сверять `Heater.set_temp`,
+`Heater.alter_target` и создание `ControlAutoTune` в `PID_CALIBRATE`.
+
 `treed_calibration.py` подключается `[treed_calibration]` в `ui.cfg`.
 `TREED_EDDY_SET_OFFSETS X=... Y=...` проверяет область mesh и винтов, сохраняет
 XY в `local_overrides.cfg` и перезапускает Klipper. Зависимые результаты
@@ -72,6 +80,14 @@ TMC5160 и отход от фактического DIAG. Доставляетс
 [Параметры и допуск](../klipper/profiles/treed_v2_corexy_v1/README.md#нижняя-опора-z).
 При обновлении Klipper сверять `HomingMove`, CoreXY и внутренний экспорт
 `TMC5160.get_status.__self__.current_helper` с закреплённой версией.
+Перед Eddy-home `_TREED_EDDY_FAST_APPROACH` поднимает стол до Z=50 на 60 мм/с
+с активным аналоговым триггером Eddy. Раннее срабатывание останавливает сценарий.
+На границе движение завершается, затем штатный `G28.1 Z` ищет Eddy на 10 мм/с;
+точный `PROBE` остаётся на 2 мм/с. Временный лимит скорости Z возвращается
+после быстрого участка, в том числе при ошибке.
+Для этого пути сверять также `PrinterHoming.manual_home`,
+`SampleAveragingHelper.hw_probe_session` и `EddyDescend._trigger_analog`:
+доступ к аналоговому триггеру зависит от закреплённого API.
 Для рабочего Z-лимита используются `rail.position_max`, `CoreXY.limits` и
 `CoreXY.axes_max`; `MCU_stepper.get_mcu_position` должен переживать смену координат.
 

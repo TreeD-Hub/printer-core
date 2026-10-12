@@ -5,6 +5,13 @@
 
 ## Состав
 
+- `test_hotend_limit.py` — нормализация целей хотэнда и PID, нижний предел,
+  выключение, неконечные числа, отдельный аварийный порог и доставка расширения.
+  Запуск `python -B tools/tests/test_hotend_limit.py`; без устройства.
+  `HOTEND_KLIPPER_SOURCE` с каталогом `heaters.py`, `pid_calibrate.py` и
+  `extruder.py` из закреплённого Klipper включает проверку штатных обработчиков;
+  аппаратные объекты и ожидание температуры заменены моделью.
+
 - `test_treed_calibration.py` — XY geometry/idle guards, атомарная запись overrides,
   height stamp после restart, подача/cleanup и сохранение rotation_distance.
   Запуск `python -B tools/tests/test_treed_calibration.py`; без Klipper и устройства.

@@ -67,14 +67,19 @@ class TreedCalibration:
         main = os.path.abspath(os.path.expanduser(self.printer.get_start_args()['config_file']))
         self.overrides_path = os.path.join(os.path.dirname(main), 'local_overrides.cfg')
         self.running = False
+        self.cooling = None
+        self.cooling_timer = None
         for name, method in (
                 ('TREED_EDDY_SET_OFFSETS', self.cmd_offsets),
                 ('TREED_EDDY_HEIGHT_SAVE_MARK', self.cmd_height_mark),
                 ('TREED_EDDY_TEMPERATURE_SAVE_MARK', self.cmd_temperature_mark),
+                ('TREED_EDDY_TEMPERATURE_PREPARE', self.cmd_temperature_prepare),
+                ('TREED_EDDY_TEMPERATURE_COOL_ABORT', self.cmd_cooling_abort),
                 ('TREED_EXTRUDER_CALIBRATION_EXTRUDE', self.cmd_extrude),
                 ('TREED_EXTRUDER_ROTATION_DISTANCE', self.cmd_rotation)):
             self.gcode.register_command(name, method)
         self.printer.register_event_handler('klippy:ready', self.handle_ready)
+        self.printer.register_event_handler('klippy:shutdown', self.cooling_shutdown)
 
     def status(self, name):
         obj = self.printer.lookup_object(name, None)
@@ -93,22 +98,23 @@ class TreedCalibration:
                     accelerometer_configured=self.printer.lookup_object('adxl345', None) is not None,
                     offsets_changed=bool(self.saved.allVariables.get('treed_eddy_offsets_changed', 0)))
 
-    def require_idle(self, gcmd, pending=False, temperature_completion=False):
+    def require_idle(self, gcmd, pending=False, temperature_completion=False, cooling=False):
         pause = self.printer.lookup_object('pause_resume', None)
         sd = self.printer.lookup_object('virtual_sdcard', None)
         operation = self.printer.lookup_object('gcode_macro _TREED_OPERATION_STATE', None)
         recovery = self.printer.lookup_object('treed_z_recovery', None)
         sgt = self.printer.lookup_object('treed_sgt_executor', None)
         temperature = self.printer.lookup_object('gcode_macro _TREED_EDDY_TEMPERATURE_STATE', None)
-        if (self.running or self.printer.is_shutdown()
+        allowed_phase = 'calibrating' if cooling else 'idle'
+        if (self.running or (self.cooling is not None and not cooling) or self.printer.is_shutdown()
                 or self.printer.get_state_message()[1] != 'ready'
-                or operation is None or operation.variables.get('phase') != 'idle'
+                or operation is None or operation.variables.get('phase') != allowed_phase
                 or self.status('print_stats').get('state') in ('printing', 'paused', 'error')
                 or (pause is not None and (pause.pause_command_sent or self.status('pause_resume').get('is_paused')))
                 or (sd is not None and sd.is_active())
                 or self.status('manual_probe').get('is_active')
                 or self.status('temperature_probe btt_eddy').get('in_calibration')
-                or (not temperature_completion and temperature is not None and temperature.variables.get('active'))
+                or (not temperature_completion and not cooling and temperature is not None and temperature.variables.get('active'))
                 or (recovery is not None and (recovery.running or recovery.eddy_homing or recovery.mesh_active))
                 or (sgt is not None and sgt.running)
                 or (pending and self.status('configfile').get('save_config_pending'))):
@@ -133,7 +139,154 @@ class TreedCalibration:
     def save_variable(self, key, value):
         self.gcode.run_script_from_command('SAVE_VARIABLE VARIABLE=' + key + ' VALUE="' + repr(value) + '"')
 
-    # Блок 3: Атомарная запись существующего overrides; ошибка сохраняет старый файл.
+    # Блок 3: Ограниченное охлаждение до 40C без удержания очереди G-code.
+    def temperatures(self, gcmd):
+        values = tuple(self.status(name).get('temperature') for name in
+                       ('temperature_probe btt_eddy', 'extruder', 'heater_bed'))
+        if any(not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0.
+               for value in values):
+            raise gcmd.error('Eddy: температуры датчика, сопла или стола неизвестны')
+        return values
+
+    def temperature_workflow(self, prompt, cooling):
+        self.gcode.run_script_from_command(
+            'SET_GCODE_VARIABLE MACRO=_TREED_EDDY_TEMPERATURE_STATE VARIABLE=active VALUE=1\n'
+            'SET_GCODE_VARIABLE MACRO=_TREED_EDDY_TEMPERATURE_STATE VARIABLE=points VALUE=0\n'
+            'SET_GCODE_VARIABLE MACRO=_TREED_EDDY_TEMPERATURE_STATE VARIABLE=cooling VALUE=%d' % cooling)
+        for key, value in (('temperature_done', 0), ('temperature_hash', ''),
+                           ('temperature_points', 0), ('active_step', 'temperature'),
+                           ('operator_prompt', prompt)):
+            self.save_variable('treed_eddy_' + key, value)
+
+    def start_temperature_series(self, gcmd):
+        timeout = self.status('idle_timeout')['idle_timeout']
+        self.gcode.run_script_from_command(
+            'SET_GCODE_VARIABLE MACRO=_TREED_EDDY_TEMPERATURE_STATE '
+            'VARIABLE=original_idle_timeout VALUE=%g' % timeout)
+        try:
+            self.temperature_workflow('temperature_points', 0)
+            self.gcode.run_script_from_command(
+                'G28\nSET_IDLE_TIMEOUT TIMEOUT=36000\n'
+                'TEMPERATURE_PROBE_CALIBRATE PROBE=btt_eddy TARGET=56 STEP=4')
+        except Exception:
+            try:
+                if self.status('temperature_probe btt_eddy').get('in_calibration'):
+                    self.gcode.run_script_from_command('ABORT')
+                self.gcode.run_script_from_command(
+                    'SET_IDLE_TIMEOUT TIMEOUT=%g\n'
+                    'SET_GCODE_VARIABLE MACRO=_TREED_EDDY_TEMPERATURE_STATE VARIABLE=active VALUE=0' % timeout)
+                self.save_variable('treed_eddy_operator_prompt', 'none')
+            except Exception:
+                logging.exception('Eddy: восстановление после отказа запуска не подтверждено')
+                self.printer.invoke_shutdown('Eddy: ошибка запуска температурной серии')
+            raise
+
+    def cmd_temperature_prepare(self, gcmd):
+        self.parameters(gcmd, ())
+        self.preflight(gcmd, pending=True)
+        if (self.saved.allVariables.get('treed_eddy_primary_done') != 1
+                or self.saved.allVariables.get('treed_eddy_offsets_changed', 0) == 1):
+            raise gcmd.error('Eddy: сначала завершите первичную калибровку высоты')
+        temperatures = self.temperatures(gcmd)
+        if max(temperatures) <= 40.:
+            self.gcode.run_script_from_command('M104 S0\nM140 S0')
+            self.start_temperature_series(gcmd)
+            return
+        speed = self.status('fan').get('speed')
+        timeout = self.status('idle_timeout').get('idle_timeout')
+        if (not isinstance(speed, (int, float)) or not math.isfinite(speed) or not 0. <= speed <= 1.
+                or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0.):
+            raise gcmd.error('Eddy: состояние обдува или idle timeout неизвестно')
+        reactor = self.printer.get_reactor()
+        now = reactor.monotonic()
+        self.cooling = dict(start=now, check=now + 60., temperatures=temperatures,
+                            fan=speed, timeout=timeout, gcmd=gcmd)
+        try:
+            self.gcode.run_script_from_command('M104 S0\nM140 S0\nM106 S255\nSET_IDLE_TIMEOUT TIMEOUT=36000')
+            self.temperature_workflow('cooling', 1)
+            self.gcode.run_script_from_command('SET_GCODE_VARIABLE MACRO=_TREED_OPERATION_STATE VARIABLE=phase VALUE="\'calibrating\'"')
+            if self.cooling_timer is None:
+                self.cooling_timer = reactor.register_timer(self.cooling_tick, reactor.NEVER)
+            reactor.update_timer(self.cooling_timer, now + 5.)
+            gcmd.respond_info('Eddy: охлаждение датчика, сопла и стола до 40C; обдув включён')
+        except Exception:
+            self.finish_cooling()
+            raise
+
+    def finish_cooling(self):
+        state, self.cooling = self.cooling, None
+        if state is None:
+            return
+        reactor = self.printer.get_reactor()
+        if self.cooling_timer is not None:
+            reactor.update_timer(self.cooling_timer, reactor.NEVER)
+        if self.printer.is_shutdown():
+            return
+        script = ('M106 S%g\nSET_IDLE_TIMEOUT TIMEOUT=%g\n'
+                  'SET_GCODE_VARIABLE MACRO=_TREED_EDDY_TEMPERATURE_STATE VARIABLE=active VALUE=0\n'
+                  'SET_GCODE_VARIABLE MACRO=_TREED_EDDY_TEMPERATURE_STATE VARIABLE=cooling VALUE=0'
+                  % (state['fan'] * 255., state['timeout']))
+        operation = self.printer.lookup_object('gcode_macro _TREED_OPERATION_STATE')
+        if operation.variables.get('phase') == 'calibrating':
+            script += '\nSET_GCODE_VARIABLE MACRO=_TREED_OPERATION_STATE VARIABLE=phase VALUE="\'idle\'"'
+        try:
+            self.gcode.run_script_from_command(script)
+            self.save_variable('treed_eddy_operator_prompt', 'none')
+        except Exception:
+            logging.exception('Eddy: восстановление обдува и idle timeout не подтверждено')
+            self.printer.invoke_shutdown('Eddy: ошибка завершения охлаждения')
+            raise
+
+    def cooling_tick(self, eventtime):
+        reactor = self.printer.get_reactor()
+        with self.gcode.get_mutex():
+            state = self.cooling
+            if state is None:
+                return reactor.NEVER
+            try:
+                gcmd = state['gcmd']
+                self.require_idle(gcmd, pending=True, cooling=True)
+                if (self.saved.allVariables.get('treed_eddy_primary_done') != 1
+                        or self.saved.allVariables.get('treed_eddy_offsets_changed', 0) == 1):
+                    raise gcmd.error('Eddy: первичная калибровка высоты изменилась во время охлаждения')
+                temperatures = self.temperatures(gcmd)
+                now = reactor.monotonic()
+                if max(temperatures) <= 40.:
+                    self.finish_cooling()
+                    self.preflight(gcmd, pending=True)
+                    self.start_temperature_series(gcmd)
+                    return reactor.NEVER
+                if now - state['start'] >= 600.:
+                    raise gcmd.error('Eddy: охлаждение до 40C не завершилось за 10 минут')
+                if now >= state['check']:
+                    names = ('датчик', 'сопло', 'стол')
+                    stalled = [name for name, previous, current in zip(names, state['temperatures'], temperatures)
+                               if current > 40. and current > previous - .2]
+                    if stalled:
+                        raise gcmd.error('Eddy: за минуту температура не снизилась на 0.2C: ' + ', '.join(stalled))
+                    state.update(check=now + 60., temperatures=temperatures)
+                return now + 5.
+            except Exception as exc:
+                try:
+                    self.finish_cooling()
+                except Exception:
+                    logging.exception('Eddy: восстановление после охлаждения не подтверждено')
+                    self.printer.invoke_shutdown('Eddy: ошибка завершения охлаждения')
+                self.gcode.respond_raw('!! ' + str(exc))
+                return reactor.NEVER
+
+    def cmd_cooling_abort(self, gcmd):
+        self.parameters(gcmd, ())
+        if self.cooling is None:
+            raise gcmd.error('Eddy: нет активного охлаждения')
+        self.finish_cooling()
+        self.save_variable('treed_eddy_active_step', 'not_started')
+        gcmd.respond_info('Eddy: охлаждение отменено')
+
+    def cooling_shutdown(self):
+        self.finish_cooling()
+
+    # Блок 4: Атомарная запись существующего overrides; ошибка сохраняет старый файл.
     def write_overrides(self, gcmd, section, values):
         path = self.overrides_path
         temporary = None
@@ -175,7 +328,7 @@ class TreedCalibration:
             if temporary is not None:
                 os.unlink(temporary)
 
-    # Блок 4: XY проверяется по реальным scan/screw координатам до инвалидирования.
+    # Блок 5: XY проверяется по реальным scan/screw координатам до инвалидирования.
     def validate_geometry(self, gcmd, x, y):
         th = self.status('toolhead')
         lower, upper = th['axis_minimum'], th['axis_maximum']
@@ -209,7 +362,7 @@ class TreedCalibration:
         gcmd.respond_info('Eddy XY записаны; требуется повторная калибровка высоты и температуры')
         self.gcode.run_script_from_command('RESTART')
 
-    # Блок 5: Stamp сохраняется после ACCEPT, проверяется только при новом ready.
+    # Блок 6: Stamp сохраняется после ACCEPT, проверяется только при новом ready.
     def cmd_height_mark(self, gcmd):
         self.parameters(gcmd, ())
         self.require_idle(gcmd)
@@ -271,7 +424,7 @@ class TreedCalibration:
             except (KeyError, TypeError, ValueError):
                 logging.warning('Eddy: сохранённая высота/XY не подтверждены')
 
-    # Блок 6: Измерение подачи сохраняет E-режим и возвращает исходный нагрев.
+    # Блок 7: Измерение подачи сохраняет E-режим и возвращает исходный нагрев.
     def cmd_extrude(self, gcmd):
         self.parameters(gcmd, ('LENGTH', 'SPEED', 'TEMP'))
         self.preflight(gcmd)
