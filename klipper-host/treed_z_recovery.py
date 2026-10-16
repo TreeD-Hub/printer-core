@@ -37,8 +37,6 @@ class TreedZRecovery:
         self.speed = config.getfloat('speed', 5., above=0.)
         self.accel = config.getfloat('accel', 100., above=0.)
         self.clearance = config.getfloat('bottom_clearance_mm', 5., above=0.)
-        self.eddy_approach_z = config.getfloat('eddy_approach_z', 50., above=0.)
-        self.eddy_approach_speed = config.getfloat('eddy_approach_speed', 60., above=0.)
         self.pause = config.getfloat('stallguard_pause', 2., minval=2.)
         zconfig = config.getsection('stepper_z')
         low = zconfig.getfloat('position_min', 0.)
@@ -47,13 +45,11 @@ class TreedZRecovery:
         self.bottom = config.getfloat('bottom_position', high)
         self.max_seek = config.getfloat('max_seek', high - low, above=0., maxval=210.)
         values = (low, high, self.bottom, self.max_seek, self.speed,
-                  self.accel, self.clearance, self.pause, self.eddy_approach_z,
-                  self.eddy_approach_speed)
+                  self.accel, self.clearance, self.pause)
         if (not all(math.isfinite(v) for v in values)
                 or not low < self.bottom <= high
                 or self.bottom - self.clearance <= low
-                or self.clearance >= self.max_seek
-                or self.eddy_approach_z > self.bottom - self.clearance):
+                or self.clearance >= self.max_seek):
             raise config.error('Z recovery: неверные границы поиска или отхода')
         if (config.getsection('printer').get('kinematics') != 'corexy'
                 or zconfig.get('endstop_pin') != 'probe:z_virtual_endstop'):
@@ -72,7 +68,6 @@ class TreedZRecovery:
         gcode.register_command('TREED_Z_PARK_BOTTOM', self.cmd_park_bottom)
         gcode.register_command('_TREED_Z_TRAVEL_BEGIN', self.cmd_travel_begin)
         gcode.register_command('_TREED_Z_TRAVEL_APPLY', self.cmd_travel_apply)
-        gcode.register_command('_TREED_EDDY_FAST_APPROACH', self.cmd_eddy_fast_approach)
         gcode.register_command('TREED_Z_RECOVERY_TEST', self.cmd_test)
         gcode.register_command('TREED_EDDY_ACCEPTANCE_HOME', self.cmd_eddy_test)
         gcode.register_command('TREED_EDDY_ACCEPTANCE_MESH', self.cmd_mesh_test)
@@ -82,9 +77,6 @@ class TreedZRecovery:
     def _connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
         self.kin = self.toolhead.get_kinematics()
-        if self.eddy_approach_speed > self.toolhead.max_velocity:
-            raise self.printer.config_error(
-                'Z recovery: скорость Eddy approach выше toolhead.max_velocity')
         steppers = self.kin.rails[2].get_steppers()
         if len(steppers) != 1 or steppers[0].get_name() != 'stepper_z':
             raise self.printer.config_error('Z recovery: поддерживается один мотор Z')
@@ -416,92 +408,6 @@ class TreedZRecovery:
             self._invalidate_travel()
             raise gcmd.error('Z travel: нужна новая опора DIAG; выполните полный G28')
         self.eddy_homing = True
-
-    def _check_eddy_approach_reference(self, gcmd, ref):
-        self._alive()
-        if self.printer.is_shutdown():
-            raise gcmd.error('Eddy approach: Klipper shutdown')
-        if not isinstance(ref, dict):
-            raise gcmd.error('Eddy approach: нет опоры DIAG')
-        stepper = self.kin.rails[2].get_steppers()[0]
-        step_mm = stepper.get_step_dist()
-        if (self.z_travel is not ref or ref.get('state') not in ('pending_eddy', 'measured')
-                or self.motor_epoch != ref.get('motor_epoch')
-                or not math.isfinite(step_mm) or step_mm <= 0.
-                or step_mm != ref.get('step_mm')
-                or not math.isfinite(ref.get('contact_mcu_mm', float('nan')))
-                or not set('xyz') <= set(self.kin.get_status(0)['homed_axes'])):
-            raise gcmd.error('Eddy approach: потеряна опора DIAG/известная XYZ')
-        return stepper, step_mm
-
-    def cmd_eddy_fast_approach(self, gcmd):
-        self._require_idle(gcmd)
-        if gcmd.get_command_parameters():
-            raise gcmd.error('Eddy approach: параметры команды запрещены')
-        ref = self.z_travel
-        try:
-            stepper, step_mm = self._check_eddy_approach_reference(gcmd, ref)
-            self.toolhead.wait_moves()
-            stepper, step_mm = self._check_eddy_approach_reference(gcmd, ref)
-            start_z = self.toolhead.get_position()[2]
-            if not math.isfinite(start_z):
-                raise gcmd.error('Eddy approach: текущая Z не конечна')
-            if start_z <= self.eddy_approach_z:
-                return
-            if self.eddy_approach_z > self.kin.rails[2].position_max:
-                raise gcmd.error('Eddy approach: Z50 выше доступного хода')
-
-            session = None
-            saved_max_z_velocity = self.kin.max_z_velocity
-            try:
-                gcode = self.printer.lookup_object('gcode')
-                probe = self.printer.lookup_object('probe')
-                probe_gcmd = gcode.create_gcode_command(
-                    'PROBE', 'PROBE', {'METHOD': 'descend'})
-                session = probe.start_probe_session(probe_gcmd)
-                stepper, step_mm = self._check_eddy_approach_reference(gcmd, ref)
-                hw_session = getattr(session, 'hw_probe_session', None)
-                analog = getattr(hw_session, '_trigger_analog', None)
-                get_trigger_time = getattr(analog, 'get_last_trigger_time', None)
-                if not callable(get_trigger_time):
-                    raise gcmd.error('Eddy approach: API аналогового trigger недоступен')
-                counter_before = stepper.get_mcu_position()
-                pos = self.toolhead.get_position()
-                pos[2] = self.eddy_approach_z
-                if self.eddy_approach_speed > self.toolhead.max_velocity:
-                    raise gcmd.error('Eddy approach: скорость выше текущего toolhead.max_velocity')
-                self.kin.max_z_velocity = self.eddy_approach_speed
-                self._check_eddy_approach_reference(gcmd, ref)
-                reported = self.printer.lookup_object('homing').manual_home(
-                    self.toolhead, [(analog, 'eddy')], pos,
-                    self.eddy_approach_speed, probe_pos=True, triggered=True,
-                    check_triggered=False)
-                self.toolhead.wait_moves()
-                stepper, step_mm = self._check_eddy_approach_reference(gcmd, ref)
-                end_z = self.toolhead.get_position()[2]
-                reported_z = reported[2]
-                trigger_time = get_trigger_time()
-                counter_after = stepper.get_mcu_position()
-                tolerance = step_mm + 1.e-9
-                if (not isinstance(trigger_time, (int, float))
-                        or not math.isfinite(trigger_time) or trigger_time != 0.
-                        or not all(math.isfinite(v) for v in (end_z, reported_z))
-                        or abs(end_z - self.eddy_approach_z) > tolerance
-                        or abs(reported_z - self.eddy_approach_z) > tolerance
-                        or abs(end_z - reported_z) > tolerance
-                        or counter_after == counter_before):
-                    raise gcmd.error('Eddy approach: trigger или неполный ход до Z50')
-            finally:
-                try:
-                    if (session is not None
-                            and getattr(session, 'hw_probe_session', None) is not None):
-                        session.end_probe_session()
-                finally:
-                    self.kin.max_z_velocity = saved_max_z_velocity
-            self._check_eddy_approach_reference(gcmd, ref)
-        except BaseException:
-            self._invalidate_travel()
-            raise
 
     def cmd_travel_apply(self, gcmd):
         try:
