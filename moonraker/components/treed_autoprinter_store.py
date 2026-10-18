@@ -100,11 +100,24 @@ class AutoPrinterStore:
             CREATE TABLE IF NOT EXISTS staging (
                 binding_epoch INTEGER NOT NULL, asset_id TEXT NOT NULL, path TEXT NOT NULL,
                 PRIMARY KEY(binding_epoch, asset_id));
+            CREATE TABLE IF NOT EXISTS execution_runs (
+                binding_epoch INTEGER NOT NULL, run_id TEXT NOT NULL, state TEXT NOT NULL,
+                filename TEXT, start_intent INTEGER NOT NULL DEFAULT 0, evidence TEXT,
+                bed_epoch INTEGER NOT NULL DEFAULT 0, consumed_check_id TEXT, completion_check_id TEXT,
+                bed_proof TEXT,
+                error_code TEXT, PRIMARY KEY(binding_epoch, run_id));
+            CREATE TABLE IF NOT EXISTS execution_events (
+                event_id TEXT PRIMARY KEY, boot_id TEXT NOT NULL, event_seq INTEGER NOT NULL,
+                control_epoch INTEGER NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL,
+                run_id TEXT, payload TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(boot_id, event_seq));
+            CREATE TABLE IF NOT EXISTS execution_receipts (
+                receipt_id TEXT PRIMARY KEY, boot_id TEXT NOT NULL);
             """
         )
         defaults = {"printer_id": self.printer_id, "profile_id": profile_id, "control_epoch": "1",
                     "binding_epoch": "1", "binding_state": "unpaired", "queue_revision": "1",
-                    "applied_queue_revision": "1", "local_pause": "1"}
+                    "applied_queue_revision": "1", "local_pause": "1", "remote_pause": "0", "bed_epoch": "0"}
         with self._transaction():
             for key, value in defaults.items():
                 self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)", (key, value))
@@ -181,7 +194,9 @@ class AutoPrinterStore:
     def session(self) -> Dict[str, Any]:
         with self._lock:
             return {"control_epoch": int(self._get("control_epoch")), "binding_epoch": int(self._get("binding_epoch")),
-                    "binding_state": self._get("binding_state"), "queue_revision": int(self._get("queue_revision"))}
+                    "binding_state": self._get("binding_state"), "queue_revision": int(self._get("queue_revision")),
+                    "local_pause": bool(int(self._get("local_pause"))),
+                    "remote_pause": bool(int(self.execution_get_meta("remote_pause", "0")))}
 
     def update_binding(self, control_epoch: int, binding_epoch: int, binding_state: str, applied_queue_revision: int) -> None:
         if any(type(v) is not int or v < 1 for v in (control_epoch, binding_epoch, applied_queue_revision)) or binding_state not in {"unpaired", "paired", "revoked"}:
@@ -191,6 +206,7 @@ class AutoPrinterStore:
             if control_epoch < current_control or binding_epoch < current_binding:
                 raise StoreError("epoch_regression")
             changed = binding_epoch != current_binding
+            control_changed = control_epoch != current_control
             current_revision = int(self._get("queue_revision"))
             if binding_state == "revoked":
                 self._set("control_epoch", control_epoch)
@@ -198,6 +214,8 @@ class AutoPrinterStore:
                 self._set("binding_state", binding_state)
                 self._set("applied_queue_revision", applied_queue_revision)
                 self._set("local_pause", 1)
+                if changed or control_changed:
+                    self._set("bed_epoch", int(self.execution_get_meta("bed_epoch", "0") or "0") + 1)
                 if changed:
                     self._set("queue_revision", 1)
                 return
@@ -208,10 +226,16 @@ class AutoPrinterStore:
             self._set("control_epoch", control_epoch)
             self._set("binding_epoch", binding_epoch)
             self._set("binding_state", binding_state)
+            if control_changed and not changed:
+                self._set("local_pause", 1)
+                self._set("remote_pause", 0)
+                self._set("bed_epoch", int(self.execution_get_meta("bed_epoch", "0") or "0") + 1)
             if changed:
                 self._set("queue_revision", applied_queue_revision)
                 self._set("applied_queue_revision", applied_queue_revision)
                 self._set("local_pause", 1)
+                self._set("remote_pause", 0)
+                self._set("bed_epoch", int(self.execution_get_meta("bed_epoch", "0") or "0") + 1)
             else:
                 self._set("applied_queue_revision", applied_queue_revision)
 
@@ -434,14 +458,20 @@ class AutoPrinterStore:
                 self._conn.execute("INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(?,?,?,?)", (binding, run_id, _json(manifest), self._conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0]))
         else:
             run_ids = payload.get("run_ids")
-            current_ids = [r[0] for r in self._conn.execute("SELECT run_id FROM runs WHERE binding_epoch=? ORDER BY position", (binding,))]
+            rows = self._conn.execute("SELECT r.run_id,r.position,e.state,e.start_intent FROM runs r LEFT JOIN execution_runs e ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id WHERE r.binding_epoch=? ORDER BY r.position", (binding,)).fetchall()
+            current_ids = [r[0] for r in rows]
             try:
                 normalized = [_uuid(x) for x in run_ids] if isinstance(run_ids, list) else []
             except StoreError:
                 normalized = []
             if len(normalized) != len(current_ids) or set(normalized) != set(current_ids) or len(set(normalized)) != len(normalized):
                 return "rejected", {"code": "invalid_queue", "queue_revision": current}
-            for pos, run_id in enumerate(normalized, 1):
+            queued_ids = {r[0] for r in rows if r[2] in (None, "queued") and not r[3]}
+            queued_positions = [r[1] for r in rows if r[0] in queued_ids]
+            reordered = iter(run_id for run_id in normalized if run_id in queued_ids)
+            final_order = {position: next(reordered) for position in queued_positions}
+            for pos, row in enumerate(rows, 1):
+                run_id = final_order.get(row[1], row[0])
                 self._conn.execute("UPDATE runs SET position=? WHERE binding_epoch=? AND run_id=?", (pos, binding, run_id))
         self._set("queue_revision", revision)
         return "executed", {"queue_revision": revision}
@@ -467,14 +497,342 @@ class AutoPrinterStore:
             binding = int(self._get("binding_epoch"))
             return [{"run_id": row[0], **json.loads(row[1])} for row in self._conn.execute("SELECT run_id,payload FROM runs WHERE binding_epoch=? ORDER BY position", (binding,))]
 
+    def execution_state(self, run_id: str) -> Dict[str, Any] | None:
+        run_id = _uuid(run_id)
+        with self._lock:
+            binding = int(self._get("binding_epoch"))
+            row = self._conn.execute("SELECT state,filename,start_intent,evidence,bed_epoch,consumed_check_id,error_code,bed_proof FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
+            if row is None:
+                return None
+            return {"run_id": run_id, "state": row[0], "filename": row[1], "start_intent": bool(row[2]),
+                    "evidence": json.loads(row[3]) if row[3] else None, "bed_epoch": row[4],
+                    "consumed_check_id": row[5], "error_code": row[6],
+                    "bed_proof": json.loads(row[7]) if row[7] else None}
+
+    def execution_states(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            binding = int(self._get("binding_epoch"))
+            rows = self._conn.execute("SELECT run_id,state,filename,start_intent,evidence,bed_epoch,consumed_check_id,error_code,bed_proof FROM execution_runs WHERE binding_epoch=?", (binding,)).fetchall()
+            return {r[0]: {"run_id": r[0], "state": r[1], "filename": r[2], "start_intent": bool(r[3]),
+                           "evidence": json.loads(r[4]) if r[4] else None, "bed_epoch": r[5],
+                           "consumed_check_id": r[6], "error_code": r[7],
+                           "bed_proof": json.loads(r[8]) if r[8] else None} for r in rows}
+
+    def execution_save(self, run_id: str, state: str, *, filename: str | None = None,
+                       evidence: dict | None = None, error_code: str | None = None) -> Dict[str, Any]:
+        run_id = _uuid(run_id)
+        if state not in {"queued", "preparing", "printing", "cooling", "removing", "verifying", "completed", "failed", "cancelled", "uncertain"}:
+            raise StoreError("invalid_run_state")
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            if self._conn.execute("SELECT 1 FROM runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone() is None:
+                raise StoreError("run_not_found")
+            previous = self._conn.execute("SELECT state,start_intent,filename FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
+            if previous and previous[1] and state in {"queued", "preparing"}:
+                raise StoreError("start_intent_consumed")
+            if previous and previous[2] and filename and previous[2] != filename:
+                raise StoreError("filename_conflict")
+            self._conn.execute("INSERT INTO execution_runs(binding_epoch,run_id,state,filename,evidence,error_code) VALUES(?,?,?,?,?,?) ON CONFLICT(binding_epoch,run_id) DO UPDATE SET state=excluded.state,filename=COALESCE(excluded.filename,execution_runs.filename),evidence=COALESCE(excluded.evidence,execution_runs.evidence),error_code=excluded.error_code", (binding, run_id, state, filename, _json(evidence) if evidence is not None else None, error_code))
+            return self.execution_state(run_id)
+
+    def execution_seed_run(self, run_id: str, boot_id: str, control_epoch: int, occurred_at: str) -> None:
+        run_id, boot_id = _uuid(run_id), _uuid(boot_id)
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            if self._conn.execute("SELECT 1 FROM runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone() is None:
+                raise StoreError("run_not_found")
+            if self._conn.execute("SELECT 1 FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone():
+                return
+            self._conn.execute("INSERT INTO execution_runs(binding_epoch,run_id,state) VALUES(?,?,'queued')", (binding, run_id))
+
+    def execution_transition(self, run_id: str, state: str, boot_id: str, control_epoch: int,
+                             occurred_at: str, *, error_code: str | None = None,
+                             evidence: dict | None = None) -> None:
+        run_id, boot_id = _uuid(run_id), _uuid(boot_id)
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            row = self._conn.execute("SELECT state,start_intent,filename FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
+            allowed = {
+                "queued": {"preparing", "failed", "cancelled"},
+                "preparing": {"printing", "failed", "cancelled"},
+                "printing": {"cooling", "removing", "verifying", "failed", "cancelled"},
+                "cooling": {"removing", "verifying", "failed", "cancelled"},
+                "removing": {"verifying", "failed", "cancelled"},
+                "verifying": {"failed", "cancelled"},
+            }
+            if row is None or state not in allowed.get(row[0], set()):
+                raise StoreError("invalid_run_transition")
+            if row[0] in {"queued", "preparing"} and state == "printing" and not row[1]:
+                raise StoreError("missing_start_intent")
+            payload = {"state": state}
+            if error_code is not None:
+                payload["error_code"] = error_code[:100]
+            if evidence is not None:
+                self._insert_event(boot_id, control_epoch, "run_reconciled", occurred_at, run_id,
+                                   {"state": state, "evidence": evidence})
+            else:
+                self._insert_event(boot_id, control_epoch, "run_state", occurred_at, run_id, payload)
+            self._conn.execute("UPDATE execution_runs SET state=?,error_code=COALESCE(?,error_code),evidence=COALESCE(?,evidence) WHERE binding_epoch=? AND run_id=?", (state, error_code, _json(evidence) if evidence is not None else None, binding, run_id))
+            if state in {"failed", "cancelled"}:
+                self._set("bed_epoch", int(self._get("bed_epoch")) + 1)
+
+    def execution_reconcile(self, run_id: str, state: str, evidence: dict, boot_id: str,
+                            control_epoch: int, occurred_at: str) -> None:
+        run_id, boot_id = _uuid(run_id), _uuid(boot_id)
+        if state not in {"printing", "failed", "cancelled"} or not isinstance(evidence, dict):
+            raise StoreError("invalid_reconciliation")
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            row = self._conn.execute("SELECT state,start_intent FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
+            if row is None or row[0] != "uncertain" or not row[1]:
+                raise StoreError("reconciliation_unavailable")
+            self._insert_event(boot_id, control_epoch, "run_reconciled", occurred_at, run_id,
+                               {"state": state, "evidence": evidence})
+            self._conn.execute("UPDATE execution_runs SET state=?,evidence=? WHERE binding_epoch=? AND run_id=?", (state, _json(evidence), binding, run_id))
+            if state in {"failed", "cancelled"}:
+                self._set("bed_epoch", int(self._get("bed_epoch")) + 1)
+
+    def _insert_event(self, boot_id: str, control_epoch: int, event_type: str, occurred_at: str,
+                      run_id: str | None, payload: dict) -> None:
+        if self._get("execution_boot_id") != boot_id:
+            raise StoreError("boot_mismatch")
+        pending = self._conn.execute("SELECT COUNT(*) FROM execution_events WHERE acknowledged=0").fetchone()[0]
+        if pending >= 10000:
+            raise StoreError("outbox_full")
+        seq = self._conn.execute("SELECT COALESCE(MAX(event_seq),0)+1 FROM execution_events WHERE boot_id=?", (boot_id,)).fetchone()[0]
+        self._conn.execute("INSERT INTO execution_events(event_id,boot_id,event_seq,control_epoch,event_type,occurred_at,run_id,payload) VALUES(?,?,?,?,?,?,?,?)", (str(uuid.uuid4()), boot_id, seq, control_epoch, event_type, occurred_at, run_id, _json(payload)))
+
+    def execution_start_intent(self, run_id: str, filename: str, bed_epoch: int, proof: dict,
+                               boot_id: str, control_epoch: int, occurred_at: str) -> None:
+        run_id = _uuid(run_id)
+        boot_id = _uuid(boot_id)
+        if not isinstance(filename, str) or not filename or type(bed_epoch) is not int or bed_epoch < 0 or not isinstance(proof, dict):
+            raise StoreError("invalid_start_intent")
+        check_id = proof.get("check_id")
+        if not isinstance(check_id, str):
+            raise StoreError("invalid_bed_check")
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            row = self._conn.execute("SELECT state,start_intent,filename FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
+            if row is None or row[1] or row[0] not in {"queued", "preparing"} or row[2] not in (None, filename):
+                raise StoreError("start_intent_unavailable")
+            if self._get("binding_state") != "paired" or self._get("local_pause") != "0":
+                raise StoreError("execution_paused")
+            if self._conn.execute("SELECT 1 FROM execution_runs WHERE binding_epoch=? AND start_intent=1 AND state NOT IN ('completed','failed','cancelled')", (binding,)).fetchone():
+                raise StoreError("execution_in_flight")
+            if self._conn.execute("SELECT 1 FROM execution_runs WHERE consumed_check_id=? OR completion_check_id=?", (check_id, check_id)).fetchone():
+                raise StoreError("bed_check_consumed")
+            self._conn.execute("UPDATE execution_runs SET state='preparing',filename=?,start_intent=1,bed_epoch=?,consumed_check_id=?,bed_proof=? WHERE binding_epoch=? AND run_id=?", (filename, bed_epoch, check_id, _json(proof), binding, run_id))
+            self._insert_event(boot_id, control_epoch, "bed_check", occurred_at, proof.get("after_run_id"), proof)
+            self._insert_event(boot_id, control_epoch, "run_state", occurred_at, run_id, {"state": "preparing"})
+
+    def execution_set_boot(self, boot_id: str) -> Dict[str, Any] | None:
+        boot_id = _uuid(boot_id)
+        with self._transaction():
+            old = self._get("execution_boot_id") if self._conn.execute("SELECT 1 FROM meta WHERE key='execution_boot_id'").fetchone() else None
+            if old and old != boot_id:
+                self._conn.execute("UPDATE execution_runs SET state='uncertain' WHERE start_intent=1 AND state NOT IN ('completed','failed','cancelled')")
+                self._set("local_pause", 1)
+                self._set("bed_epoch", int(self._get("bed_epoch")) + 1)
+            events = [self._event_json(r) for r in self._conn.execute("SELECT event_id,boot_id,event_seq,control_epoch,event_type,occurred_at,run_id,payload FROM execution_events WHERE acknowledged=0 AND boot_id=? ORDER BY event_seq", (old,)).fetchall()] if old else []
+            receipts = self._conn.execute("SELECT COUNT(*) FROM execution_receipts WHERE boot_id=?", (old,)).fetchone()[0] if old else 0
+            if old and old != boot_id and (events or receipts):
+                return {"boot_id": old, "pending_events": events, "pending_receipt_count": receipts}
+            self._set("execution_boot_id", boot_id)
+            return None
+
+    def execution_retire_boot(self, old_boot_id: str, new_boot_id: str) -> None:
+        old_boot_id, new_boot_id = _uuid(old_boot_id), _uuid(new_boot_id)
+        with self._transaction():
+            if self._get("execution_boot_id") != old_boot_id:
+                raise StoreError("boot_mismatch")
+            pending_events = self._conn.execute("SELECT 1 FROM execution_events WHERE boot_id=? AND acknowledged=0 LIMIT 1", (old_boot_id,)).fetchone()
+            pending_receipts = self._conn.execute("SELECT 1 FROM execution_receipts WHERE boot_id=? LIMIT 1", (old_boot_id,)).fetchone()
+            if pending_events or pending_receipts:
+                raise StoreError("boot_outbox_pending")
+            self._set("execution_boot_id", new_boot_id)
+
+    @staticmethod
+    def _event_json(row) -> Dict[str, Any]:
+        return {"event_id": row[0], "event_seq": row[2], "control_epoch": row[3], "type": row[4], "occurred_at": row[5], "run_id": row[6], "payload": json.loads(row[7])}
+
+    def execution_append_event(self, boot_id: str, control_epoch: int, event_type: str, occurred_at: str,
+                               run_id: str | None, payload: dict) -> Dict[str, Any]:
+        boot_id = _uuid(boot_id)
+        if type(control_epoch) is not int or control_epoch < 1 or event_type not in {"run_state", "run_reconciled", "bed_check"} or not isinstance(payload, dict):
+            raise StoreError("invalid_event")
+        if run_id is not None:
+            run_id = _uuid(run_id)
+        with self._transaction():
+            if self._get("execution_boot_id") != boot_id:
+                raise StoreError("boot_mismatch")
+            pending = self._conn.execute("SELECT COUNT(*) FROM execution_events WHERE acknowledged=0").fetchone()[0]
+            if pending >= 10000:
+                raise StoreError("outbox_full")
+            seq = self._conn.execute("SELECT COALESCE(MAX(event_seq),0)+1 FROM execution_events WHERE boot_id=?", (boot_id,)).fetchone()[0]
+            event_id = str(uuid.uuid4())
+            self._conn.execute("INSERT INTO execution_events(event_id,boot_id,event_seq,control_epoch,event_type,occurred_at,run_id,payload) VALUES(?,?,?,?,?,?,?,?)", (event_id, boot_id, seq, control_epoch, event_type, occurred_at, run_id, _json(payload)))
+            row = self._conn.execute("SELECT event_id,boot_id,event_seq,control_epoch,event_type,occurred_at,run_id,payload FROM execution_events WHERE event_id=?", (event_id,)).fetchone()
+            return self._event_json(row)
+
+    def execution_events_pending(self, boot_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise StoreError("invalid_limit")
+        with self._lock:
+            return [self._event_json(r) for r in self._conn.execute("SELECT event_id,boot_id,event_seq,control_epoch,event_type,occurred_at,run_id,payload FROM execution_events WHERE acknowledged=0 AND boot_id=? ORDER BY event_seq LIMIT ?", (_uuid(boot_id), limit)).fetchall()]
+
+    def execution_unacknowledged_count(self, boot_id: str) -> int:
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM execution_events WHERE acknowledged=0 AND boot_id=?", (_uuid(boot_id),)).fetchone()[0]
+
+    def execution_ack_events(self, event_ids: List[str], submitted: List[str], receipts: List[str],
+                             submitted_receipts: List[str], boot_id: str) -> None:
+        if (not isinstance(event_ids, list) or not isinstance(submitted, list)
+                or not isinstance(receipts, list) or not isinstance(submitted_receipts, list)
+                or len(event_ids) > 100 or len(receipts) > 100
+                or len(set(event_ids)) != len(event_ids) or len(set(submitted_receipts)) != len(submitted_receipts)):
+            raise StoreError("invalid_event_ack")
+        ids = [_uuid(x) for x in event_ids]
+        sent = {_uuid(x) for x in submitted}
+        receipt_ids = [_uuid(x) for x in receipts]
+        confirmed = [_uuid(x) for x in submitted_receipts]
+        boot_id = _uuid(boot_id)
+        if not set(ids) <= sent or not set(receipt_ids) <= set(confirmed):
+            raise StoreError("invalid_event_ack")
+        with self._transaction():
+            existing_receipts = {r[0] for r in self._conn.execute("SELECT receipt_id FROM execution_receipts WHERE boot_id=? AND receipt_id IN (%s)" % ",".join("?" for _ in confirmed), [boot_id, *confirmed]).fetchall()} if confirmed else set()
+            if existing_receipts != set(confirmed):
+                raise StoreError("unknown_event_receipt")
+            if self._get("execution_boot_id") != boot_id:
+                raise StoreError("boot_mismatch")
+            rows = {r[0] for r in self._conn.execute("SELECT event_id FROM execution_events WHERE acknowledged=0 AND event_id IN (%s)" % ",".join("?" for _ in ids), ids)} if ids else set()
+            if rows != set(ids):
+                raise StoreError("unknown_event_ack")
+            remaining = self._conn.execute("SELECT COUNT(*) FROM execution_receipts WHERE boot_id=?", (boot_id,)).fetchone()[0] - len(confirmed)
+            if remaining + len(ids) > 100:
+                raise StoreError("receipt_outbox_full")
+            self._conn.executemany("DELETE FROM execution_receipts WHERE receipt_id=?", [(x,) for x in confirmed])
+            self._conn.executemany("UPDATE execution_events SET acknowledged=1 WHERE event_id=?", [(x,) for x in ids])
+            self._conn.executemany("INSERT INTO execution_receipts(receipt_id,boot_id) VALUES(?,?)", [(x, boot_id) for x in ids])
+
+    def execution_pending_receipts(self, boot_id: str, limit: int = 100) -> List[str]:
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise StoreError("invalid_limit")
+        with self._lock:
+            return [r[0] for r in self._conn.execute("SELECT receipt_id FROM execution_receipts WHERE boot_id=? ORDER BY rowid LIMIT ?", (_uuid(boot_id), limit)).fetchall()]
+
+    def execution_outbox_count(self) -> int:
+        with self._lock:
+            return self._conn.execute("SELECT COUNT(*) FROM execution_events WHERE acknowledged=0").fetchone()[0]
+
+    def execution_complete(self, run_id: str, boot_id: str, control_epoch: int,
+                           occurred_at: str, proof: dict) -> None:
+        run_id, boot_id = _uuid(run_id), _uuid(boot_id)
+        check_id = proof.get("check_id") if isinstance(proof, dict) else None
+        if not isinstance(check_id, str):
+            raise StoreError("invalid_bed_check")
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            state = self._conn.execute("SELECT state,start_intent,consumed_check_id FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
+            if state is None or state[0] != "verifying" or not state[1] or state[2] == check_id:
+                raise StoreError("completion_unavailable")
+            if self._get("execution_boot_id") != boot_id or self._conn.execute("SELECT 1 FROM execution_runs WHERE consumed_check_id=? OR completion_check_id=?", (check_id, check_id)).fetchone():
+                raise StoreError("bed_check_consumed")
+            self._insert_event(boot_id, control_epoch, "bed_check", occurred_at, run_id, proof)
+            self._conn.execute("UPDATE execution_runs SET state='completed',completion_check_id=? WHERE binding_epoch=? AND run_id=?", (check_id, binding, run_id))
+            self._set("bed_epoch", proof["bed_epoch"] + 1)
+
+    def execution_asset_path(self, run: Mapping[str, Any]) -> Path:
+        with self._lock:
+            binding = int(self._get("binding_epoch"))
+            row = self._conn.execute("SELECT asset_id,sha256,size_bytes FROM assets WHERE binding_epoch=? AND asset_id=? AND confirmed=1", (binding, run.get("asset_id"))).fetchone()
+            if row is None or row[1:] != (run.get("sha256"), run.get("size_bytes")):
+                raise StoreError("asset_mismatch")
+            path = self._binding_dir(binding) / f"{row[0]}.gcode"
+            if _is_link(path) or _file_digest(path) != row[1:]:
+                raise StoreError("asset_integrity_error")
+            return path
+
+    def execution_set_pause(self, *, local: bool | None = None, remote: bool | None = None) -> None:
+        with self._transaction():
+            if local is not None:
+                self._set("local_pause", int(local))
+            if remote is not None:
+                self._set("remote_pause", int(remote))
+
+    def execution_get_meta(self, key: str, default: str | None = None) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            return row[0] if row else default
+
+    def execution_set_meta(self, key: str, value: Any) -> None:
+        with self._transaction():
+            self._set(key, value)
+
+    def execution_mark_uncertain(self, run_id: str) -> None:
+        run_id = _uuid(run_id)
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            self._conn.execute("UPDATE execution_runs SET state='uncertain' WHERE binding_epoch=? AND run_id=? AND start_intent=1 AND state NOT IN ('failed','cancelled')", (binding, run_id))
+
+    def execution_has_unresolved_intent(self) -> bool:
+        with self._lock:
+            return self._conn.execute("SELECT 1 FROM execution_runs WHERE start_intent=1 AND state NOT IN ('completed','failed','cancelled') LIMIT 1").fetchone() is not None
+
+    def execution_last_started(self) -> Dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute("SELECT r.run_id,r.filename,r.state FROM execution_events e JOIN execution_runs r ON r.run_id=e.run_id AND r.binding_epoch=? WHERE e.event_type='run_state' AND json_extract(e.payload,'$.state') IN ('preparing','printing') ORDER BY e.rowid DESC LIMIT 1", (int(self._get("binding_epoch")),)).fetchone()
+            return {"run_id": row[0], "filename": row[1], "state": row[2]} if row else None
+
+    def execution_begin_action(self, command: dict, *, local: bool = False) -> Dict[str, Any]:
+        if not isinstance(command, dict):
+            raise StoreError("invalid_command")
+        command_id = _uuid(command.get("command_id"))
+        if type(command.get("control_epoch")) is not int or not isinstance(command.get("payload"), dict):
+            raise StoreError("invalid_command")
+        canonical = {key: value for key, value in command.items()
+                     if key not in ({"state", "expires_at"} if local else {"state"})}
+        hash_input = {"local": True, "command": canonical} if local else canonical
+        body_hash = hashlib.sha256(_json(hash_input).encode("utf-8")).hexdigest()
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            old = self._conn.execute("SELECT body_hash,state,result,binding_epoch FROM commands WHERE command_id=?", (command_id,)).fetchone()
+            if old:
+                if old[3] != binding:
+                    raise StoreError("command_unavailable")
+                if old[0] != body_hash:
+                    raise StoreError("command_conflict")
+                return {"command_id": command_id, "state": old[1], "result": json.loads(old[2]), "new": False}
+            result = {"code": "side_effect_uncertain"}
+            if (self._get("binding_state") != "paired" or command["control_epoch"] != int(self._get("control_epoch"))
+                    or (not local and not _not_expired(command.get("expires_at")))):
+                result = {"code": "epoch_mismatch" if command["control_epoch"] != int(self._get("control_epoch")) else "expired"}
+                state = "rejected"
+            else:
+                state = "uncertain"
+            self._conn.execute("INSERT INTO commands(command_id,body_hash,state,result,binding_epoch,reported) VALUES(?,?,?,?,?,?)",
+                               (command_id, body_hash, state, _json(result), binding, int(local)))
+            return {"command_id": command_id, "state": state, "result": result, "new": True}
+
+    def execution_finish_action(self, command_id: str, state: str, result: dict) -> None:
+        command_id = _uuid(command_id)
+        if state not in {"executed", "rejected", "uncertain"} or not isinstance(result, dict):
+            raise StoreError("invalid_command_result")
+        with self._transaction():
+            row = self._conn.execute("SELECT state,binding_epoch FROM commands WHERE command_id=?", (command_id,)).fetchone()
+            if row is None or row[0] != "uncertain" or row[1] != int(self._get("binding_epoch")):
+                raise StoreError("command_unavailable")
+            self._conn.execute("UPDATE commands SET state=?,result=? WHERE command_id=?", (state, _json(result), command_id))
+
     def status(self) -> Dict[str, Any]:
         with self._lock:
             binding = int(self._get("binding_epoch"))
+            paired = self._get("binding_state") == "paired"
             return {"binding_state": self._get("binding_state"), "binding_epoch": binding,
-                    "queue_revision": int(self._get("queue_revision")), "asset_count": self._conn.execute("SELECT COUNT(*) FROM assets WHERE binding_epoch=?", (binding,)).fetchone()[0],
-                    "run_count": self._conn.execute("SELECT COUNT(*) FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0],
-                    "pending_result_count": self._conn.execute("SELECT COUNT(*) FROM commands WHERE reported=0 AND binding_epoch=?", (binding,)).fetchone()[0],
-                    "local_pause": True, "physical_execution_enabled": False}
+                    "queue_revision": int(self._get("queue_revision")), "asset_count": self._conn.execute("SELECT COUNT(*) FROM assets WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
+                    "run_count": self._conn.execute("SELECT COUNT(*) FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
+                    "pending_result_count": self._conn.execute("SELECT COUNT(*) FROM commands WHERE reported=0 AND binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
+                    "local_pause": True, "remote_pause": False, "physical_execution_enabled": False}
 
     def close(self) -> None:
         with self._lock:

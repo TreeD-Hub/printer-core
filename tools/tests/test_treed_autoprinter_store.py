@@ -79,6 +79,8 @@ class AutoPrinterStoreTest(unittest.TestCase):
         self.assertEqual([], self.store.pending_receipts())
         self.assertEqual([], self.store.queue())
         self.assertEqual([], self.store.pending_results())
+        self.assertEqual(0, self.store.status()["asset_count"])
+        self.assertEqual(0, self.store.status()["run_count"])
         self.assertTrue((self.root / "bindings" / "1" / f"{ASSET}.gcode").exists())
         self.assertEqual(1, self.store.session()["queue_revision"])
 
@@ -107,7 +109,8 @@ class AutoPrinterStoreTest(unittest.TestCase):
                                "run_ids": [RUN_1], "binding_epoch": 1, "previous_queue_revision": 1, "queue_revision": 2}}
         self.assertEqual("executed", self.store.apply_command(command)["state"])
         self.store.update_binding(2, 2, "revoked", 2)
-        self.assertEqual({"control_epoch": 2, "binding_epoch": 2, "binding_state": "revoked", "queue_revision": 1}, self.store.session())
+        self.assertEqual({"control_epoch": 2, "binding_epoch": 2, "binding_state": "revoked", "queue_revision": 1,
+                          "local_pause": True, "remote_pause": False}, self.store.session())
         self.assertEqual([], self.store.queue())
         self.assertTrue((self.root / "bindings" / "1" / f"{ASSET}.gcode").exists())
         with self.assertRaises(StoreError) as raised:
@@ -280,6 +283,31 @@ class AutoPrinterStoreTest(unittest.TestCase):
             self.skipTest("symlinks are unavailable in this Windows environment")
         finally:
             target.unlink()
+
+    def test_execution_start_intent_is_durable_and_never_reissued(self):
+        self.paired()
+        with self.store._transaction():
+            self.store._conn.execute(
+                "INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(1,?,?,1)",
+                (RUN_1, '{"asset_id":"' + ASSET + '","sha256":"' + hashlib.sha256(DATA).hexdigest() + '","size_bytes":' + str(len(DATA)) + '}'),
+            )
+        self.store.execution_save(RUN_1, "queued")
+        self.store.execution_set_pause(local=False)
+        self.store.execution_set_boot("11111111-1111-4111-8111-111111111111")
+        proof = {"check_id": "22222222-2222-4222-8222-222222222222",
+                 "after_run_id": None, "protocol_version": 1, "printer_id": PRINTER,
+                 "bed_epoch": 0, "agent_boot_id": "11111111-1111-4111-8111-111111111111",
+                 "verdict": "empty", "model_version": "fake-v1",
+                 "captured_at": "2026-10-18T00:00:00Z"}
+        self.store.execution_start_intent(RUN_1, "treed-autoprinter/1-" + RUN_1 + "-" + hashlib.sha256(DATA).hexdigest() + ".gcode",
+                                          0, proof, "11111111-1111-4111-8111-111111111111", 1,
+                                          "2026-10-18T00:00:00Z")
+        with self.assertRaises(StoreError) as raised:
+            self.store.execution_start_intent(RUN_1, "treed-autoprinter/1-" + RUN_1 + "-" + hashlib.sha256(DATA).hexdigest() + ".gcode",
+                                              0, proof, "11111111-1111-4111-8111-111111111111", 1,
+                                              "2026-10-18T00:00:00Z")
+        self.assertEqual("start_intent_unavailable", raised.exception.code)
+        self.assertTrue(self.store.execution_state(RUN_1)["start_intent"])
 
 
 if __name__ == "__main__":

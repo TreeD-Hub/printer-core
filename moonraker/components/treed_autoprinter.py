@@ -1,14 +1,16 @@
-"""Локальная очередь AutoPrinter и ограниченная синхронизация с backend.
+"""Локальная очередь AutoPrinter, синхронизация и исполнение при защитных условиях.
 
-Контур: required для учёта очереди; не читает файлы через API и не запускает печать.
+Контур: required для учёта очереди; запуск требует execution_enabled и свежего live-доказательства пустого стола.
 """
 
 from __future__ import annotations
 
 # Блок 1: зависимости только от стандартной библиотеки и соседнего хранилища.
 import asyncio
+import copy
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import random
@@ -18,12 +20,16 @@ import sqlite3
 import uuid
 from typing import Any, Callable
 
+from .treed_autoprinter_device import MoonrakerDevice
+from .treed_autoprinter_execution import AutoPrinterExecutor
 from .treed_autoprinter_store import AutoPrinterStore, StoreError
 from .treed_autoprinter_transport import AutoPrinterTransport, TransportError
 
 STATUS_ENDPOINT = "/server/treed/autoprinter/status"
 PAIRING_ENDPOINT = "/server/treed/autoprinter/pairing"
+CONTROL_ENDPOINT = "/server/treed/autoprinter/control"
 MAX_CREDENTIAL_BYTES = 8192
+LOGGER = logging.getLogger(__name__)
 
 
 class TreeDAutoPrinter:
@@ -31,10 +37,16 @@ class TreeDAutoPrinter:
         # Блок 2: выключенный компонент не открывает storage, task или сеть.
         self.server = config.get_server()
         self.enabled = config.getboolean("enabled", False)
+        self.execution_enabled = config.getboolean("execution_enabled", False)
         self._lock = asyncio.Lock()
         self._store = None
         self._transport = None
+        self._executor = None
+        self._device = None
+        self._device_unavailable = False
         self._task = None
+        self._execution_task = None
+        self._execution_error = None
         self._workers: set[asyncio.Task] = set()
         self._closed = False
         self._config = config
@@ -44,6 +56,7 @@ class TreeDAutoPrinter:
         self._recovery_required = False
         self.server.register_endpoint(STATUS_ENDPOINT, ["GET"], self._handle_status, wrap_result=False)
         self.server.register_endpoint(PAIRING_ENDPOINT, ["POST"], self._handle_pairing, wrap_result=False)
+        self.server.register_endpoint(CONTROL_ENDPOINT, ["POST"], self._handle_control, wrap_result=False)
         self.server.register_event_handler("server:shutdown", self.close)
 
     async def component_init(self) -> None:
@@ -58,8 +71,18 @@ class TreeDAutoPrinter:
             await asyncio.to_thread(self._store.close)
             self._store = None
             return
+        if self.execution_enabled:
+            try:
+                self._device = MoonrakerDevice(self.server)
+            except Exception:
+                self._device_unavailable = True
+        self._executor = AutoPrinterExecutor(
+            self._store, self._device, self._boot_id,
+            enabled=self.execution_enabled and self._device is not None,
+        )
         self._connection = "offline"
         self._task = asyncio.get_event_loop().create_task(self._sync_loop())
+        self._execution_task = asyncio.get_event_loop().create_task(self._execution_loop())
 
     def _create_configured(self):
         # Блок 3: Секрет читается только из отдельного закрытого JSON-файла.
@@ -94,16 +117,59 @@ class TreeDAutoPrinter:
         if self._store is None or self._closed:
             return {"enabled": self.enabled, "configured": False, "connection": self._connection,
                     "binding_state": "unpaired", "physical_execution_enabled": False,
-                    "queue_recovery_required": False, "blocked_reason": None}
-        status = await self._run_blocking(self._store.status)
+                    "execution_enabled": False, "queue_recovery_required": False,
+                    "blocked_reason": "device_unavailable" if self._device_unavailable else None}
+        async with self._lock:
+            if self._closed or self._store is None:
+                return {"enabled": self.enabled, "configured": False, "connection": self._connection,
+                        "binding_state": "unpaired", "physical_execution_enabled": False,
+                        "execution_enabled": False, "queue_recovery_required": self._recovery_required,
+                        "blocked_reason": "queue_recovery_required" if self._recovery_required else None}
+            status = await self._run_blocking(self._store.status)
+            execution = await self._executor.status() if self._executor is not None else {}
+        if self._device_unavailable:
+            execution["blocked_reason"] = "device_unavailable"
+            execution["execution_enabled"] = False
+        elif self._execution_error is not None:
+            execution["blocked_reason"] = self._execution_error
+        elif (self._executor is not None and self._executor.enabled
+              and self._executor.bed_checker is None and execution.get("blocked_reason") is None):
+            execution["blocked_reason"] = "bed_proof_unavailable"
         status.update({"enabled": True, "configured": True, "connection": self._connection,
                        "physical_execution_enabled": False,
                        "queue_recovery_required": self._recovery_required,
-                       "blocked_reason": "queue_recovery_required" if self._recovery_required else None})
+                       **execution,
+                       "blocked_reason": ("queue_recovery_required" if self._recovery_required
+                                          else execution.get("blocked_reason"))})
         return status
 
+    async def _handle_control(self, web_request) -> dict[str, Any]:
+        # Блок 5: endpoint принимает только локальные действия из ограниченного списка.
+        if self._closed or self._store is None or self._executor is None:
+            raise self.server.error("AutoPrinter is unavailable", 503)
+        args = web_request.get_args()
+        if (not isinstance(args, dict) or not isinstance(args.get("type"), str) or args["type"] not in {
+                "pause_queue", "resume_queue", "stop_after_current", "pause_current_print",
+                "cancel_current_print", "recheck_bed"}):
+            raise self.server.error("Invalid AutoPrinter control action", 400)
+        kind = args["type"]
+        physical = kind in {"pause_current_print", "cancel_current_print"}
+        expected = {"type", "run_id", "action_id"} if physical else {"type"}
+        if (set(args) != expected or (physical and not (
+                _is_uuid(args["run_id"]) and _is_uuid(args["action_id"])) )):
+            raise self.server.error("Invalid AutoPrinter control payload", 400)
+        if physical and not self._executor.enabled:
+            raise self.server.error("Physical execution is disabled", 503)
+        async with self._lock:
+            if self._closed:
+                raise self.server.error("AutoPrinter is unavailable", 503)
+            try:
+                return await self._executor.local_action(args.copy())
+            except StoreError:
+                raise self.server.error("AutoPrinter control action is unavailable", 409) from None
+
     async def _handle_pairing(self, web_request) -> dict[str, Any]:
-        # Блок 5: возвращается только одноразовый код, credential остаётся локальным.
+        # Блок 6: возвращается только одноразовый код, credential остаётся локальным.
         if self._closed or self._store is None or self._transport is None:
             raise self.server.error("AutoPrinter is unavailable", 503)
         async with self._lock:
@@ -119,7 +185,7 @@ class TreeDAutoPrinter:
             return {"code": code, "expires_at": expires_at}
 
     async def _sync_loop(self) -> None:
-        # Блок 6: последовательный sync с ограниченным backoff без логирования деталей.
+        # Блок 7: последовательный sync с ограниченным backoff без логирования деталей.
         delay = 2
         while True:
             if self._recovery_required:
@@ -131,10 +197,18 @@ class TreeDAutoPrinter:
                 self._connection = "online"
                 delay = 2
             except TransportError as error:
-                if error.status == 401:
+                if error.status in {401, 409}:
                     try:
-                        await self._run_blocking(self._mark_revoked)
-                        self._connection = "revoked"
+                        async with self._lock:
+                            if self._executor is not None:
+                                await self._executor.transport_error(error.status)
+                            if error.status == 401:
+                                await self._run_blocking(self._mark_revoked)
+                        if error.status == 401:
+                            self._connection = "revoked"
+                        else:
+                            self._recovery_required = True
+                            self._connection = "blocked"
                     except StoreError as store_error:
                         if store_error.code == "queue_recovery_required":
                             self._recovery_required = True
@@ -162,6 +236,20 @@ class TreeDAutoPrinter:
                 delay = min(delay * 2, 60)
             await asyncio.sleep(random.uniform(delay * 0.8, delay * 1.2))
 
+    async def _execution_loop(self) -> None:
+        # Блок 8: короткий execution poll отделён от сетевого sync/backoff.
+        while not self._closed:
+            try:
+                async with self._lock:
+                    await self._executor.tick()
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._execution_error = "execution_loop_error"
+                LOGGER.error("AutoPrinter execution loop stopped (%s)", type(error).__name__)
+                return
+
     def _mark_revoked(self) -> None:
         session = self._store.session()
         self._store.update_binding(session["control_epoch"], session["binding_epoch"],
@@ -169,14 +257,19 @@ class TreeDAutoPrinter:
 
     async def close(self) -> None:
         self._closed = True
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-            await asyncio.gather(self._task, return_exceptions=True)
+        tasks = [task for task in (self._task, self._execution_task) if task is not None and not task.done()]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         while self._workers:
             await asyncio.gather(*tuple(self._workers), return_exceptions=True)
-        if self._store is not None:
-            await asyncio.to_thread(self._store.close)
-            self._store = None
+        async with self._lock:
+            while self._workers:
+                await asyncio.gather(*tuple(self._workers), return_exceptions=True)
+            if self._store is not None:
+                await asyncio.to_thread(self._store.close)
+                self._store = None
 
     async def _sync_once(self) -> None:
         async with self._lock:
@@ -185,14 +278,22 @@ class TreeDAutoPrinter:
                 self._recovery_required = True
                 self._connection = "blocked"
                 raise StoreError("queue_recovery_required")
+            execution_fields = await self._executor.sync_fields() if self._executor is not None else None
             self._snapshot_seq += 1
             payload = {
                 "protocol_version": 1, "printer_id": self._store.printer_id,
-                "control_epoch": session["control_epoch"], "agent_boot_id": self._boot_id,
-                "snapshot_seq": self._snapshot_seq, "snapshot": _snapshot(), "events": [],
-                "command_results": await self._run_blocking(self._store.pending_results, 20),
-                "acknowledged_event_ids": [],
+                "control_epoch": session["control_epoch"],
+                "agent_boot_id": execution_fields["agent_boot_id"] if execution_fields else self._boot_id,
+                "snapshot_seq": execution_fields["snapshot_seq"] if execution_fields else self._snapshot_seq,
+                "snapshot": execution_fields["snapshot"] if execution_fields else _snapshot(),
+                "events": execution_fields["events"] if execution_fields else [],
+                "command_results": (execution_fields["command_results"] if execution_fields
+                                     else await self._run_blocking(self._store.pending_results, 20)),
+                "acknowledged_event_ids": (execution_fields["acknowledged_event_ids"]
+                                            if execution_fields else []),
             }
+            submitted = copy.deepcopy(payload)
+            submitted["binding_epoch"] = session["binding_epoch"]
             response = await self._run_blocking(self._transport.sync, payload)
             _validate_response(response, self._store.printer_id, self._store.profile_id)
             mismatch = response.get("reason") == "control_epoch_mismatch"
@@ -209,6 +310,8 @@ class TreeDAutoPrinter:
                 self._store.update_binding, response["control_epoch"], response["binding_epoch"],
                 response["binding_state"], response["applied_queue_revision"],
             )
+            if self._executor is not None:
+                await self._executor.acknowledge(response, submitted)
             if mismatch or revoked:
                 return
             if response["binding_state"] == "paired":
@@ -245,7 +348,12 @@ class TreeDAutoPrinter:
                     await self._run_blocking(self._store.confirm_receipt, pending["asset_id"])
                 for command in response["commands"]:
                     normalized = _validate_command(command, response)
-                    await self._run_blocking(self._store.apply_command, normalized)
+                    if (self._executor is not None and (
+                            self._executor.enabled or normalized["type"] not in {
+                                "pause_current_print", "cancel_current_print"})):
+                        await self._executor.command(normalized)
+                    else:
+                        await self._run_blocking(self._store.apply_command, normalized)
             if (response["control_epoch"] == session["control_epoch"]
                     and response["binding_epoch"] == session["binding_epoch"]
                     and response["binding_state"] == "paired"
@@ -255,7 +363,7 @@ class TreeDAutoPrinter:
                     await self._run_blocking(self._store.ack_results, ids)
 
 
-# Блок 7: Валидация ответа и неизменяемое состояние без обращения к Klippy.
+# Блок 8: Валидация ответа и неизменяемое состояние без обращения к Klippy.
 def _read_credentials(path: Path) -> dict[str, str]:
     before = path.lstat()
     if path.is_symlink():
