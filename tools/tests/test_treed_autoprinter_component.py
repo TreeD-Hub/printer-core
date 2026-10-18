@@ -76,6 +76,9 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.server.endpoints[component.PAIRING_ENDPOINT][0], ["POST"])
         self.assertTrue(all(item[2].get("wrap_result") is False for item in config.server.endpoints.values()))
         status = await instance._handle_status(None)
+        self.assertEqual(status["protocol_version"], 1)
+        self.assertEqual(status["configuration_version"], 1)
+        self.assertIsNone(status["last_sync_at"])
         self.assertFalse(status["physical_execution_enabled"])
         self.assertNotIn("secret", status)
         await instance.component_init()
@@ -102,6 +105,19 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
             await instance._handle_control(Request({
                 "type": "pause_current_print", "run_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                 "action_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}))
+
+    async def test_journal_configuration_error_is_safe_and_does_not_start_workers(self):
+        instance = component.TreeDAutoPrinter(FakeConfig(enabled=True))
+        with patch.object(instance, "_create_configured", side_effect=component.StoreError("journal_limit_exceeded")), \
+                patch.object(component, "MoonrakerDevice") as device:
+            await instance.component_init()
+        status = await instance._handle_status(None)
+        self.assertFalse(status["configured"])
+        self.assertEqual(status["blocked_reason"], "journal_limit_exceeded")
+        self.assertIsNone(instance._task)
+        self.assertIsNone(instance._execution_task)
+        device.assert_not_called()
+        await instance.close()
 
     async def test_execution_disabled_does_not_construct_live_device(self):
         printer_id = "11111111-1111-4111-8111-111111111111"
@@ -692,6 +708,10 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
 
             def __init__(self):
                 self.ack = None
+                self.bed_checker = None
+
+            async def status(self):
+                return {}
 
             async def sync_fields(self):
                 return {"agent_boot_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -722,11 +742,26 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
             try:
                 await instance._sync_once()
 
+                self.assertIsNotNone(instance._last_sync_at)
+                status = await instance._handle_status(None)
+                self.assertEqual(instance._last_sync_at, status["last_sync_at"])
+                self.assertIn("journal", status)
+                self.assertNotIn("last_sync_at", transport.payload)
+                self.assertNotIn("journal", transport.payload["snapshot"])
                 self.assertEqual(transport.payload["events"], [event])
                 self.assertEqual(transport.payload["agent_boot_id"], "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
                 self.assertNotIn("binding_epoch", transport.payload)
                 self.assertEqual([item["event_id"] for item in instance._executor.ack[1]["events"]], [event_id])
                 self.assertEqual(instance._executor.ack[1]["binding_epoch"], 1)
+                last_sync = instance._last_sync_at
+                with patch.object(transport, "sync", return_value={"protocol_version": 999}):
+                    with self.assertRaises(ValueError):
+                        await instance._sync_once()
+                self.assertEqual(last_sync, instance._last_sync_at)
+                instance._store.update_binding(2, 1, "revoked", 1)
+                status = await instance._handle_status(None)
+                self.assertIsNone(status["last_sync_at"])
+                self.assertNotIn("journal", status)
             finally:
                 await instance.close()
 

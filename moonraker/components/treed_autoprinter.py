@@ -23,7 +23,7 @@ from typing import Any, Callable
 from .treed_autoprinter_device import MoonrakerDevice
 from .treed_autoprinter_bed import E0BedChecker
 from .treed_autoprinter_execution import AutoPrinterExecutor
-from .treed_autoprinter_store import AutoPrinterStore, StoreError
+from .treed_autoprinter_store import AutoPrinterStore, StoreError, DEFAULT_MAX_JOURNAL_BYTES
 from .treed_autoprinter_transport import AutoPrinterTransport, TransportError
 
 STATUS_ENDPOINT = "/server/treed/autoprinter/status"
@@ -50,6 +50,8 @@ class TreeDAutoPrinter:
         self._execution_task = None
         self._execution_error = None
         self._bed_check_status = None
+        self._configuration_error = None
+        self._last_sync_at = None
         self._workers: set[asyncio.Task] = set()
         self._closed = False
         self._config = config
@@ -67,7 +69,12 @@ class TreeDAutoPrinter:
             return
         try:
             self._store, self._transport = await self._run_blocking(self._create_configured)
+        except StoreError as error:
+            self._configuration_error = error.code
+            self._connection = "unconfigured"
+            return
         except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+            self._configuration_error = "configuration_invalid"
             self._connection = "unconfigured"
             return
         if self._closed:
@@ -115,7 +122,10 @@ class TreeDAutoPrinter:
         if credentials["printer_id"] != printer_id:
             raise ValueError("identity_mismatch")
         transport = AutoPrinterTransport(origin, credentials["secret"])
-        store = AutoPrinterStore(Path(self._config.get("storage_path")), printer_id, profile_id)
+        store = AutoPrinterStore(
+            Path(self._config.get("storage_path")), printer_id, profile_id,
+            max_journal_bytes=int(self._config.get("max_journal_bytes", DEFAULT_MAX_JOURNAL_BYTES)),
+        )
         return store, transport
 
     async def _run_blocking(self, callback: Callable, *args):
@@ -137,12 +147,14 @@ class TreeDAutoPrinter:
         # Блок 4: endpoint использует стандартную авторизацию Moonraker.
         if self._store is None or self._closed:
             return {"enabled": self.enabled, "configured": False, "connection": self._connection,
+                    "protocol_version": 1, "configuration_version": 1, "last_sync_at": None,
                     "binding_state": "unpaired", "physical_execution_enabled": False,
                     "execution_enabled": False, "queue_recovery_required": False,
-                    "blocked_reason": "device_unavailable" if self._device_unavailable else None}
+                    "blocked_reason": "device_unavailable" if self._device_unavailable else self._configuration_error}
         async with self._lock:
             if self._closed or self._store is None:
                 return {"enabled": self.enabled, "configured": False, "connection": self._connection,
+                        "protocol_version": 1, "configuration_version": 1, "last_sync_at": None,
                         "binding_state": "unpaired", "physical_execution_enabled": False,
                         "execution_enabled": False, "queue_recovery_required": self._recovery_required,
                         "blocked_reason": "queue_recovery_required" if self._recovery_required else None}
@@ -163,6 +175,8 @@ class TreeDAutoPrinter:
               and self._executor.bed_checker is None and execution.get("blocked_reason") is None):
             execution["blocked_reason"] = "bed_proof_unavailable"
         status.update({"enabled": True, "configured": True, "connection": self._connection,
+                       "protocol_version": 1, "configuration_version": 1,
+                       "last_sync_at": self._last_sync_at if status.get("binding_state") == "paired" else None,
                        "physical_execution_enabled": False,
                        "queue_recovery_required": self._recovery_required,
                        **execution,
@@ -340,6 +354,7 @@ class TreeDAutoPrinter:
             if self._executor is not None:
                 await self._executor.acknowledge(response, submitted)
             if mismatch or revoked:
+                self._last_sync_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
                 return
             if response["binding_state"] == "paired":
                 for transfer in response["transfers"]:
@@ -388,6 +403,7 @@ class TreeDAutoPrinter:
                 ids = [item["command_id"] for item in payload["command_results"]]
                 if ids:
                     await self._run_blocking(self._store.ack_results, ids)
+            self._last_sync_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 # Блок 8: Валидация ответа и неизменяемое состояние без обращения к Klippy.

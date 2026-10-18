@@ -16,6 +16,8 @@ import threading
 from typing import Any, BinaryIO, Dict, List, Mapping
 import uuid
 
+DEFAULT_MAX_JOURNAL_BYTES = 64 * 1024 * 1024
+
 
 class StoreError(ValueError):
     """Безопасная ошибка контракта с машинно-читаемым кодом."""
@@ -34,17 +36,19 @@ class AutoPrinterStore:
         max_asset_bytes: int = 104857600,
         max_total_bytes: int = 1073741824,
         max_runs: int = 1000,
+        max_journal_bytes: int = DEFAULT_MAX_JOURNAL_BYTES,
     ) -> None:
         # Блок 2: Валидация идентичности и закрытые каталоги конкретного принтера.
         self.printer_id = _uuid(printer_id)
         if not isinstance(profile_id, str) or not profile_id or len(profile_id) > 128:
             raise StoreError("invalid_profile")
-        if any(type(v) is not int or v < 1 for v in (max_asset_bytes, max_total_bytes, max_runs)):
+        if any(type(v) is not int or v < 1 for v in (max_asset_bytes, max_total_bytes, max_runs, max_journal_bytes)):
             raise StoreError("invalid_limit")
         self.profile_id = profile_id
         self.max_asset_bytes = max_asset_bytes
         self.max_total_bytes = max_total_bytes
         self.max_runs = max_runs
+        self.max_journal_bytes = max_journal_bytes
         requested_root = Path(os.path.abspath(root))
         for ancestor in reversed((requested_root, *requested_root.parents)):
             if _is_link(ancestor):
@@ -84,6 +88,16 @@ class AutoPrinterStore:
         self._conn.execute("PRAGMA journal_mode=DELETE")
         self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        # Блок 3а: жёсткий бюджет БД сохраняет dedup и outbox без удаления истории.
+        page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
+        max_pages = max(1, self.max_journal_bytes // page_size)
+        if (page_size > self.max_journal_bytes
+                or self._conn.execute("PRAGMA page_count").fetchone()[0] > max_pages):
+            raise StoreError("journal_limit_exceeded")
+        actual_pages = self._conn.execute(f"PRAGMA max_page_count={max_pages}").fetchone()[0]
+        if actual_pages * page_size > self.max_journal_bytes:
+            raise StoreError("journal_limit_exceeded")
+        self.max_journal_bytes = actual_pages * page_size
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -154,12 +168,12 @@ class AutoPrinterStore:
             def __exit__(inner, kind, value, traceback):
                 try:
                     if kind:
-                        inner.store._conn.execute("ROLLBACK")
+                        inner.store._conn.rollback()
                     else:
                         try:
-                            inner.store._conn.execute("COMMIT")
+                            inner.store._conn.commit()
                         except Exception:
-                            inner.store._conn.execute("ROLLBACK")
+                            inner.store._conn.rollback()
                             raise
                 finally:
                     inner.store._lock.release()
@@ -828,11 +842,18 @@ class AutoPrinterStore:
         with self._lock:
             binding = int(self._get("binding_epoch"))
             paired = self._get("binding_state") == "paired"
-            return {"binding_state": self._get("binding_state"), "binding_epoch": binding,
+            result = {"binding_state": self._get("binding_state"), "binding_epoch": binding,
                     "queue_revision": int(self._get("queue_revision")), "asset_count": self._conn.execute("SELECT COUNT(*) FROM assets WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
                     "run_count": self._conn.execute("SELECT COUNT(*) FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
                     "pending_result_count": self._conn.execute("SELECT COUNT(*) FROM commands WHERE reported=0 AND binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
                     "local_pause": True, "remote_pause": False, "physical_execution_enabled": False}
+            if paired:
+                page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
+                allocated = self._conn.execute("PRAGMA page_count").fetchone()[0] * page_size
+                result["journal"] = {"allocated_bytes": allocated,
+                                     "limit_bytes": self.max_journal_bytes,
+                                     "at_capacity": allocated >= self.max_journal_bytes}
+            return result
 
     def close(self) -> None:
         with self._lock:

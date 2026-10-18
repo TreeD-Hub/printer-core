@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from io import BytesIO
 from pathlib import Path
 import sys
@@ -37,6 +38,43 @@ class AutoPrinterStoreTest(unittest.TestCase):
 
     def paired(self):
         self.store.update_binding(1, 1, "paired", 1)
+
+    def test_journal_limit_rolls_back_full_write_and_preserves_events_on_reopen(self):
+        self.paired()
+        boot = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        self.store.execution_set_boot(boot)
+        event = self.store.execution_append_event(boot, 1, "bed_check", "2026-10-18T00:00:00Z",
+                                                 None, {"verdict": "unknown"})
+        page_size = self.store._conn.execute("PRAGMA page_size").fetchone()[0]
+        limit = self.store.status()["journal"]["allocated_bytes"] + 3 * page_size
+        self.store.close()
+        self.store = AutoPrinterStore(self.root, PRINTER, PROFILE, max_journal_bytes=limit)
+        with self.assertRaises(sqlite3.DatabaseError) as raised:
+            self.store.execution_append_event(boot, 1, "bed_check", "2026-10-18T00:00:01Z",
+                                             None, {"reason": "x" * (2 * limit)})
+        self.assertEqual(raised.exception.sqlite_errorcode, sqlite3.SQLITE_FULL)
+        self.assertEqual([event], self.store.execution_events_pending(boot))
+        self.assertFalse(self.store._conn.in_transaction)
+        self.assertLessEqual(self.store.db_path.stat().st_size, limit)
+        self.store.execution_set_pause(local=True)
+        self.store.close()
+        self.store = AutoPrinterStore(self.root, PRINTER, PROFILE, max_journal_bytes=limit)
+        self.assertEqual([event], self.store.execution_events_pending(boot))
+        self.assertEqual(limit, self.store.status()["journal"]["limit_bytes"])
+        self.assertTrue(self.store.session()["local_pause"])
+
+    def test_lowering_journal_limit_rejects_without_truncation_or_lock_leak(self):
+        self.paired()
+        before = self.store.db_path.read_bytes()
+        self.store.close()
+        with self.assertRaisesRegex(StoreError, "journal_limit_exceeded"):
+            AutoPrinterStore(self.root, PRINTER, PROFILE, max_journal_bytes=4096)
+        self.assertEqual(before, self.store.db_path.read_bytes())
+        self.store = AutoPrinterStore(self.root, PRINTER, PROFILE)
+        self.assertEqual("paired", self.store.session()["binding_state"])
+        self.assertIn("journal", self.store.status())
+        self.store.update_binding(2, 1, "revoked", 1)
+        self.assertNotIn("journal", self.store.status())
 
     def transfer(self, data=DATA, asset_id=ASSET):
         return {"asset_id": asset_id, "sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data),

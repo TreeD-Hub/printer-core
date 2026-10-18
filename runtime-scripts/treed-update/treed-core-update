@@ -30,6 +30,16 @@ CAMERA = {"cam_env.sh", "session_start.sh", "session_stop.sh", "snapshot.sh", "s
 PRESERVED = {"local_overrides.cfg", "treed_variables.cfg", "filament_motion_runtime.cfg"}
 MAX_PACKAGE = 32 * 1024 * 1024
 MAX_CONTENT = 64 * 1024 * 1024
+AUTOPRINTER_MODULES = {f"moonraker/treed_autoprinter{suffix}.py" for suffix in (
+    "", "_store", "_transport", "_execution", "_device", "_bed", "_bed_inference",
+)}
+
+
+def validate_autoprinter_files(files):
+    # Частичный комплект не должен заменять работающий компонент при update.
+    present = AUTOPRINTER_MODULES.intersection(files)
+    if present and present != AUTOPRINTER_MODULES:
+        raise ValueError("Core пакет содержит неполный AutoPrinter")
 
 
 def allowed(key):
@@ -79,6 +89,7 @@ def sources(repo):
     for name in SBIN:
         directory = "treed-ui" if name == "treed-ui" else "treed-update"
         items[f"sbin/{name}"] = repo / "runtime-scripts" / directory / name
+    validate_autoprinter_files(items)
     for key, path in items.items():
         allowed(key)
         if path.is_symlink() or not path.is_file():
@@ -400,6 +411,7 @@ def load_package(archive, tag):
                     "klipper/treed_driver_mode.py", "moonraker/treed_update.py", "sbin/treed-core-update"}
         if not required <= payload.keys():
             raise ValueError("Core пакет неполон")
+        validate_autoprinter_files(payload)
         return manifest, payload
 
 
@@ -429,12 +441,19 @@ def request_json(path, data=None):
         return json.load(response)["result"]
 
 
-def ready():
+def ready(required_components=()):
     try:
         info = request_json("/server/info")
-        return (info.get("klippy_state") == "ready" and
-                {"treed_update", "treed_recovery", "treed_detection", "treed_host_network",
-                 "treed_filament_sensor", "treed_shell_command"} <= set(info.get("components", [])))
+        if not isinstance(info, dict):
+            return False
+        loaded, failed = info.get("components"), info.get("failed_components")
+        if not all(isinstance(items, list) and all(isinstance(item, str) for item in items)
+                   for items in (loaded, failed)):
+            return False
+        required = {"treed_update", "treed_recovery", "treed_detection", "treed_host_network",
+                    "treed_filament_sensor", "treed_shell_command", *required_components}
+        return (info.get("klippy_state") == "ready" and required <= set(loaded)
+                and not required.intersection(failed))
     except (OSError, ValueError, KeyError):
         return False
 
@@ -464,11 +483,15 @@ def stop_heating():
         raise ValueError("Не подтверждена остановка печати и нагрева перед обновлением")
 
 
-def wait_ready():
+def wait_ready(manifest=None):
+    # Старый runtime без AutoPrinter остаётся пригодным для миграции и rollback.
+    required = ("treed_autoprinter",) if manifest and any(
+        row["path"] == "moonraker/treed_autoprinter.py" for row in manifest["files"]
+    ) else ()
     deadline = time.monotonic() + 60
     consecutive = 0
     while time.monotonic() < deadline:
-        consecutive = consecutive + 1 if ready() else 0
+        consecutive = consecutive + 1 if ready(required) else 0
         if consecutive == 3:
             return True
         time.sleep(1)
@@ -575,7 +598,7 @@ def rollback(env, journal, transaction):
     # Старые journal со stage=prepared сохраняют прежний recovery-контракт.
     if transaction["stage"] in {"validated", "aborted"}:
         services("start")
-        if not wait_ready():
+        if not wait_ready(read_json(manifest_path(env))):
             raise RuntimeError("Обновление не началось, но сервисы не прошли readiness")
         transaction["stage"] = "aborted"
         write_json(journal, transaction)
@@ -601,7 +624,7 @@ def rollback(env, journal, transaction):
     write_json(manifest_path(env), previous)
     clear_bytecode(transaction["entries"], locations)
     services("start")
-    if not wait_ready():
+    if not wait_ready(previous):
         raise RuntimeError("Файлы восстановлены, но Klipper/Moonraker не прошли readiness")
     transaction["stage"] = "rolled_back"
     write_json(journal, transaction)
@@ -617,14 +640,14 @@ def recover(env, operation):
                 "message": "Обновление core прервано до изменения файлов."}
     if transaction.get("schema") != 1:
         raise ValueError("Неизвестный journal core")
-    if transaction["stage"] == "committed" and wait_ready():
+    if transaction["stage"] == "committed":
         installed = read_json(manifest_path(env))
         expected = read_json(journal.parent / "manifest.new.json")
-        if installed != expected:
+        if installed != expected or not wait_ready(expected):
             return rollback(env, journal, transaction)
         return {"status": "applied", "resultCode": "core_updated",
                 "message": "Готовность установленного TreeD Core подтверждена."}
-    if transaction["stage"] == "rolled_back" and wait_ready():
+    if transaction["stage"] == "rolled_back" and wait_ready(read_json(manifest_path(env))):
         return {"status": "rolled_back", "resultCode": "rollback_succeeded",
                 "message": "Готовность восстановленных компонентов TreeD подтверждена."}
     return rollback(env, journal, transaction)
@@ -678,7 +701,7 @@ def apply(tag, operation, env, reset_configs=None):
         phase("restarting", "Запускаем Klipper и Moonraker.")
         services("start")
         phase("verifying", "Проверяем готовность Klipper и загрузку компонентов Moonraker.")
-        if not wait_ready():
+        if not wait_ready(manifest):
             raise RuntimeError("Новая версия TreeD Core не прошла readiness")
         write_json(manifest_path(env), current)
         transaction["stage"] = "committed"
