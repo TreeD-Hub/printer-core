@@ -3,3 +3,8 @@
 __pycache__/
 *.log
 /output/
+
+# Local task artifacts
+/.unlazy/
+/.unlazy-hook-state.json
+/GATES.md
