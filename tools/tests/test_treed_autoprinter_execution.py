@@ -10,6 +10,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from moonraker.components.treed_autoprinter_execution import AutoPrinterExecutor
 from moonraker.components.treed_autoprinter_store import AutoPrinterStore, StoreError
@@ -371,12 +372,49 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_resume_clears_stop_after_current(self):
         await self.seed_queue([RUNS[0]])
         executor, device, _ = await self.online_executor()
-        await executor.local_action({"type": "stop_after_current"})
-        await executor.local_action({"type": "resume_queue"})
+        stopped = await executor.local_action({"type": "stop_after_current"})
+        self.assertTrue(stopped["stop_after_current"])
+        self.assertEqual({"type": "stop_after_current", "command_id": None, "state": "executed", "result": {}},
+                         stopped["action_result"])
+        resumed = await executor.local_action({"type": "resume_queue"})
+        self.assertFalse(resumed["stop_after_current"])
+        self.assertEqual("executed", resumed["action_result"]["state"])
 
         await executor.tick()
 
         self.assertEqual(1, len(device.starts))
+
+    async def test_recheck_receipt_distinguishes_unavailable_and_nonempty_bed(self):
+        await asyncio.to_thread(self.store.update_binding, 1, 1, "paired", 1)
+        executor, _, checker = await self.online_executor()
+
+        checker.verdict = "occupied"
+        occupied = await executor.local_action({"type": "recheck_bed"})
+        self.assertEqual({"type": "recheck_bed", "command_id": None, "state": "executed",
+                          "result": {"code": "bed_occupied"}}, occupied["action_result"])
+        self.assertFalse(occupied["capabilities"]["bed_check"])
+        self.assertTrue(occupied["capabilities"]["bed_check_diagnostic"])
+
+        checker.verdict = "unknown"
+        unknown = await executor.local_action({"type": "recheck_bed"})
+        self.assertEqual("executed", unknown["action_result"]["state"])
+        self.assertEqual("bed_unknown", unknown["action_result"]["result"]["code"])
+
+        checker.fail = True
+        unavailable = await executor.local_action({"type": "recheck_bed"})
+        self.assertEqual("rejected", unavailable["action_result"]["state"])
+        self.assertEqual("bed_proof_unavailable", unavailable["action_result"]["result"]["code"])
+
+    async def test_local_action_write_failure_is_never_reported_as_executed(self):
+        await asyncio.to_thread(self.store.update_binding, 1, 1, "paired", 1)
+        executor, _, _ = await self.online_executor()
+
+        with patch.object(self.store, "execution_set_meta", side_effect=OSError("disk unavailable")):
+            result = await executor.local_action({"type": "stop_after_current"})
+
+        self.assertEqual("uncertain", result["action_result"]["state"])
+        self.assertEqual("local_action_outcome_uncertain", result["action_result"]["result"]["code"])
+        self.assertFalse(result["stop_after_current"])
 
     async def test_external_print_blocks_start_and_revocation_hides_old_queue(self):
         await self.seed_queue([RUNS[0]])
@@ -456,10 +494,23 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
         action = {"type": "pause_current_print", "run_id": RUNS[0],
                   "action_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
 
-        await executor.local_action(action)
-        await executor.local_action(action)
+        first = await executor.local_action(action)
+        second = await executor.local_action(action)
 
+        self.assertEqual({"type": "pause_current_print", "command_id": action["action_id"],
+                          "state": "executed", "result": {}}, first["action_result"])
+        self.assertEqual(first["action_result"], second["action_result"])
         self.assertEqual(1, device.pause_calls)
+
+        uncertain = dict(action, action_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+        device.fail_next_pause = True
+        first_uncertain = await executor.local_action(uncertain)
+        replayed_uncertain = await executor.local_action(uncertain)
+        self.assertEqual({"type": "pause_current_print", "command_id": uncertain["action_id"],
+                          "state": "uncertain", "result": {"code": "side_effect_uncertain"}},
+                         first_uncertain["action_result"])
+        self.assertEqual(first_uncertain["action_result"], replayed_uncertain["action_result"])
+        self.assertEqual(2, device.pause_calls)
 
     async def test_local_recheck_completes_verifying_run_with_one_fresh_bed_event(self):
         await self.seed_queue([RUNS[0]])

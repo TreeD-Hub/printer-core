@@ -207,7 +207,12 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 status = await instance._handle_status(None)
                 self.assertEqual(checker.status(), status["bed_check"])
                 self.assertFalse(status["capabilities"]["bed_check"])
+                self.assertTrue(status["capabilities"]["bed_check_diagnostic"])
+                self.assertTrue(status["capabilities"]["queue"])
+                self.assertTrue(status["capabilities"]["pairing"])
                 result = await instance._handle_control(Request())
+                self.assertEqual({"type": "recheck_bed", "command_id": None, "state": "executed",
+                                  "result": {"code": "bed_unknown"}}, result["action_result"])
                 self.assertEqual("unknown", (await asyncio.to_thread(
                     instance._store.execution_events_pending, instance._boot_id))[0]["payload"]["verdict"])
                 self.assertFalse(result["capabilities"]["bed_check"])

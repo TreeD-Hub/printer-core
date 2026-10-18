@@ -22,6 +22,19 @@
 Для unpaired/revoked-состояния время скрыто. Эти поля не добавляются в wire
 snapshot для backend.
 
+При `binding_state: "paired"` локальный status также возвращает `queue` — до
+1000 заданий по возрастанию `position`, `queue_total` — полный размер текущей
+очереди, и `queue_truncated` — признак, что показан не весь список. Элемент
+содержит только `run_id`, `position`, `state`, `series_id` и `copies_per_run`;
+если состояние исполнения ещё не записано, используется `queued`. Для старой
+записи отсутствующие `series_id` или `copies_per_run` равны `null`;
+unpaired/revoked-состояния очередь пуста, `queue_total` равен нулю,
+`queue_truncated` — `false`.
+`capabilities.queue` и `capabilities.pairing` показывают поддержку локального
+списка и связывания. `capabilities.bed_check_diagnostic` показывает наличие
+провайдера диагностики; `capabilities.bed_check` по-прежнему означает
+квалифицированную live-проверку.
+
 При paired-состоянии `journal` показывает `allocated_bytes`, `limit_bytes`
 и `at_capacity`. Бюджет задаётся `max_journal_bytes` в `[treed_autoprinter]`,
 по умолчанию 67108864 байт (64 МиБ). SQLite округляет бюджет вниз до размера
@@ -72,6 +85,16 @@ Credentials, `storage_path` с привязкой и журналом, G-code а
 Авторизованный `POST /server/treed/autoprinter/control` принимает только `pause_queue`, `resume_queue`, `stop_after_current`, `recheck_bed`, `pause_current_print` и `cancel_current_print`. Первые четыре действия принимают только поле `type`. Для паузы или отмены текущей печати передайте также UUID `run_id` и UUID `action_id`; компонент сверяет задание с текущим запуском. Endpoint не принимает команды запуска, пути файлов или доказательства проверки стола.
 
 Исполнение требует обоих переключателей: `enabled: true` и `execution_enabled: true`. Если адаптер принтера недоступен, компонент оставляет исполнение выключенным. В текущем production-контуре нет квалифицированного провайдера проверки стола, поэтому физический запуск остаётся заблокированным даже при включённом `execution_enabled`. Проверка модели или тестовый provider не заменяют live-квалификацию.
+
+Ответ `POST /server/treed/autoprinter/control` сохраняет текущие поля status и
+добавляет `action_result` с `type`, `command_id`, `state` и `result`. Для
+локальных действий `command_id` равен `null`; состояния результата —
+`executed`, `rejected` или `uncertain`. Для паузы и отмены печати возвращается
+исходный durable-результат команды с её UUID, включая результат повторного
+`action_id`. `recheck_bed` со статусом `executed` означает, что проверка
+завершилась: `occupied` и `unknown` не подтверждают пустой стол и не разрешают
+печать. При недоступном доказательстве результат имеет состояние `rejected`
+и код `bed_proof_unavailable`.
 
 Файлы, подготовленные для печати, хранятся отдельно от очереди assets. Spool ограничен 1 ГиБ и сохраняет резерв 16 МиБ свободного места; при исчерпании места новые задания блокируются. Автоматического удаления spool-файлов нет. Оператор управляет свободным местом штатными средствами Moonraker.
 

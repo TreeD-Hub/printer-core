@@ -211,39 +211,58 @@ class AutoPrinterExecutor:
         if session["binding_state"] != "paired":
             raise StoreError("not_paired")
         kind = action["type"]
-        if kind == "pause_queue":
-            await self._db("execution_set_pause", local=True)
-        elif kind == "resume_queue":
-            await self._db("execution_set_pause", local=False)
-            await self._db("execution_set_meta", "stop_after_current", "0")
-        elif kind == "recheck_bed":
-            current = await self._current()
-            context = current["run_id"] if current else await self._last_started_id()
-            proof = await self._bed_proof(context, require_empty=False)
-            if proof is None:
-                self._blocked_reason = "bed_proof_unavailable"
-            elif (current and current["state"] == "verifying" and proof["verdict"] == "empty"
-                  and (getattr(self.bed_checker, "live_qualified", False) is True
-                       or getattr(self.device, "is_live", None) is False)):
-                await self._db("execution_complete", current["run_id"], self._active_boot_id,
-                               session["control_epoch"], _now(), proof)
-            else:
-                await self._emit("bed_check", context, proof)
-        elif kind == "stop_after_current":
-            await self._db("execution_set_meta", "stop_after_current", "1")
-        elif kind in {"pause_current_print", "cancel_current_print"}:
-            current = await self._current()
-            if (current is None or action.get("run_id") != current["run_id"]
-                    or not _uuid_valid(action.get("action_id"))):
-                raise StoreError("no_current_run")
-            command = {"command_id": action["action_id"], "type": kind,
-                       "run_id": current["run_id"],
-                       "control_epoch": session["control_epoch"],
-                       "binding_epoch": session["binding_epoch"],
-                       "queue_revision": session["queue_revision"],
-                       "payload": {"run_id": current["run_id"]}}
-            await self.command(command, local=True)
-        return await self.status()
+        receipt = {"type": kind, "command_id": None, "state": "uncertain",
+                   "result": {"code": "local_action_outcome_uncertain"}}
+        try:
+            if kind == "pause_queue":
+                await self._db("execution_set_pause", local=True)
+                receipt.update(state="executed", result={})
+            elif kind == "resume_queue":
+                await self._db("execution_set_pause", local=False)
+                await self._db("execution_set_meta", "stop_after_current", "0")
+                receipt.update(state="executed", result={})
+            elif kind == "recheck_bed":
+                current = await self._current()
+                context = current["run_id"] if current else await self._last_started_id()
+                proof = await self._bed_proof(context, require_empty=False)
+                if proof is None:
+                    self._blocked_reason = "bed_proof_unavailable"
+                    receipt.update(state="rejected", result={"code": "bed_proof_unavailable"})
+                elif (current and current["state"] == "verifying" and proof["verdict"] == "empty"
+                      and (getattr(self.bed_checker, "live_qualified", False) is True
+                           or getattr(self.device, "is_live", None) is False)):
+                    await self._db("execution_complete", current["run_id"], self._active_boot_id,
+                                   session["control_epoch"], _now(), proof)
+                    receipt.update(state="executed", result={})
+                else:
+                    await self._emit("bed_check", context, proof)
+                    code = {"occupied": "bed_occupied", "unknown": "bed_unknown"}.get(proof["verdict"])
+                    receipt.update(state="executed", result={"code": code} if code else {})
+            elif kind == "stop_after_current":
+                await self._db("execution_set_meta", "stop_after_current", "1")
+                receipt.update(state="executed", result={})
+            elif kind in {"pause_current_print", "cancel_current_print"}:
+                current = await self._current()
+                if (current is None or action.get("run_id") != current["run_id"]
+                        or not _uuid_valid(action.get("action_id"))):
+                    raise StoreError("no_current_run")
+                command = {"command_id": action["action_id"], "type": kind,
+                           "run_id": current["run_id"],
+                           "control_epoch": session["control_epoch"],
+                           "binding_epoch": session["binding_epoch"],
+                           "queue_revision": session["queue_revision"],
+                           "payload": {"run_id": current["run_id"]}}
+                receipt.update(command_id=action["action_id"])
+                command_result = await self.command(command, local=True)
+                receipt.update(state=command_result["state"], result=command_result["result"])
+        except StoreError as exc:
+            if kind in {"pause_current_print", "cancel_current_print"} or str(exc) in {"no_current_run", "invalid_uuid"}:
+                raise
+        except Exception:
+            pass
+        status = await self.status()
+        status["action_result"] = receipt
+        return status
 
     async def tick(self) -> None:
         if not self._initialized:
@@ -470,7 +489,10 @@ class AutoPrinterExecutor:
         return {**snapshot,
                 "blocked_reason": self._blocked_reason,
                 "execution_enabled": bool(self.enabled and self.device is not None),
-                "capabilities": {"bed_check": bool(self.bed_checker and getattr(self.bed_checker, "live_qualified", False))}}
+                "stop_after_current": await self._db("execution_get_meta", "stop_after_current", "0") == "1",
+                "capabilities": {"bed_check": bool(self.bed_checker and getattr(self.bed_checker, "live_qualified", False)),
+                                 "bed_check_diagnostic": self.bed_checker is not None,
+                                 "queue": True, "pairing": True}}
 
 
 # Блок 2: Строгая валидация наблюдений и времени из runtime/provider.

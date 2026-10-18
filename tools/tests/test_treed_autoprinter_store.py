@@ -39,6 +39,48 @@ class AutoPrinterStoreTest(unittest.TestCase):
     def paired(self):
         self.store.update_binding(1, 1, "paired", 1)
 
+    def test_status_exposes_only_bounded_current_binding_queue_projection(self):
+        unpaired = self.store.status()
+        self.assertEqual(([], 0, False),
+                         (unpaired["queue"], unpaired["queue_total"], unpaired["queue_truncated"]))
+        self.paired()
+        series_id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+        payload = '{"series_id":"%s","copies_per_run":2,"asset_id":"secret","path":"private"}' % series_id
+        with self.store._transaction():
+            self.store._conn.executemany(
+                "INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(1,?,?,?)",
+                [(f"{i:08x}-0000-4000-8000-{i:012x}", payload, i) for i in range(1, 1002)])
+            self.store._conn.execute(
+                "INSERT INTO execution_runs(binding_epoch,run_id,state,filename) VALUES(1,?,'printing','private.gcode')",
+                ("00000001-0000-4000-8000-000000000001",))
+        status = self.store.status()
+
+        self.assertEqual(1001, status["queue_total"])
+        self.assertTrue(status["queue_truncated"])
+        self.assertEqual(1000, len(status["queue"]))
+        self.assertEqual(["run_id", "position", "state", "series_id", "copies_per_run"],
+                         list(status["queue"][0]))
+        self.assertEqual("printing", status["queue"][0]["state"])
+        self.assertEqual(list(range(1, 1001)), [run["position"] for run in status["queue"]])
+        self.assertNotIn("path", status["queue"][0])
+        self.store.update_binding(2, 1, "revoked", 1)
+        status = self.store.status()
+        self.assertEqual(([], 0, False),
+                         (status["queue"], status["queue_total"], status["queue_truncated"]))
+
+    def test_status_keeps_legacy_queue_row_without_inventing_series_metadata(self):
+        self.paired()
+        self.store._conn.execute(
+            "INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(1,?,?,1)",
+            (RUN_1, '{"asset_id":"' + ASSET + '","sha256":"' + hashlib.sha256(DATA).hexdigest()
+             + '","size_bytes":' + str(len(DATA)) + '}'))
+
+        row = self.store.status()["queue"][0]
+
+        self.assertEqual(RUN_1, row["run_id"])
+        self.assertIsNone(row["series_id"])
+        self.assertIsNone(row["copies_per_run"])
+
     def test_journal_limit_rolls_back_full_write_and_preserves_events_on_reopen(self):
         self.paired()
         boot = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"

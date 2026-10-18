@@ -842,10 +842,26 @@ class AutoPrinterStore:
         with self._lock:
             binding = int(self._get("binding_epoch"))
             paired = self._get("binding_state") == "paired"
+            queue_total = self._conn.execute(
+                "SELECT COUNT(*) FROM runs WHERE binding_epoch=?", (binding,)
+            ).fetchone()[0] if paired else 0
+            queue_rows = self._conn.execute(
+                "SELECT r.run_id,r.position,e.state,r.payload FROM runs r "
+                "LEFT JOIN execution_runs e ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id "
+                "WHERE r.binding_epoch=? ORDER BY r.position,r.run_id LIMIT 1000", (binding,)
+            ).fetchall() if paired else []
+            queue = []
+            for run_id, position, state, payload in queue_rows:
+                manifest = json.loads(payload)
+                queue.append({"run_id": run_id, "position": position,
+                              "state": state or "queued", "series_id": manifest.get("series_id"),
+                              "copies_per_run": manifest.get("copies_per_run")})
             result = {"binding_state": self._get("binding_state"), "binding_epoch": binding,
                     "queue_revision": int(self._get("queue_revision")), "asset_count": self._conn.execute("SELECT COUNT(*) FROM assets WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
                     "run_count": self._conn.execute("SELECT COUNT(*) FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
                     "pending_result_count": self._conn.execute("SELECT COUNT(*) FROM commands WHERE reported=0 AND binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
+                    "queue": queue, "queue_total": queue_total,
+                    "queue_truncated": queue_total > len(queue),
                     "local_pause": True, "remote_pause": False, "physical_execution_enabled": False}
             if paired:
                 page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
