@@ -145,7 +145,7 @@ restart_and_verify_moonraker_components() {
   local tmp=""
   local code=""
   local attempt=""
-  local required_components=(treed_shell_command treed_detection treed_print_feedback treed_host_network treed_resonance treed_filament_sensor treed_update treed_recovery)
+  local required_components=(treed_shell_command treed_detection treed_print_feedback treed_host_network treed_resonance treed_filament_sensor treed_update treed_recovery treed_autoprinter)
   local retries="${TREED_MOONRAKER_HTTP_RETRIES:-30}"
 
   systemctl restart moonraker.service

@@ -14,6 +14,9 @@
 - `treed_recovery.py`
 - `treed_detection.py`
 - `treed_print_feedback.py`
+- `treed_autoprinter.py`
+- `treed_autoprinter_store.py`
+- `treed_autoprinter_transport.py`
 
 ## Назначение `treed_shell_command.py`
 
@@ -98,6 +101,16 @@
 - отмена запрашивается один раз; ошибка передачи команды остаётся в `cancel_error`, автоматического возобновления или повтора команды нет.
 
 `stream_detect.py --react` отправляет JPEG классификатору и передаёт ответ локальному компоненту. Endpoints используют штатную авторизацию Moonraker и остаются доступными только локальному UI и адаптеру принтера через действующий nginx-контракт.
+
+## Назначение `treed_autoprinter.py`
+
+- компонент по умолчанию выключен в `base/00-core.conf`; пока он выключен, он не открывает хранилище и не выполняет сетевые запросы;
+- `GET /server/treed/autoprinter/status` показывает только безопасную сводку локального хранилища и состояние связи; `POST /server/treed/autoprinter/pairing` запрашивает у backend короткоживущий код для явного связывания аккаунта;
+- оба endpoint используют штатную авторизацию Moonraker; API чтения, списка и загрузки локальных файлов не регистрируется;
+- `treed_autoprinter_transport.py` выполняет ограниченные HTTPS-запросы к одному настроенному origin без переходов по redirect. Credential хранится отдельно от исходников в `credentials_path` с правами владельца;
+- принятые assets сохраняются через `treed_autoprinter_store.py`, receipt отправляется после локальной проверки и durable-записи. Локальный список ожидающих receipt повторяется после потери ответа backend, даже если передача больше не приходит в sync;
+- очередь всегда остаётся на паузе. Компонент не обращается к Klippy, `job_queue`, file manager, G-code, shell-командам или inference и не запускает физические действия;
+- `api_origin`, `printer_id`, `profile_id` и закрытый JSON credential должны быть заданы отдельно перед включением. Status не возвращает credential, пути файлов или имена пользовательских файлов.
 
 Внутренний контракт адаптера:
 

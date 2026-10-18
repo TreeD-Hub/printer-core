@@ -5,6 +5,9 @@
 
 ## Состав
 
+- `test_treed_autoprinter_component.py` — жизненный цикл выключенного компонента, регистрация авторизованных status/pairing endpoints, закрытый credential, проверка sync-ответа и безопасный snapshot. Запуск `python -B tools/tests/test_treed_autoprinter_component.py`; без сети, Moonraker runtime и устройства.
+- `test_treed_autoprinter_store.py` — durable-приём assets, журнал результатов, восстановление очереди и receipts. Запуск `python -B tools/tests/test_treed_autoprinter_store.py`; без сети и устройства.
+
 - `test_hotend_limit.py` — нормализация целей хотэнда и PID, нижний предел,
   выключение, неконечные числа, отдельный аварийный порог и доставка расширения.
   Запуск `python -B tools/tests/test_hotend_limit.py`; без устройства.
