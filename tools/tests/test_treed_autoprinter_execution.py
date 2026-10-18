@@ -384,6 +384,55 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(1, len(device.starts))
 
+    async def test_stop_after_current_survives_remote_resume_and_restart(self):
+        await self.seed_queue(RUNS[:2])
+        executor, device, checker = await self.online_executor()
+        await executor.tick()
+        await executor.tick()
+        stopped = await executor.local_action({"type": "stop_after_current"})
+        self.assertTrue(stopped["local_pause"])
+
+        command = {"command_id": "88888888-8888-4888-8888-888888888888", "type": "resume_queue",
+                   "control_epoch": 1, "queue_revision": 2, "expires_at": "2099-01-01T00:00:00Z", "payload": {}}
+        self.assertEqual("executed", (await executor.command(command))["state"])
+        self.assertEqual("executed", (await executor.command(command))["state"])
+        self.assertTrue((await executor.status())["stop_after_current"])
+        self.assertTrue((await asyncio.to_thread(self.store.session))["local_pause"])
+
+        device.state = "complete"
+        await executor.tick()
+        self.assertEqual("completed", (await asyncio.to_thread(self.store.execution_state, RUNS[0]))["state"])
+        self.assertEqual(1, len(device.starts))
+        self.assertEqual(0, device.pause_calls)
+
+        await asyncio.to_thread(self.store.close)
+        self.store = AutoPrinterStore(Path(self.temp.name), PRINTER, PROFILE)
+        restarted = AutoPrinterExecutor(self.store, device, BOOT_2, enabled=True, bed_checker=checker)
+        await restarted.initialize()
+        session = await asyncio.to_thread(self.store.session)
+        old = await restarted.sync_fields()
+        old["control_epoch"] = session["control_epoch"]
+        old["binding_epoch"] = session["binding_epoch"]
+        await restarted.acknowledge({"control_epoch": 1, "binding_epoch": 1,
+                                     "ack_event_ids": [e["event_id"] for e in old["events"]],
+                                     "ignored_event_ids": []}, old)
+        receipts = await restarted.sync_fields()
+        receipts["control_epoch"] = session["control_epoch"]
+        receipts["binding_epoch"] = session["binding_epoch"]
+        await restarted.acknowledge({"control_epoch": 1, "binding_epoch": 1,
+                                     "ack_event_ids": [], "ignored_event_ids": []}, receipts)
+        new_boot = await restarted.sync_fields()
+        new_boot["control_epoch"] = session["control_epoch"]
+        new_boot["binding_epoch"] = session["binding_epoch"]
+        await restarted.acknowledge({"control_epoch": 1, "binding_epoch": 1,
+                                     "ack_event_ids": [], "ignored_event_ids": []}, new_boot)
+        await restarted.tick()
+        self.assertEqual(1, len(device.starts))
+
+        await restarted.local_action({"type": "resume_queue"})
+        await restarted.tick()
+        self.assertEqual(2, len(device.starts))
+
     async def test_recheck_receipt_distinguishes_unavailable_and_nonempty_bed(self):
         await asyncio.to_thread(self.store.update_binding, 1, 1, "paired", 1)
         executor, _, checker = await self.online_executor()

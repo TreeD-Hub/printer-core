@@ -247,6 +247,57 @@ class AutoPrinterStoreTest(unittest.TestCase):
         self.assertEqual("invalid_queue", rejected["result"]["code"])
         self.assertEqual(rejected, self.store.apply_command(dict(duplicate, state="delivered")))
 
+    def test_reorder_changes_only_exact_queued_runs_and_replays(self):
+        self.store.close()
+        self.store = AutoPrinterStore(self.root, PRINTER, PROFILE,
+                                      max_asset_bytes=128, max_total_bytes=256, max_runs=5)
+        self.paired()
+        self.store.store_asset(self.transfer(), BytesIO(DATA))
+        self.store.confirm_receipt(ASSET)
+        queued_a = "66666666-6666-4666-8666-666666666666"
+        queued_b = "77777777-7777-4777-8777-777777777777"
+        all_runs = [RUN_1, RUN_2, "55555555-5555-4555-8555-555555555555", queued_a, queued_b]
+        enqueue = {"command_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "type": "enqueue_series",
+                   "control_epoch": 1, "expires_at": "2099-01-01T00:00:00Z", "queue_revision": 2,
+                   "state": "created", "payload": {"asset_id": ASSET, "sha256": hashlib.sha256(DATA).hexdigest(),
+                   "size_bytes": len(DATA), "profile_id": PROFILE, "series_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                   "copies_per_run": 1, "completion_profile": {"version": 1, "profile_id": PROFILE, "auto_remove": False},
+                   "run_ids": all_runs, "binding_epoch": 1, "previous_queue_revision": 1, "queue_revision": 2}}
+        self.assertEqual("executed", self.store.apply_command(enqueue)["state"])
+        for run_id, state in zip(all_runs[:3], ("completed", "printing", "uncertain")):
+            self.store.execution_save(run_id, state)
+        before = {row[0]: row[1] for row in self.store._conn.execute(
+            "SELECT run_id,position FROM runs WHERE binding_epoch=1")}
+
+        reorder = {"command_id": "ffffffff-ffff-4fff-8fff-ffffffffffff", "type": "reorder_queue",
+                   "control_epoch": 1, "expires_at": "2099-01-01T00:00:00Z", "queue_revision": 3,
+                   "state": "created", "payload": {"run_ids": [queued_b, queued_a], "binding_epoch": 1,
+                   "previous_queue_revision": 2, "queue_revision": 3}}
+        result = self.store.apply_command(reorder)
+        self.assertEqual("executed", result["state"])
+        self.assertEqual(result, self.store.apply_command(dict(reorder, state="delivered")))
+        after = {row[0]: row[1] for row in self.store._conn.execute(
+            "SELECT run_id,position FROM runs WHERE binding_epoch=1")}
+        self.assertEqual(before[queued_a], after[queued_b])
+        self.assertEqual(before[queued_b], after[queued_a])
+        self.assertTrue(all(after[run_id] == before[run_id] for run_id in all_runs[:3]))
+
+        invalid_payloads = ([queued_a], [queued_a, queued_a], [queued_a, RUN_1],
+                            [queued_a, "88888888-8888-4888-8888-888888888888"])
+        for index, run_ids in enumerate(invalid_payloads, 1):
+            command = dict(reorder, command_id=f"{index:08x}-0000-4000-8000-{index:012x}", queue_revision=4)
+            command["payload"] = dict(reorder["payload"], run_ids=run_ids,
+                                       previous_queue_revision=3, queue_revision=4)
+            rejected = self.store.apply_command(command)
+            self.assertEqual(("rejected", "invalid_queue"), (rejected["state"], rejected["result"]["code"]))
+
+        self.store.execution_save(queued_a, "completed")
+        self.store.execution_save(queued_b, "completed")
+        malformed = dict(reorder, command_id="aaaaaaaa-0000-4000-8000-000000000001", queue_revision=4)
+        malformed["payload"] = dict(reorder["payload"], run_ids="", previous_queue_revision=3, queue_revision=4)
+        rejected = self.store.apply_command(malformed)
+        self.assertEqual(("rejected", "invalid_queue"), (rejected["state"], rejected["result"]["code"]))
+
     def test_command_replay_body_conflict_and_physical_commands_are_refused(self):
         self.paired()
         base = {"command_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "type": "pause_queue",

@@ -473,20 +473,19 @@ class AutoPrinterStore:
         else:
             run_ids = payload.get("run_ids")
             rows = self._conn.execute("SELECT r.run_id,r.position,e.state,e.start_intent FROM runs r LEFT JOIN execution_runs e ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id WHERE r.binding_epoch=? ORDER BY r.position", (binding,)).fetchall()
-            current_ids = [r[0] for r in rows]
+            queued_rows = [r for r in rows if r[2] in (None, "queued") and not r[3]]
+            queued_ids = {r[0] for r in queued_rows}
             try:
-                normalized = [_uuid(x) for x in run_ids] if isinstance(run_ids, list) else []
+                normalized = [_uuid(x) for x in run_ids] if isinstance(run_ids, list) else None
             except StoreError:
-                normalized = []
-            if len(normalized) != len(current_ids) or set(normalized) != set(current_ids) or len(set(normalized)) != len(normalized):
+                normalized = None
+            if (normalized is None or len(normalized) != len(queued_ids)
+                    or set(normalized) != queued_ids or len(set(normalized)) != len(normalized)):
                 return "rejected", {"code": "invalid_queue", "queue_revision": current}
-            queued_ids = {r[0] for r in rows if r[2] in (None, "queued") and not r[3]}
-            queued_positions = [r[1] for r in rows if r[0] in queued_ids]
-            reordered = iter(run_id for run_id in normalized if run_id in queued_ids)
-            final_order = {position: next(reordered) for position in queued_positions}
-            for pos, row in enumerate(rows, 1):
-                run_id = final_order.get(row[1], row[0])
-                self._conn.execute("UPDATE runs SET position=? WHERE binding_epoch=? AND run_id=?", (pos, binding, run_id))
+            queued_positions = [r[1] for r in queued_rows]
+            for position, run_id in zip(queued_positions, normalized):
+                self._conn.execute("UPDATE runs SET position=? WHERE binding_epoch=? AND run_id=?",
+                                   (position, binding, run_id))
         self._set("queue_revision", revision)
         return "executed", {"queue_revision": revision}
 

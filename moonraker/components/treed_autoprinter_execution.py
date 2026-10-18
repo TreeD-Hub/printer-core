@@ -158,7 +158,8 @@ class AutoPrinterExecutor:
             result = {"command_id": intent["command_id"], "state": "executed", "result": {}}
         elif kind == "resume_queue":
             await self._db("execution_set_pause", remote=False)
-            await self._db("execution_set_meta", "stop_after_current", "0")
+            if not (await self._db("session"))["local_pause"]:
+                await self._db("execution_set_meta", "stop_after_current", "0")
             result = {"command_id": intent["command_id"], "state": "executed", "result": {}}
         elif kind == "stop_after_current":
             await self._db("execution_set_meta", "stop_after_current", "1")
@@ -239,6 +240,7 @@ class AutoPrinterExecutor:
                     code = {"occupied": "bed_occupied", "unknown": "bed_unknown"}.get(proof["verdict"])
                     receipt.update(state="executed", result={"code": code} if code else {})
             elif kind == "stop_after_current":
+                await self._db("execution_set_pause", local=True)
                 await self._db("execution_set_meta", "stop_after_current", "1")
                 receipt.update(state="executed", result={})
             elif kind in {"pause_current_print", "cancel_current_print"}:
