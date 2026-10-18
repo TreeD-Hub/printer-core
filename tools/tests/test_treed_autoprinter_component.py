@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import unittest
 import hashlib
 import io
@@ -60,12 +61,14 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_component_registers_only_authorized_local_endpoints(self):
         with patch.object(component, "AutoPrinterStore") as store, \
                 patch.object(component, "AutoPrinterTransport") as transport, \
-                patch.object(component, "MoonrakerDevice") as device:
+                patch.object(component, "MoonrakerDevice") as device, \
+                patch.object(component, "E0BedChecker") as bed_checker:
             config = FakeConfig()
             instance = component.load_component(config)
         store.assert_not_called()
         transport.assert_not_called()
         device.assert_not_called()
+        bed_checker.assert_not_called()
         self.assertFalse(instance.enabled)
         self.assertEqual(set(config.server.endpoints), {
             component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT, component.CONTROL_ENDPOINT})
@@ -124,6 +127,104 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                     device.assert_not_called()
                 finally:
                     await instance.close()
+
+    async def test_bed_check_can_be_enabled_without_execution_and_recheck_while_paired(self):
+        printer_id = "11111111-1111-4111-8111-111111111111"
+        profile_id = "treed_v2_corexy_v1"
+
+        class CandidateChecker:
+            live_qualified = False
+            model_version = "fdm-detail-e0-20261016-8de7e8aa22e2"
+            allowed_model_versions = (model_version,)
+
+            async def check(self, after_run_id, bed_epoch, boot_id):
+                return {"protocol_version": 1, "printer_id": printer_id,
+                        "after_run_id": after_run_id, "check_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                        "bed_epoch": bed_epoch, "agent_boot_id": boot_id, "verdict": "unknown",
+                        "model_version": self.model_version,
+                        "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "confidence": None, "reason": "model_not_qualified"}
+
+            def status(self):
+                return {"enabled": True, "live_qualified": False, "verdict": None,
+                        "model_version": self.model_version, "reason": None}
+
+        class Request:
+            def get_args(self):
+                return {"type": "recheck_bed"}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            credentials = root / "credentials.json"
+            credentials.write_text(json.dumps(
+                {"printer_id": printer_id, "secret": "s" * 32}), encoding="utf-8")
+            if os.name != "nt":
+                credentials.chmod(0o600)
+            checker = CandidateChecker()
+            config = FakeConfig(enabled=True, execution_enabled=False, bed_check_enabled=True,
+                                printer_id=printer_id, profile_id=profile_id,
+                                credentials_path=str(credentials), api_origin="https://example.test",
+                                storage_path=str(root / "store"), bed_check_model_path=str(root / "model.pth"),
+                                bed_check_python=str(root / "python"))
+            instance = component.TreeDAutoPrinter(config)
+            instance._sync_loop = AsyncMock()
+            instance._execution_loop = AsyncMock()
+            try:
+                with patch.object(component, "AutoPrinterTransport", return_value=object()), \
+                        patch.object(component, "E0BedChecker", return_value=checker) as make_checker, \
+                        patch.object(component, "MoonrakerDevice") as device:
+                    await instance.component_init()
+                    make_checker.assert_called_once_with(
+                        printer_id, str(root / "model.pth"), str(root / "python"),
+                        "http://127.0.0.1:8080/?action=snapshot")
+                    device.assert_not_called()
+                    self.assertFalse(instance._executor.enabled)
+                    self.assertIs(checker, instance._executor.bed_checker)
+                await instance._executor.initialize()
+                await asyncio.to_thread(instance._store.update_binding, 1, 1, "paired", 1)
+                submitted = await instance._executor.sync_fields()
+                session = await asyncio.to_thread(instance._store.session)
+                submitted.update(control_epoch=session["control_epoch"], binding_epoch=session["binding_epoch"])
+                await instance._executor.acknowledge({"control_epoch": session["control_epoch"],
+                                                       "binding_epoch": session["binding_epoch"],
+                                                       "ack_event_ids": [], "ignored_event_ids": []}, submitted)
+                status = await instance._handle_status(None)
+                self.assertEqual(checker.status(), status["bed_check"])
+                self.assertFalse(status["capabilities"]["bed_check"])
+                result = await instance._handle_control(Request())
+                self.assertEqual("unknown", (await asyncio.to_thread(
+                    instance._store.execution_events_pending, instance._boot_id))[0]["payload"]["verdict"])
+                self.assertFalse(result["capabilities"]["bed_check"])
+            finally:
+                await instance.close()
+
+    async def test_invalid_bed_check_config_reports_safe_status_when_paired(self):
+        printer_id = "11111111-1111-4111-8111-111111111111"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            credentials = root / "credentials.json"
+            credentials.write_text(json.dumps(
+                {"printer_id": printer_id, "secret": "s" * 32}), encoding="utf-8")
+            if os.name != "nt":
+                credentials.chmod(0o600)
+            config = FakeConfig(enabled=True, execution_enabled=False, bed_check_enabled=True,
+                                printer_id=printer_id, profile_id="treed_v2_corexy_v1",
+                                credentials_path=str(credentials), api_origin="https://example.test",
+                                storage_path=str(root / "store"), bed_check_model_path="relative/model.pth",
+                                bed_check_python="relative/python")
+            instance = component.TreeDAutoPrinter(config)
+            instance._sync_loop = AsyncMock()
+            instance._execution_loop = AsyncMock()
+            try:
+                with patch.object(component, "AutoPrinterTransport", return_value=object()), \
+                        patch.object(component, "E0BedChecker", side_effect=ValueError("path")):
+                    await instance.component_init()
+                await asyncio.to_thread(instance._store.update_binding, 1, 1, "paired", 1)
+                status = await instance._handle_status(None)
+                self.assertEqual("configuration_invalid", status["bed_check"]["last_check"]["reason"])
+                self.assertNotIn("path", str(status["bed_check"]))
+            finally:
+                await instance.close()
 
     async def test_execution_poll_runs_during_sync_backoff_and_close_waits_for_it(self):
         printer_id = "11111111-1111-4111-8111-111111111111"

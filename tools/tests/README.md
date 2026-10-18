@@ -5,9 +5,9 @@
 
 ## Состав
 
-- `test_treed_autoprinter_component.py` — жизненный цикл выключенного компонента, локальный endpoint управления, закрытый credential, wire-синхронизация и независимый executor poll во время sync backoff с ожиданием задач при shutdown. Запуск `python -B tools/tests/test_treed_autoprinter_component.py`; без сети, Moonraker runtime и устройства.
+- `test_treed_autoprinter_component.py` — жизненный цикл выключенного компонента, локальный endpoint управления, закрытый credential, wire-синхронизация, default-off проверки стола и независимый executor poll во время sync backoff с ожиданием задач при shutdown. Запуск `python -B tools/tests/test_treed_autoprinter_component.py`; без сети, Moonraker runtime и устройства.
 - `test_treed_autoprinter_store.py` — durable-приём assets, журнал результатов, восстановление очереди и receipts. Запуск `python -B tools/tests/test_treed_autoprinter_store.py`; без сети и устройства.
-- `test_treed_autoprinter_execution.py` — durable-очередь исполнителя, восстановление, события, доказательства стола и блокировки. Запуск `python -B tools/tests/test_treed_autoprinter_execution.py`; с fake-устройством и без Moonraker runtime.
+- `test_treed_autoprinter_execution.py` — durable-очередь исполнителя, восстановление, события, контекст проверки стола и запрет кандидату `empty` разрешать live-запуск или завершение. Запуск `python -B tools/tests/test_treed_autoprinter_execution.py`; с fake-устройством и без Moonraker runtime.
 - `test_treed_autoprinter_device.py` — fail-closed проверка runtime, безопасная подготовка G-code и штатные Klippy API на fake-компонентах. Запуск `python -B tools/tests/test_treed_autoprinter_device.py`; без устройства.
 
 - `test_hotend_limit.py` — нормализация целей хотэнда и PID, нижний предел,

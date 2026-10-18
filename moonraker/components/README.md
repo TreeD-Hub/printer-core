@@ -15,6 +15,9 @@
 - `treed_detection.py`
 - `treed_print_feedback.py`
 - `treed_autoprinter.py`
+- `treed_autoprinter_execution.py`
+- `treed_autoprinter_bed.py`
+- `treed_autoprinter_bed_inference.py`
 - `treed_autoprinter_store.py`
 - `treed_autoprinter_transport.py`
 
@@ -113,6 +116,7 @@
 - `treed_autoprinter_execution.py` ведёт локальное исполнение и неизменяемый outbox событий; `treed_autoprinter_device.py` проверяет runtime и выполняет разрешённые действия через штатный Klippy API;
 - executor проверяет очередь примерно раз в секунду отдельно от сетевого backoff; медленный sync временно удерживает общий lock и задерживает исполнение и status;
 - `execution_enabled` по умолчанию выключен отдельно от `enabled`. Live-запуск также заблокирован, пока не появится квалифицированный production-провайдер свежей проверки пустого стола;
+- диагностический кандидат E0 включается отдельно через `bed_check_enabled`, но сообщает только `occupied` или `unknown`; сводка доступна только paired status и не меняет `capabilities.bed_check`;
 - каталог spool ограничен 1 ГиБ с резервом 16 МиБ свободного места; при нехватке места очередь блокирует новые запуски, автоматической очистки нет;
 - `api_origin`, `printer_id`, `profile_id` и закрытый JSON credential должны быть заданы отдельно перед включением. Status не возвращает credential, пути файлов или имена пользовательских файлов.
 

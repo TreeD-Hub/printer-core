@@ -21,6 +21,7 @@ import uuid
 from typing import Any, Callable
 
 from .treed_autoprinter_device import MoonrakerDevice
+from .treed_autoprinter_bed import E0BedChecker
 from .treed_autoprinter_execution import AutoPrinterExecutor
 from .treed_autoprinter_store import AutoPrinterStore, StoreError
 from .treed_autoprinter_transport import AutoPrinterTransport, TransportError
@@ -38,6 +39,7 @@ class TreeDAutoPrinter:
         self.server = config.get_server()
         self.enabled = config.getboolean("enabled", False)
         self.execution_enabled = config.getboolean("execution_enabled", False)
+        self.bed_check_enabled = config.getboolean("bed_check_enabled", False)
         self._lock = asyncio.Lock()
         self._store = None
         self._transport = None
@@ -47,6 +49,7 @@ class TreeDAutoPrinter:
         self._task = None
         self._execution_task = None
         self._execution_error = None
+        self._bed_check_status = None
         self._workers: set[asyncio.Task] = set()
         self._closed = False
         self._config = config
@@ -71,6 +74,23 @@ class TreeDAutoPrinter:
             await asyncio.to_thread(self._store.close)
             self._store = None
             return
+        bed_checker = None
+        if self.bed_check_enabled:
+            try:
+                bed_checker = E0BedChecker(
+                    self._config.get("printer_id"),
+                    self._config.get("bed_check_model_path", ""),
+                    self._config.get("bed_check_python", ""),
+                    self._config.get("bed_check_snapshot_url", "http://127.0.0.1:8080/?action=snapshot"),
+                )
+            except (OSError, ValueError, TypeError):
+                self._bed_check_status = {
+                    "model_version": "fdm-detail-e0-20261016-8de7e8aa22e2",
+                    "allowed_model_versions": ["fdm-detail-e0-20261016-8de7e8aa22e2"],
+                    "live_qualified": False,
+                    "last_check": {"state": "unavailable", "reason": "configuration_invalid",
+                                   "checked_at": None},
+                }
         if self.execution_enabled:
             try:
                 self._device = MoonrakerDevice(self.server)
@@ -79,6 +99,7 @@ class TreeDAutoPrinter:
         self._executor = AutoPrinterExecutor(
             self._store, self._device, self._boot_id,
             enabled=self.execution_enabled and self._device is not None,
+            bed_checker=bed_checker,
         )
         self._connection = "offline"
         self._task = asyncio.get_event_loop().create_task(self._sync_loop())
@@ -127,6 +148,12 @@ class TreeDAutoPrinter:
                         "blocked_reason": "queue_recovery_required" if self._recovery_required else None}
             status = await self._run_blocking(self._store.status)
             execution = await self._executor.status() if self._executor is not None else {}
+            if status.get("binding_state") == "paired":
+                checker = self._executor.bed_checker if self._executor is not None else None
+                if checker is not None:
+                    execution["bed_check"] = checker.status()
+                elif self._bed_check_status is not None:
+                    execution["bed_check"] = dict(self._bed_check_status)
         if self._device_unavailable:
             execution["blocked_reason"] = "device_unavailable"
             execution["execution_enabled"] = False

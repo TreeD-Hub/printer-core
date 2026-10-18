@@ -90,6 +90,7 @@ class _FakeBedChecker:
         self.verdict = "empty"
         self.bad_capture = False
         self.fail = False
+        self.reason = None
         self.counter = 0
         self.contexts = []
 
@@ -98,12 +99,13 @@ class _FakeBedChecker:
             raise RuntimeError("provider unavailable")
         self.contexts.append(after_run_id)
         self.counter += 1
-        captured = "2000-01-01T00:00:00Z" if self.bad_capture else datetime.now(timezone.utc).isoformat()
+        captured = ("2000-01-01T00:00:00Z" if self.bad_capture else
+                    datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"))
         return {"protocol_version": 1, "printer_id": self.printer_id,
                 "after_run_id": after_run_id, "check_id": str(uuid.uuid4()),
                 "bed_epoch": bed_epoch, "agent_boot_id": boot_id,
                 "verdict": self.verdict, "model_version": "fake-v1",
-                "captured_at": captured}
+                "captured_at": captured, "confidence": None, "reason": self.reason}
 
 
 class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
@@ -481,6 +483,161 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
         after = len([event for event in after_events if event["type"] == "bed_check"])
         self.assertEqual("completed", (await asyncio.to_thread(self.store.execution_state, RUNS[0]))["state"])
         self.assertEqual(before + 1, after)
+
+    async def test_candidate_empty_cannot_unlock_live_start(self):
+        await self.seed_queue([RUNS[0]])
+        device = _FakeDevice()
+        device.is_live = True
+        checker = _FakeBedChecker(PRINTER)
+        checker.live_qualified = False
+        executor, device, _ = await self.online_executor(device=device, checker=checker)
+
+        self.assertIsNone(await executor._bed_proof(None, require_empty=False))
+        executor.device = None
+        self.assertIsNone(await executor._bed_proof(None, require_empty=False))
+        executor.device = device
+        await executor.tick()
+
+        self.assertEqual([], device.starts)
+        self.assertEqual("bed_proof_unavailable", (await executor.status())["blocked_reason"])
+
+    async def test_candidate_occupied_or_unknown_recheck_never_completes_verifying_run(self):
+        await self.seed_queue([RUNS[0]])
+        executor, _, checker = await self.online_executor()
+        run = (await asyncio.to_thread(self.store.queue))[0]
+        proof = await executor._bed_proof(None)
+        filename = f"treed-autoprinter/1-{RUNS[0]}-{run['sha256']}.gcode"
+        await asyncio.to_thread(self.store.execution_start_intent, RUNS[0], filename,
+                                proof["bed_epoch"], proof, BOOT_1, 1,
+                                "2026-10-18T00:00:00Z")
+        await asyncio.to_thread(self.store.execution_transition, RUNS[0], "printing", BOOT_1, 1,
+                                "2026-10-18T00:00:01Z")
+        await asyncio.to_thread(self.store.execution_transition, RUNS[0], "verifying", BOOT_1, 1,
+                                "2026-10-18T00:00:02Z")
+        checker.live_qualified = False
+        before_ids = {event["event_id"] for event in await asyncio.to_thread(
+            self.store.execution_events_pending, BOOT_1)}
+
+        for verdict in ("unknown", "occupied"):
+            checker.verdict = verdict
+            await executor.local_action({"type": "recheck_bed"})
+            state = await asyncio.to_thread(self.store.execution_state, RUNS[0])
+            self.assertEqual("verifying", state["state"])
+
+        events = await asyncio.to_thread(self.store.execution_events_pending, BOOT_1)
+        evidence = [event for event in events if event["type"] == "bed_check"
+                    and event["event_id"] not in before_ids]
+        self.assertEqual(["unknown", "occupied"], [event["payload"]["verdict"] for event in evidence])
+
+    async def test_camera_error_unknown_is_fresh_utc_evidence_in_durable_event(self):
+        await self.seed_queue([RUNS[0]])
+        executor, _, checker = await self.online_executor()
+        checker.verdict = "unknown"
+        checker.reason = "camera_unavailable"
+        before_ids = {event["event_id"] for event in await asyncio.to_thread(
+            self.store.execution_events_pending, BOOT_1)}
+
+        await executor.local_action({"type": "recheck_bed"})
+
+        events = await asyncio.to_thread(self.store.execution_events_pending, BOOT_1)
+        evidence = [event for event in events if event["type"] == "bed_check"
+                    and event["event_id"] not in before_ids]
+        self.assertEqual(1, len(evidence))
+        proof = evidence[0]["payload"]
+        self.assertEqual("unknown", proof["verdict"])
+        self.assertEqual("camera_unavailable", proof["reason"])
+        self.assertTrue(proof["captured_at"].endswith("Z"))
+
+    async def test_remote_candidate_recheck_is_durable_without_completing_run(self):
+        await self.seed_queue([RUNS[0]])
+        executor, _, checker = await self.online_executor()
+        run = (await asyncio.to_thread(self.store.queue))[0]
+        proof = await executor._bed_proof(None)
+        filename = f"treed-autoprinter/1-{RUNS[0]}-{run['sha256']}.gcode"
+        await asyncio.to_thread(self.store.execution_start_intent, RUNS[0], filename,
+                                proof["bed_epoch"], proof, BOOT_1, 1,
+                                "2026-10-18T00:00:00Z")
+        await asyncio.to_thread(self.store.execution_transition, RUNS[0], "printing", BOOT_1, 1,
+                                "2026-10-18T00:00:01Z")
+        await asyncio.to_thread(self.store.execution_transition, RUNS[0], "verifying", BOOT_1, 1,
+                                "2026-10-18T00:00:02Z")
+        checker.live_qualified = False
+        checker.verdict = "unknown"
+        before_ids = {event["event_id"] for event in await asyncio.to_thread(
+            self.store.execution_events_pending, BOOT_1)}
+        session = await asyncio.to_thread(self.store.session)
+        command = {"command_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "type": "recheck_bed",
+                   "control_epoch": session["control_epoch"], "queue_revision": session["queue_revision"],
+                   "expires_at": "2099-01-01T00:00:00Z",
+                   "payload": {}}
+
+        first = await executor.command(command)
+        second = await executor.command(command)
+
+        self.assertEqual("executed", first["state"])
+        self.assertEqual(first, second)
+        self.assertEqual("verifying", (await asyncio.to_thread(
+            self.store.execution_state, RUNS[0]))["state"])
+        events = await asyncio.to_thread(self.store.execution_events_pending, BOOT_1)
+        evidence = [event for event in events if event["type"] == "bed_check"
+                    and event["event_id"] not in before_ids]
+        self.assertEqual(["unknown"], [event["payload"]["verdict"] for event in evidence])
+
+    async def test_recheck_waits_for_previous_boot_outbox_to_drain(self):
+        await self.seed_queue([RUNS[0]])
+        checker = _FakeBedChecker(PRINTER)
+        previous = AutoPrinterExecutor(self.store, _FakeDevice(), BOOT_1, enabled=True,
+                                       bed_checker=checker)
+        await previous.initialize()
+        await previous._emit("run_state", None, {"state": "queued"})
+        executor = AutoPrinterExecutor(self.store, _FakeDevice(), BOOT_2, enabled=True,
+                                       bed_checker=checker)
+        await executor.initialize()
+        self.assertEqual(BOOT_1, executor._draining_boot_id)
+        before = await asyncio.to_thread(self.store.execution_events_pending, BOOT_1)
+
+        await executor.local_action({"type": "recheck_bed"})
+        session = await asyncio.to_thread(self.store.session)
+        remote = {"command_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "type": "recheck_bed",
+                  "control_epoch": session["control_epoch"], "queue_revision": session["queue_revision"],
+                  "expires_at": "2099-01-01T00:00:00Z", "payload": {}}
+        result = await executor.command(remote)
+
+        self.assertEqual("rejected", result["state"])
+        self.assertEqual("bed_check_unavailable", result["result"]["code"])
+        self.assertEqual(0, checker.counter)
+        self.assertEqual(before, await asyncio.to_thread(self.store.execution_events_pending, BOOT_1))
+
+        for _ in range(3):
+            submitted = await executor.sync_fields()
+            submitted.update(control_epoch=session["control_epoch"], binding_epoch=session["binding_epoch"])
+            await executor.acknowledge({"control_epoch": session["control_epoch"],
+                                        "binding_epoch": session["binding_epoch"],
+                                        "ack_event_ids": ([event["event_id"] for event in submitted["events"]]
+                                                          + submitted["acknowledged_event_ids"]),
+                                        "ignored_event_ids": []}, submitted)
+            if executor._draining_boot_id is None:
+                break
+
+        self.assertIsNone(executor._draining_boot_id)
+        await executor.local_action({"type": "recheck_bed"})
+        remote["command_id"] = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+        remote["queue_revision"] = session["queue_revision"]
+        self.assertEqual("rejected", (await executor.command(remote))["state"])
+        self.assertEqual(0, checker.counter)
+        submitted = await executor.sync_fields()
+        submitted.update(control_epoch=session["control_epoch"], binding_epoch=session["binding_epoch"])
+        await executor.acknowledge({"control_epoch": session["control_epoch"],
+                                    "binding_epoch": session["binding_epoch"],
+                                    "ack_event_ids": ([event["event_id"] for event in submitted["events"]]
+                                                      + submitted["acknowledged_event_ids"]),
+                                    "ignored_event_ids": []}, submitted)
+        await executor.local_action({"type": "recheck_bed"})
+        remote["command_id"] = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+        self.assertEqual("executed", (await executor.command(remote))["state"])
+        self.assertEqual(2, checker.counter)
+        events = await asyncio.to_thread(self.store.execution_events_pending, BOOT_2)
+        self.assertEqual(BOOT_2, events[-1]["payload"]["agent_boot_id"])
 
     async def test_reused_local_action_id_with_different_operation_conflicts(self):
         await self.seed_queue([RUNS[0]])

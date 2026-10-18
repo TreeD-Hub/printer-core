@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "waves": {
+    "discovery": {
+      "leaves": [
+        "leaf-1",
+        "leaf-2"
+      ],
+      "state": "complete",
+      "openedAt": "2026-10-18T11:54:41.614Z",
+      "started": {
+        "leaf-1": {
+          "handle": "/root/bed_model_discovery",
+          "at": "2026-10-18T11:55:35.729Z"
+        },
+        "leaf-2": {
+          "handle": "/root/bed_core_discovery",
+          "at": "2026-10-18T11:55:36.208Z"
+        }
+      },
+      "returned": {
+        "leaf-1": {
+          "at": "2026-10-18T12:01:12.706Z"
+        },
+        "leaf-2": {
+          "at": "2026-10-18T12:01:13.542Z"
+        }
+      },
+      "sealedAt": "2026-10-18T11:55:36.615Z",
+      "completedAt": "2026-10-18T12:01:13.542Z"
+    },
+    "implementation": {
+      "leaves": [
+        "leaf-3",
+        "leaf-4"
+      ],
+      "state": "complete",
+      "openedAt": "2026-10-18T12:01:15.079Z",
+      "started": {
+        "leaf-3": {
+          "handle": "/root/bed_provider",
+          "at": "2026-10-18T12:02:09.448Z"
+        },
+        "leaf-4": {
+          "handle": "/root/bed_integration",
+          "at": "2026-10-18T12:02:10.056Z"
+        }
+      },
+      "returned": {
+        "leaf-3": {
+          "at": "2026-10-18T12:24:51.188Z"
+        },
+        "leaf-4": {
+          "at": "2026-10-18T12:24:51.727Z"
+        }
+      },
+      "sealedAt": "2026-10-18T12:02:10.681Z",
+      "completedAt": "2026-10-18T12:24:51.727Z"
+    }
+  }
+}

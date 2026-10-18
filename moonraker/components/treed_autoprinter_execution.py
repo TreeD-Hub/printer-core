@@ -166,10 +166,12 @@ class AutoPrinterExecutor:
         elif kind == "recheck_bed":
             current = await self._current()
             after_run = current["run_id"] if current else await self._last_started_id()
-            proof = await self._bed_proof(after_run)
+            proof = await self._bed_proof(after_run, require_empty=False)
             if proof is None:
                 result = {"command_id": intent["command_id"], "state": "rejected", "result": {"code": "bed_check_unavailable"}}
-            elif current and current["state"] == "verifying":
+            elif (current and current["state"] == "verifying" and proof["verdict"] == "empty"
+                  and (getattr(self.bed_checker, "live_qualified", False) is True
+                       or getattr(self.device, "is_live", None) is False)):
                 await self._db("execution_complete", current["run_id"], self._active_boot_id,
                                session["control_epoch"], _now(), proof)
                 result = {"command_id": intent["command_id"], "state": "executed", "result": {}}
@@ -217,10 +219,12 @@ class AutoPrinterExecutor:
         elif kind == "recheck_bed":
             current = await self._current()
             context = current["run_id"] if current else await self._last_started_id()
-            proof = await self._bed_proof(context)
+            proof = await self._bed_proof(context, require_empty=False)
             if proof is None:
                 self._blocked_reason = "bed_proof_unavailable"
-            elif current and current["state"] == "verifying":
+            elif (current and current["state"] == "verifying" and proof["verdict"] == "empty"
+                  and (getattr(self.bed_checker, "live_qualified", False) is True
+                       or getattr(self.device, "is_live", None) is False)):
                 await self._db("execution_complete", current["run_id"], self._active_boot_id,
                                session["control_epoch"], _now(), proof)
             else:
@@ -384,10 +388,19 @@ class AutoPrinterExecutor:
                      for r in await self._db("queue") if r["run_id"] in states and
                      states[r["run_id"]]["state"] in {"preparing", "printing", "cooling", "removing", "verifying", "uncertain"}), None)
 
-    async def _bed_proof(self, after_run_id: str | None) -> dict | None:
-        live_device = getattr(self.device, "is_live", False) is True
-        if self.bed_checker is None or (live_device and getattr(self.bed_checker, "live_qualified", False) is not True):
+    async def _bed_proof(self, after_run_id: str | None, *, require_empty: bool = True) -> dict | None:
+        if self.bed_checker is None:
             return None
+        qualified = getattr(self.bed_checker, "live_qualified", False) is True
+        offline_test_device = self.device is not None and getattr(self.device, "is_live", None) is False
+        if require_empty and not qualified and not offline_test_device:
+            return None
+        if not require_empty:
+            handshake_boot = await self._db("execution_get_meta", "execution_handshake_boot")
+            if (not self._initialized or self._draining_boot_id is not None
+                    or self._active_boot_id != self.process_boot_id
+                    or handshake_boot != self.process_boot_id):
+                return None
         expected_bed_epoch = int(await self._db("execution_get_meta", "bed_epoch", "0") or "0")
         try:
             proof = await self.bed_checker.check(after_run_id, expected_bed_epoch, self.process_boot_id)
@@ -404,9 +417,12 @@ class AutoPrinterExecutor:
                             and isinstance(confidence, (int, float)) and math.isfinite(confidence)
                             and 0.0 <= confidence <= 1.0))
         valid_reason = reason is None or (isinstance(reason, str) and len(reason) <= 100)
+        verdict = proof.get("verdict")
+        valid_verdict = (verdict == "empty" and (qualified or offline_test_device)
+                         or not require_empty and verdict in {"occupied", "unknown"})
         if (proof.get("printer_id") != self.store.printer_id or proof.get("after_run_id") != after_run_id
-                or proof.get("agent_boot_id") != self.process_boot_id or proof.get("verdict") != "empty"
-                or proof.get("protocol_version") != 1
+                or proof.get("agent_boot_id") != self.process_boot_id or not valid_verdict
+                or type(proof.get("protocol_version")) is not int or proof["protocol_version"] != 1
                 or type(proof.get("bed_epoch")) is not int or proof["bed_epoch"] != expected_bed_epoch
                 or not _uuid_valid(proof.get("check_id")) or captured is None
                 or captured > now or (now - captured).total_seconds() > 30
