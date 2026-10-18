@@ -27,6 +27,9 @@ class StoreError(ValueError):
         super().__init__(code)
 
 
+_UNSET = object()
+
+
 class AutoPrinterStore:
     def __init__(
         self,
@@ -131,7 +134,9 @@ class AutoPrinterStore:
         )
         defaults = {"printer_id": self.printer_id, "profile_id": profile_id, "control_epoch": "1",
                     "binding_epoch": "1", "binding_state": "unpaired", "queue_revision": "1",
-                    "applied_queue_revision": "1", "local_pause": "1", "remote_pause": "0", "bed_epoch": "0"}
+                    "applied_queue_revision": "1", "local_pause": "1", "remote_pause": "0", "bed_epoch": "0",
+                    "owner_profile": "null", "display_name": "", "unlink_pending_epoch": "0",
+                    "unlink_phase": ""}
         with self._transaction():
             for key, value in defaults.items():
                 self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)", (key, value))
@@ -207,21 +212,59 @@ class AutoPrinterStore:
 
     def session(self) -> Dict[str, Any]:
         with self._lock:
+            binding = int(self._get("binding_epoch"))
+            state = self._get("binding_state")
             return {"control_epoch": int(self._get("control_epoch")), "binding_epoch": int(self._get("binding_epoch")),
-                    "binding_state": self._get("binding_state"), "queue_revision": int(self._get("queue_revision")),
+                    "binding_state": state, "queue_revision": int(self._get("queue_revision")),
                     "local_pause": bool(int(self._get("local_pause"))),
-                    "remote_pause": bool(int(self.execution_get_meta("remote_pause", "0")))}
+                    "remote_pause": bool(int(self.execution_get_meta("remote_pause", "0"))),
+                    "unlink_pending": state in {"paired", "revoked"}
+                    and int(self._get("unlink_pending_epoch")) == binding}
 
-    def update_binding(self, control_epoch: int, binding_epoch: int, binding_state: str, applied_queue_revision: int) -> None:
+    def update_binding(self, control_epoch: int, binding_epoch: int, binding_state: str,
+                       applied_queue_revision: int, owner_profile: Any = _UNSET,
+                       display_name: Any = _UNSET, unlink_pending: Any = _UNSET,
+                       event_boot_id: str | None = None) -> str | None:
         if any(type(v) is not int or v < 1 for v in (control_epoch, binding_epoch, applied_queue_revision)) or binding_state not in {"unpaired", "paired", "revoked"}:
             raise StoreError("invalid_binding")
+        if (owner_profile is not _UNSET and owner_profile is not None
+                and (not isinstance(owner_profile, dict) or set(owner_profile) != {"display_name"}
+                     or not isinstance(owner_profile["display_name"], str)
+                     or len(owner_profile["display_name"]) > 100)):
+            raise StoreError("invalid_owner_profile")
+        if display_name is not _UNSET and (not isinstance(display_name, str) or len(display_name) > 100):
+            raise StoreError("invalid_display_name")
+        if unlink_pending is not _UNSET and type(unlink_pending) is not bool:
+            raise StoreError("invalid_unlink_state")
+        if event_boot_id is not None:
+            event_boot_id = _uuid(event_boot_id)
         with self._transaction():
             current_control, current_binding = int(self._get("control_epoch")), int(self._get("binding_epoch"))
             if control_epoch < current_control or binding_epoch < current_binding:
                 raise StoreError("epoch_regression")
             changed = binding_epoch != current_binding
+            previous_state = self._get("binding_state")
+            if (binding_state == "unpaired" and previous_state in {"paired", "revoked"}
+                    and binding_epoch == current_binding):
+                raise StoreError("unlink_epoch_required")
+            rollover = (binding_state == "unpaired" and changed
+                        and previous_state in {"paired", "revoked"})
+            if rollover and binding_epoch != current_binding + 1:
+                raise StoreError("invalid_unlink_epoch")
+            if event_boot_id is not None and not rollover:
+                raise StoreError("invalid_event_namespace_reset")
+            if rollover and event_boot_id is None:
+                event_boot_id = str(uuid.uuid4())
             control_changed = control_epoch != current_control
             current_revision = int(self._get("queue_revision"))
+            if display_name is not _UNSET:
+                self._set("display_name", display_name)
+            if changed or binding_state == "unpaired":
+                self._set("owner_profile", "null")
+                self._set("unlink_pending_epoch", 0)
+                self._set("unlink_phase", "")
+            elif binding_state == "revoked":
+                self._set("owner_profile", "null")
             if binding_state == "revoked":
                 self._set("control_epoch", control_epoch)
                 self._set("binding_epoch", binding_epoch)
@@ -232,6 +275,9 @@ class AutoPrinterStore:
                     self._set("bed_epoch", int(self.execution_get_meta("bed_epoch", "0") or "0") + 1)
                 if changed:
                     self._set("queue_revision", 1)
+                if unlink_pending is True:
+                    self._set("unlink_pending_epoch", binding_epoch)
+                    self._set("unlink_phase", "confirm")
                 return
             if (changed and applied_queue_revision > 1) or applied_queue_revision > current_revision:
                 raise StoreError("queue_recovery_required")
@@ -250,8 +296,50 @@ class AutoPrinterStore:
                 self._set("local_pause", 1)
                 self._set("remote_pause", 0)
                 self._set("bed_epoch", int(self.execution_get_meta("bed_epoch", "0") or "0") + 1)
+                if event_boot_id is not None:
+                    self._set("execution_boot_id", event_boot_id)
+                    self._set("snapshot_seq", 0)
             else:
                 self._set("applied_queue_revision", applied_queue_revision)
+            if binding_state == "paired":
+                if owner_profile is not _UNSET:
+                    self._set("owner_profile", _json(owner_profile))
+            if unlink_pending is True:
+                self._set("unlink_pending_epoch", binding_epoch)
+                self._set("unlink_phase", "confirm")
+                self._set("local_pause", 1)
+            return event_boot_id
+
+    def request_unlink(self) -> int:
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            if self._get("binding_state") not in {"paired", "revoked"}:
+                raise StoreError("not_paired")
+            if int(self._get("unlink_pending_epoch")) != binding:
+                self._set("unlink_pending_epoch", binding)
+                self._set("unlink_phase", "request")
+            elif self._get("unlink_phase") not in {"request", "confirm"}:
+                self._set("unlink_phase", "request")
+            self._set("local_pause", 1)
+            return binding
+
+    def unlink_intent(self) -> Dict[str, Any] | None:
+        with self._lock:
+            binding = int(self._get("binding_epoch"))
+            phase = self._get("unlink_phase")
+            if (int(self._get("unlink_pending_epoch")) != binding
+                    or phase not in {"request", "confirm"}):
+                return None
+            return {"binding_epoch": binding, "phase": phase}
+
+    def set_unlink_phase(self, binding_epoch: int, phase: str) -> None:
+        if type(binding_epoch) is not int or phase not in {"request", "confirm"}:
+            raise StoreError("invalid_unlink_state")
+        with self._transaction():
+            if (int(self._get("binding_epoch")) != binding_epoch
+                    or int(self._get("unlink_pending_epoch")) != binding_epoch):
+                raise StoreError("stale_unlink_intent")
+            self._set("unlink_phase", phase)
 
     def store_asset(self, transfer: dict, stream: BinaryIO) -> Dict[str, Any]:
         asset_id = _uuid(transfer.get("asset_id"))
@@ -399,9 +487,13 @@ class AutoPrinterStore:
                 self._set("local_pause", 1)
                 state, result = "executed", {}
             elif kind in {"resume_queue", "start_run", "pause_current_print", "stop_after_current", "cancel_current_print", "recheck_bed"}:
-                result = {"code": "stage1_execution_disabled"}
+                result = {"code": "account_unlink_pending" if int(self._get("unlink_pending_epoch")) == binding
+                          else "stage1_execution_disabled"}
             elif kind in {"enqueue_series", "reorder_queue"} and isinstance(payload, dict):
-                state, result = self._apply_queue_command(kind, command, payload, binding)
+                if int(self._get("unlink_pending_epoch")) == binding:
+                    result = {"code": "account_unlink_pending", "queue_revision": int(self._get("queue_revision"))}
+                else:
+                    state, result = self._apply_queue_command(kind, command, payload, binding)
             if kind in {"enqueue_series", "reorder_queue"}:
                 current = int(self._get("queue_revision"))
                 previous = payload.get("previous_queue_revision") if isinstance(payload, dict) else None
@@ -564,6 +656,8 @@ class AutoPrinterStore:
         run_id, boot_id = _uuid(run_id), _uuid(boot_id)
         with self._transaction():
             binding = int(self._get("binding_epoch"))
+            if int(self._get("unlink_pending_epoch")) == binding and state == "preparing":
+                raise StoreError("account_unlink_pending")
             row = self._conn.execute("SELECT state,start_intent,filename FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
             allowed = {
                 "queued": {"preparing", "failed", "cancelled"},
@@ -629,6 +723,8 @@ class AutoPrinterStore:
             row = self._conn.execute("SELECT state,start_intent,filename FROM execution_runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
             if row is None or row[1] or row[0] not in {"queued", "preparing"} or row[2] not in (None, filename):
                 raise StoreError("start_intent_unavailable")
+            if int(self._get("unlink_pending_epoch")) == binding:
+                raise StoreError("account_unlink_pending")
             if self._get("binding_state") != "paired" or self._get("local_pause") != "0":
                 raise StoreError("execution_paused")
             if self._conn.execute("SELECT 1 FROM execution_runs WHERE binding_epoch=? AND start_intent=1 AND state NOT IN ('completed','failed','cancelled')", (binding,)).fetchone():
@@ -768,10 +864,12 @@ class AutoPrinterStore:
 
     def execution_set_pause(self, *, local: bool | None = None, remote: bool | None = None) -> None:
         with self._transaction():
+            pending = (int(self._get("unlink_pending_epoch")) == int(self._get("binding_epoch"))
+                       and self._get("binding_state") in {"paired", "revoked"})
             if local is not None:
-                self._set("local_pause", int(local))
+                self._set("local_pause", int(local or pending))
             if remote is not None:
-                self._set("remote_pause", int(remote))
+                self._set("remote_pause", int(remote or pending))
 
     def execution_get_meta(self, key: str, default: str | None = None) -> str | None:
         with self._lock:
@@ -841,6 +939,8 @@ class AutoPrinterStore:
         with self._lock:
             binding = int(self._get("binding_epoch"))
             paired = self._get("binding_state") == "paired"
+            pending = (self._get("binding_state") in {"paired", "revoked"}
+                       and int(self._get("unlink_pending_epoch")) == binding)
             queue_total = self._conn.execute(
                 "SELECT COUNT(*) FROM runs WHERE binding_epoch=?", (binding,)
             ).fetchone()[0] if paired else 0
@@ -861,6 +961,9 @@ class AutoPrinterStore:
                     "pending_result_count": self._conn.execute("SELECT COUNT(*) FROM commands WHERE reported=0 AND binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
                     "queue": queue, "queue_total": queue_total,
                     "queue_truncated": queue_total > len(queue),
+                    "display_name": self._get("display_name") or None,
+                    "owner_profile": json.loads(self._get("owner_profile")) if paired else None,
+                    "unlink_pending": pending,
                     "local_pause": True, "remote_pause": False, "physical_execution_enabled": False}
             if paired:
                 page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]

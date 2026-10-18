@@ -71,7 +71,8 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         bed_checker.assert_not_called()
         self.assertFalse(instance.enabled)
         self.assertEqual(set(config.server.endpoints), {
-            component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT, component.CONTROL_ENDPOINT})
+            component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT,
+            component.ACCOUNT_UNLINK_ENDPOINT, component.CONTROL_ENDPOINT})
         self.assertEqual(config.server.endpoints[component.STATUS_ENDPOINT][0], ["GET"])
         self.assertEqual(config.server.endpoints[component.PAIRING_ENDPOINT][0], ["POST"])
         self.assertTrue(all(item[2].get("wrap_result") is False for item in config.server.endpoints.values()))
@@ -80,6 +81,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["configuration_version"], 1)
         self.assertIsNone(status["last_sync_at"])
         self.assertFalse(status["physical_execution_enabled"])
+        self.assertTrue(status["capabilities"]["account_linking"])
         self.assertNotIn("secret", status)
         await instance.component_init()
         await instance.close()
@@ -320,18 +322,172 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 elif not instance._closed:
                     await instance.close()
 
-    async def test_pairing_returns_only_the_temporary_code(self):
+    async def test_pairing_returns_validated_url_without_credentials(self):
         config = FakeConfig()
         instance = component.TreeDAutoPrinter(config)
 
         class FakeTransport:
             def pairing(self):
-                return {"code": "123456789012", "expires_at": "2030-01-01T00:00:00Z", "secret": "hidden"}
+                return {"code": "ABCD2345", "expires_at": "2030-01-01T00:00:00Z",
+                        "verification_url": "https://app.example/autoprinter/connect#code=ABCD2345",
+                        "secret": "hidden"}
 
-        instance._store = object()
+        class FakeStore:
+            def session(self):
+                return {"binding_state": "unpaired", "unlink_pending": False}
+
+        instance._store = FakeStore()
         instance._transport = FakeTransport()
         result = await instance._handle_pairing(None)
-        self.assertEqual(result, {"code": "123456789012", "expires_at": "2030-01-01T00:00:00Z"})
+        self.assertEqual(result, {"code": "ABCD2345", "expires_at": "2030-01-01T00:00:00Z",
+                                  "verification_url": "https://app.example/autoprinter/connect#code=ABCD2345"})
+
+    async def test_account_unlink_keeps_durable_pending_when_transport_is_offline(self):
+        config = FakeConfig(enabled=True)
+        instance = component.TreeDAutoPrinter(config)
+
+        class FakeStore:
+            requested = False
+
+            def request_unlink(self):
+                self.requested = True
+
+            def unlink_intent(self):
+                return {"binding_epoch": 3, "phase": "request"}
+
+            def status(self):
+                return {"binding_state": "paired", "binding_epoch": 3,
+                        "owner_profile": {"display_name": "Owner"},
+                        "display_name": "Printer", "unlink_pending": True}
+
+        class FakeTransport:
+            def unlink(self, binding_epoch, confirm):
+                raise TransportError("network_error")
+
+        class Request:
+            def get_args(self):
+                return {}
+
+        instance._store = FakeStore()
+        instance._transport = FakeTransport()
+
+        result = await instance._handle_account_unlink(Request())
+
+        self.assertTrue(instance._store.requested)
+        self.assertTrue(result["enabled"])
+        self.assertTrue(result["configured"])
+        self.assertEqual(1, result["protocol_version"])
+        self.assertTrue(result["unlink_pending"])
+        self.assertEqual({"account_linking": True}, result["capabilities"])
+
+    async def test_pending_unlink_preserves_old_control_outbox_until_confirm(self):
+        printer_id = "11111111-1111-4111-8111-111111111111"
+        profile_id = "treed_v2_corexy_v1"
+        old_boot = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        instance = component.TreeDAutoPrinter(FakeConfig())
+
+        directory = tempfile.TemporaryDirectory()
+        store = AutoPrinterStore(Path(directory.name), printer_id, profile_id)
+        instance._store = store
+        try:
+            store.update_binding(1, 1, "paired", 1,
+                                owner_profile={"display_name": "Owner"}, display_name="Printer")
+            store.execution_set_boot(old_boot)
+            old_receipt = store.execution_append_event(
+                old_boot, 1, "run_state", "2030-01-01T00:00:00Z", None, {"state": "queued"})
+            store.execution_ack_events([old_receipt["event_id"]], [old_receipt["event_id"]], [], [], old_boot)
+            old_pending = store.execution_append_event(
+                old_boot, 1, "run_state", "2030-01-01T00:00:01Z", None, {"state": "printing"})
+        except Exception:
+            store.close()
+            directory.cleanup()
+            raise
+
+        class FakeExecutor:
+            def __init__(self):
+                self.active_boot_id = old_boot
+                self.acknowledgements = []
+                self.quiescence = [False, True]
+
+            async def sync_fields(self):
+                return {"agent_boot_id": self.active_boot_id, "snapshot_seq": 1,
+                        "snapshot": {"printer_id": printer_id, "profile_id": profile_id},
+                        "events": store.execution_events_pending(self.active_boot_id),
+                        "acknowledged_event_ids": store.execution_pending_receipts(self.active_boot_id),
+                        "command_results": []}
+
+            async def acknowledge(self, response, submitted):
+                self.acknowledgements.append((response, submitted))
+
+            async def unlink_quiescent(self, device=None):
+                return self.quiescence.pop(0)
+
+            def reset_outbox_namespace(self, boot_id):
+                self.active_boot_id = boot_id
+
+        class FakeTransport:
+            def __init__(self):
+                self.sync_payloads = []
+                self.confirm_calls = []
+                self.sync_count = 0
+
+            def sync(self, payload):
+                self.sync_payloads.append(payload)
+                self.sync_count += 1
+                response = {"protocol_version": 1, "printer_id": printer_id,
+                            "control_epoch": 2, "binding_epoch": 1, "binding_state": "paired",
+                            "state_version": 2, "queue_revision": 1, "applied_queue_revision": 1,
+                            "execution_authority": "printer", "storage_authority": "printer",
+                            "configuration_version": 1, "transfers": [], "commands": [],
+                            "snapshot": {"printer_id": printer_id, "profile_id": profile_id},
+                            "owner_profile": {"display_name": "Owner"}, "display_name": "Printer",
+                            "unlink_pending": True, "ack_event_ids": [], "ignored_event_ids": [],
+                            "reason": "control_epoch_mismatch" if self.sync_count == 1 else None}
+                if self.sync_count == 1:
+                    response["ignored_event_ids"] = [{"event_id": old_pending["event_id"],
+                                                       "reason": "control_epoch_mismatch"}]
+                return response
+
+            def unlink(self, binding_epoch, confirm):
+                self.confirm_calls.append((binding_epoch, confirm))
+                return {"binding_state": "unpaired", "binding_epoch": 2, "control_epoch": 2,
+                        "queue_revision": 1, "owner_profile": None, "display_name": "Printer",
+                        "unlink_pending": False}
+
+        executor = FakeExecutor()
+        transport = FakeTransport()
+        instance._executor = executor
+        instance._transport = transport
+        instance._device = object()
+        try:
+            await instance._sync_once()
+            self.assertEqual([old_pending], transport.sync_payloads[0]["events"])
+            self.assertEqual([old_receipt["event_id"]], transport.sync_payloads[0]["acknowledged_event_ids"])
+            self.assertTrue((await asyncio.to_thread(store.session))["unlink_pending"])
+            self.assertEqual([], executor.acknowledgements)
+            self.assertEqual([], transport.confirm_calls)
+
+            await instance._sync_once()
+            self.assertEqual([], transport.sync_payloads[1]["events"])
+            self.assertEqual([], transport.sync_payloads[1]["acknowledged_event_ids"])
+            self.assertEqual([], executor.acknowledgements)
+            self.assertEqual([(1, True)], transport.confirm_calls,
+                             f"quiescence remaining: {executor.quiescence}")
+            self.assertEqual("unpaired", (await asyncio.to_thread(store.session))["binding_state"])
+            self.assertFalse((await asyncio.to_thread(store.session))["unlink_pending"])
+            self.assertEqual([old_pending], store.execution_events_pending(old_boot))
+            self.assertEqual([old_receipt["event_id"]], store.execution_pending_receipts(old_boot))
+            self.assertNotEqual(old_boot, executor.active_boot_id)
+
+            await asyncio.to_thread(store.update_binding, 3, 3, "paired", 1,
+                                    owner_profile={"display_name": "New owner"})
+            new_fields = await executor.sync_fields()
+            self.assertEqual(executor.active_boot_id, new_fields["agent_boot_id"])
+            self.assertEqual([], new_fields["events"])
+            self.assertEqual([], new_fields["acknowledged_event_ids"])
+        finally:
+            store.close()
+            directory.cleanup()
 
     def test_transport_rejects_non_https_and_non_origin_urls(self):
         for origin in ("http://example.test", "https://user@example.test", "https://example.test/path",
@@ -346,6 +502,27 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                      "api/autoprinter/device/files/not-a-uuid"):
             with self.subTest(path=path), self.assertRaises(TransportError):
                 transport.download(path)
+
+    def test_pairing_requires_configured_frontend_origin_path_and_code(self):
+        transport = AutoPrinterTransport("https://api.example", "x" * 32, "https://app.example")
+        responses = [
+            {"code": "ABCD2345", "expires_at": "2030-01-01T00:00:00Z",
+             "verification_url": "https://app.example/autoprinter/connect#code=ABCD2345", "secret": "hidden"},
+            {"code": "ABCD2345", "expires_at": "2030-01-01T00:00:00Z",
+             "verification_url": "https://evil.example/autoprinter/connect#code=ABCD2345"},
+            {"code": "ABCD2345", "expires_at": "2030-01-01T00:00:00Z",
+             "verification_url": "https://app.example/other#code=ABCD2345"},
+            {"code": "ABCD2345", "expires_at": "2030-01-01T00:00:00Z",
+             "verification_url": "https://app.example/autoprinter/connect#code=ZZZZ9999"},
+        ]
+        for index, response in enumerate(responses):
+            with self.subTest(index=index), patch.object(transport, "_json", return_value=response):
+                if index == 0:
+                    self.assertEqual({key: response[key] for key in ("code", "expires_at", "verification_url")},
+                                     transport.pairing())
+                else:
+                    with self.assertRaises(TransportError):
+                        transport.pairing()
 
     def test_bounded_response_uses_single_read_and_checks_deadline_afterward(self):
         class IncrementingClock:
@@ -644,7 +821,8 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(transport.receipts[0][0], asset_id)
                 self.assertEqual(transport.receipts[1][0], asset_id)
                 self.assertEqual(set(config.server.endpoints), {
-                    component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT, component.CONTROL_ENDPOINT})
+                    component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT,
+                    component.ACCOUNT_UNLINK_ENDPOINT, component.CONTROL_ENDPOINT})
                 self.assertTrue(transport.last_payload["snapshot"]["local_pause"])
                 self.assertFalse(transport.last_payload["snapshot"]["ready"])
                 self.assertIsNone(transport.last_payload["snapshot"]["current_run_id"])
@@ -755,7 +933,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("journal", transport.payload["snapshot"])
                 self.assertEqual(transport.payload["events"], [event])
                 self.assertEqual(transport.payload["agent_boot_id"], "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
-                self.assertNotIn("binding_epoch", transport.payload)
+                self.assertEqual(1, transport.payload["binding_epoch"])
                 self.assertEqual([item["event_id"] for item in instance._executor.ack[1]["events"]], [event_id])
                 self.assertEqual(instance._executor.ack[1]["binding_epoch"], 1)
                 last_sync = instance._last_sync_at
@@ -767,6 +945,72 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 status = await instance._handle_status(None)
                 self.assertIsNone(status["last_sync_at"])
                 self.assertNotIn("journal", status)
+            finally:
+                await instance.close()
+
+    async def test_sync_after_lost_unlink_confirm_rotates_outbox_before_new_binding(self):
+        printer_id = "11111111-1111-4111-8111-111111111111"
+        profile_id = "treed_v2_corexy_v1"
+        old_boot = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        snapshot = {"printer_id": printer_id, "profile_id": profile_id}
+        event = None
+        event_id = None
+
+        class FakeExecutor:
+            enabled = False
+
+            def __init__(self):
+                self.rotated_to = None
+                self.acknowledged = False
+
+            async def sync_fields(self):
+                return {"agent_boot_id": old_boot, "snapshot_seq": 1, "snapshot": snapshot,
+                        "events": [event], "acknowledged_event_ids": [], "command_results": []}
+
+            def reset_outbox_namespace(self, boot_id):
+                self.rotated_to = boot_id
+
+            async def acknowledge(self, response, submitted):
+                self.acknowledged = True
+
+        class FakeTransport:
+            def sync(self, payload):
+                self.payload = payload
+                return {"protocol_version": 1, "printer_id": printer_id, "control_epoch": 1,
+                        "binding_epoch": 2, "binding_state": "unpaired", "state_version": 2,
+                        "queue_revision": 1, "applied_queue_revision": 1,
+                        "execution_authority": "printer", "storage_authority": "printer",
+                        "configuration_version": 1, "transfers": [], "commands": [],
+                        "snapshot": snapshot, "owner_profile": None, "unlink_pending": False,
+                "ack_event_ids": [event_id], "ignored_event_ids": []}
+
+        with tempfile.TemporaryDirectory() as directory:
+            instance = component.TreeDAutoPrinter(FakeConfig())
+            store = AutoPrinterStore(Path(directory), printer_id, profile_id)
+            instance._store = store
+            store.update_binding(1, 1, "paired", 1, owner_profile={"display_name": "Owner"})
+            store.execution_set_boot(old_boot)
+            event = store.execution_append_event(old_boot, 1, "run_state", "2030-01-01T00:00:00Z",
+                                                 None, {"state": "printing"})
+            event_id = event["event_id"]
+            store.request_unlink()
+            store.set_unlink_phase(1, "confirm")
+            executor = FakeExecutor()
+            instance._executor = executor
+            transport = FakeTransport()
+            instance._transport = transport
+            try:
+                await instance._sync_once()
+
+                self.assertEqual([event], transport.payload["events"])
+                self.assertFalse(executor.acknowledged)
+                self.assertNotEqual(old_boot, executor.rotated_to)
+                self.assertEqual(executor.rotated_to, store._get("execution_boot_id"))
+                self.assertEqual([], store.execution_events_pending(executor.rotated_to))
+                self.assertEqual([event_id], [item["event_id"] for item in
+                                              store.execution_events_pending(old_boot)])
+                self.assertEqual("unpaired", store.session()["binding_state"])
+                self.assertFalse(store.session()["unlink_pending"])
             finally:
                 await instance.close()
 

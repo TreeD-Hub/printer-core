@@ -164,6 +164,67 @@ class AutoPrinterStoreTest(unittest.TestCase):
         self.assertTrue((self.root / "bindings" / "1" / f"{ASSET}.gcode").exists())
         self.assertEqual(1, self.store.session()["queue_revision"])
 
+    def test_unlink_intent_survives_restart_and_new_epoch_hides_account_data(self):
+        self.paired()
+        self.store.update_binding(1, 1, "paired", 1,
+                                  {"display_name": "Owner"}, "Printer")
+        self.store._conn.execute(
+            "INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(1,?,?,1)",
+            (RUN_1, "{}"))
+
+        self.assertEqual(1, self.store.request_unlink())
+        self.store.execution_set_pause(local=False, remote=False)
+        self.assertTrue(self.store.session()["local_pause"])
+        self.assertTrue(self.store.session()["unlink_pending"])
+        self.assertEqual({"display_name": "Owner"}, self.store.status()["owner_profile"])
+        self.store.close()
+        self.store = AutoPrinterStore(self.root, PRINTER, PROFILE,
+                                      max_asset_bytes=128, max_total_bytes=256, max_runs=4)
+
+        self.assertTrue(self.store.session()["unlink_pending"])
+        self.assertEqual("request", self.store.unlink_intent()["phase"])
+        self.store.update_binding(2, 2, "unpaired", 1)
+
+        status = self.store.status()
+        self.assertFalse(status["unlink_pending"])
+        self.assertIsNone(status["owner_profile"])
+        self.assertEqual("Printer", status["display_name"])
+        self.assertEqual([], status["queue"])
+        self.assertEqual(1, self.store._conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE binding_epoch=1 AND run_id=?", (RUN_1,)
+        ).fetchone()[0])
+
+    def test_confirmed_unlink_isolates_old_outbox_without_acknowledging_it(self):
+        old_boot = "11111111-1111-4111-8111-111111111111"
+        restart_boot = "33333333-3333-4333-8333-333333333333"
+        self.paired()
+        self.store.execution_set_boot(old_boot)
+        old_acked = self.store.execution_append_event(
+            old_boot, 1, "run_state", "2026-10-18T00:00:00Z", None, {"state": "printing"})
+        old_pending = self.store.execution_append_event(
+            old_boot, 1, "run_state", "2026-10-18T00:00:01Z", None, {"state": "failed"})
+        self.store.execution_ack_events([old_acked["event_id"]], [old_acked["event_id"]], [], [], old_boot)
+        self.store.request_unlink()
+
+        rolled_boot = self.store.update_binding(2, 2, "unpaired", 1)
+        self.assertTrue(isinstance(rolled_boot, str) and rolled_boot != old_boot)
+        self.assertEqual([old_pending["event_id"]], [event["event_id"] for event in
+                                                      self.store.execution_events_pending(old_boot)])
+        self.assertEqual([old_acked["event_id"]], self.store.execution_pending_receipts(old_boot))
+        self.store.update_binding(2, 2, "paired", 1, owner_profile={"display_name": "New owner"})
+        new_event = self.store.execution_append_event(
+            rolled_boot, 2, "run_state", "2026-10-18T00:00:02Z", None, {"state": "queued"})
+
+        self.store.close()
+        self.store = AutoPrinterStore(self.root, PRINTER, PROFILE,
+                                      max_asset_bytes=128, max_total_bytes=256, max_runs=4)
+        previous = self.store.execution_set_boot(restart_boot)
+        self.assertEqual(rolled_boot, previous["boot_id"])
+        self.assertEqual([new_event["event_id"]], [event["event_id"] for event in previous["pending_events"]])
+        self.assertEqual([old_pending["event_id"]], [event["event_id"] for event in
+                                                      self.store.execution_events_pending(old_boot)])
+        self.assertEqual([old_acked["event_id"]], self.store.execution_pending_receipts(old_boot))
+
     def test_unknown_or_ahead_server_revision_requires_recovery(self):
         with self.assertRaises(StoreError) as raised:
             self.store.update_binding(1, 1, "paired", 2)
@@ -190,7 +251,7 @@ class AutoPrinterStoreTest(unittest.TestCase):
         self.assertEqual("executed", self.store.apply_command(command)["state"])
         self.store.update_binding(2, 2, "revoked", 2)
         self.assertEqual({"control_epoch": 2, "binding_epoch": 2, "binding_state": "revoked", "queue_revision": 1,
-                          "local_pause": True, "remote_pause": False}, self.store.session())
+                          "local_pause": True, "remote_pause": False, "unlink_pending": False}, self.store.session())
         self.assertEqual([], self.store.queue())
         self.assertTrue((self.root / "bindings" / "1" / f"{ASSET}.gcode").exists())
         with self.assertRaises(StoreError) as raised:

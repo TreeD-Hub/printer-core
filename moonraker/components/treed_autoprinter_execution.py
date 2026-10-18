@@ -147,6 +147,11 @@ class AutoPrinterExecutor:
         intent = await self._db("execution_begin_action", command, local=local)
         if intent["state"] != "uncertain" or not intent.get("new"):
             return {key: value for key, value in intent.items() if key != "new"}
+        if session.get("unlink_pending") and kind == "resume_queue":
+            result = {"command_id": intent["command_id"], "state": "rejected",
+                      "result": {"code": "account_unlink_pending"}}
+            await self._db("execution_finish_action", intent["command_id"], result["state"], result["result"])
+            return result
         if (session["binding_state"] != "paired" or command.get("control_epoch") != session["control_epoch"]
                 or command.get("queue_revision") != session["queue_revision"]):
             result = {"command_id": intent["command_id"], "state": "rejected",
@@ -212,6 +217,8 @@ class AutoPrinterExecutor:
         if session["binding_state"] != "paired":
             raise StoreError("not_paired")
         kind = action["type"]
+        if session.get("unlink_pending") and kind == "resume_queue":
+            raise StoreError("account_unlink_pending")
         receipt = {"type": kind, "command_id": None, "state": "uncertain",
                    "result": {"code": "local_action_outcome_uncertain"}}
         try:
@@ -266,15 +273,39 @@ class AutoPrinterExecutor:
         status["action_result"] = receipt
         return status
 
+    async def unlink_quiescent(self, device: Any = None) -> bool:
+        target = self.device if device is None else device
+        if target is None:
+            return False
+        try:
+            observed = await target.inspect()
+        except Exception:
+            return False
+        return (isinstance(observed, dict) and observed.get("ready") is True
+                and observed.get("phase") == "idle"
+                and observed.get("state") in {"idle", "complete", "error", "cancelled"}
+                and observed.get("service_active") is False and observed.get("queue_safe") is True)
+
+    def reset_outbox_namespace(self, event_boot_id: str) -> None:
+        self._active_boot_id = str(uuid.UUID(event_boot_id))
+        self._draining_boot_id = None
+        self._snapshot_seq = 0
+        if self._blocked_reason in {"binding_revoked", "protocol_epoch_mismatch"}:
+            self._blocked_reason = None
+
     async def tick(self) -> None:
         if not self._initialized:
             await self.initialize()
+        session = await self._db("session")
+        unlink_pending = bool(session.get("unlink_pending"))
         hard_blocks = {"protocol_recovery_required", "protocol_epoch_mismatch", "event_rejected",
                        "binding_revoked"}
-        if (not self.enabled or self.device is None or self._draining_boot_id
+        if (not self.enabled or self.device is None
+                or self._draining_boot_id and not unlink_pending
                 or self._blocked_reason in hard_blocks
                 or await self._db("execution_get_meta", "protocol_recovery_required") == "1"
-                or await self._db("execution_get_meta", "execution_handshake_boot") != self.process_boot_id):
+                or (await self._db("execution_get_meta", "execution_handshake_boot") != self._active_boot_id
+                    and not unlink_pending)):
             return
         self._blocked_reason = None
         if await self._db("execution_has_unresolved_intent"):
@@ -284,10 +315,18 @@ class AutoPrinterExecutor:
                 return
             await self._reconcile(run)
             return
-        session = await self._db("session")
+        if unlink_pending:
+            current = await self._current()
+            if current is not None:
+                await self._reconcile(current)
+            else:
+                self._blocked_reason = "account_unlink_pending"
+            return
         if (session["binding_state"] != "paired"
-                or session.get("local_pause") or session.get("remote_pause")
                 or await self._db("execution_outbox_count") >= 9900):
+            self._blocked_reason = "execution_gate_closed"
+            return
+        if session.get("local_pause") or session.get("remote_pause"):
             self._blocked_reason = "execution_gate_closed"
             return
         observation = await self.device.inspect()
@@ -419,12 +458,11 @@ class AutoPrinterExecutor:
         if not require_empty:
             handshake_boot = await self._db("execution_get_meta", "execution_handshake_boot")
             if (not self._initialized or self._draining_boot_id is not None
-                    or self._active_boot_id != self.process_boot_id
-                    or handshake_boot != self.process_boot_id):
+                    or handshake_boot != self._active_boot_id):
                 return None
         expected_bed_epoch = int(await self._db("execution_get_meta", "bed_epoch", "0") or "0")
         try:
-            proof = await self.bed_checker.check(after_run_id, expected_bed_epoch, self.process_boot_id)
+            proof = await self.bed_checker.check(after_run_id, expected_bed_epoch, self._active_boot_id)
         except Exception:
             return None
         if not isinstance(proof, dict):
@@ -442,7 +480,7 @@ class AutoPrinterExecutor:
         valid_verdict = (verdict == "empty" and (qualified or offline_test_device)
                          or not require_empty and verdict in {"occupied", "unknown"})
         if (proof.get("printer_id") != self.store.printer_id or proof.get("after_run_id") != after_run_id
-                or proof.get("agent_boot_id") != self.process_boot_id or not valid_verdict
+                or proof.get("agent_boot_id") != self._active_boot_id or not valid_verdict
                 or type(proof.get("protocol_version")) is not int or proof["protocol_version"] != 1
                 or type(proof.get("bed_epoch")) is not int or proof["bed_epoch"] != expected_bed_epoch
                 or not _uuid_valid(proof.get("check_id")) or captured is None

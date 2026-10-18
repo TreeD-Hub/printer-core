@@ -10,7 +10,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from moonraker.components.treed_autoprinter_execution import AutoPrinterExecutor
 from moonraker.components.treed_autoprinter_store import AutoPrinterStore, StoreError
@@ -40,6 +40,10 @@ class _FakeDevice:
     def __init__(self):
         self.state = "idle"
         self.filename = None
+        self.ready = True
+        self.phase = "idle"
+        self.queue_safe = True
+        self.service_active = False
         self.starts = []
         self.pause_calls = 0
         self.cancel_calls = 0
@@ -48,9 +52,9 @@ class _FakeDevice:
         self.fail_next_cancel = False
 
     async def inspect(self):
-        return {"ready": True, "state": self.state, "filename": self.filename,
-                "job_id": None, "queue_empty": True, "queue_safe": True,
-                "service_active": False, "phase": "idle"}
+        return {"ready": self.ready, "state": self.state, "filename": self.filename,
+                "job_id": None, "queue_empty": True, "queue_safe": self.queue_safe,
+                "service_active": self.service_active, "phase": self.phase}
 
     async def prepare(self, run, path):
         return f"treed-autoprinter/{run['binding_epoch']}-{run['run_id']}-{run['sha256']}.gcode"
@@ -383,6 +387,109 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
         await executor.tick()
 
         self.assertEqual(1, len(device.starts))
+
+    async def test_unlink_pending_blocks_resume_and_new_starts(self):
+        await self.seed_queue([RUNS[0]])
+        executor, device, _ = await self.online_executor()
+        await asyncio.to_thread(self.store.request_unlink)
+
+        with self.assertRaisesRegex(StoreError, "account_unlink_pending"):
+            await executor.local_action({"type": "resume_queue"})
+        await executor.tick()
+
+        self.assertEqual([], device.starts)
+        self.assertTrue((await asyncio.to_thread(self.store.session))["local_pause"])
+
+    async def test_same_process_rebind_acknowledges_new_namespace_and_resumes_tick(self):
+        await asyncio.to_thread(self.store.update_binding, 1, 1, "paired", 1)
+        executor, device, checker = await self.online_executor()
+        device.inspect = AsyncMock(wraps=device.inspect)
+
+        await asyncio.to_thread(self.store.request_unlink)
+        new_boot = await asyncio.to_thread(self.store.update_binding, 2, 2, "unpaired", 1)
+        executor.reset_outbox_namespace(new_boot)
+        await asyncio.to_thread(self.store.update_binding, 3, 3, "paired", 1,
+                                owner_profile={"display_name": "New owner"})
+        digest = hashlib.sha256(DATA).hexdigest()
+        await asyncio.to_thread(self.store.store_asset,
+                                {"asset_id": ASSET, "sha256": digest, "size_bytes": len(DATA),
+                                 "profile_id": PROFILE,
+                                 "download_path": f"api/autoprinter/device/files/{ASSET}"}, BytesIO(DATA))
+        await asyncio.to_thread(self.store.confirm_receipt, ASSET)
+        command = {"command_id": "99999999-9999-4999-8999-999999999999", "type": "enqueue_series",
+                   "control_epoch": 3, "expires_at": "2099-01-01T00:00:00Z", "queue_revision": 2,
+                   "state": "created", "payload": {"asset_id": ASSET, "sha256": digest,
+                   "size_bytes": len(DATA), "profile_id": PROFILE,
+                   "series_id": "88888888-8888-4888-8888-888888888888", "copies_per_run": 1,
+                   "completion_profile": {"version": 1, "profile_id": PROFILE, "auto_remove": False},
+                   "run_ids": [RUNS[0]], "binding_epoch": 3, "previous_queue_revision": 1,
+                   "queue_revision": 2}}
+        accepted = await asyncio.to_thread(self.store.apply_command, command)
+        self.assertEqual("executed", accepted["state"])
+
+        submitted = await executor.sync_fields()
+        submitted.update(control_epoch=3, binding_epoch=3)
+        self.assertEqual(new_boot, submitted["agent_boot_id"])
+
+        await executor.tick()
+        device.inspect.assert_not_awaited()
+        self.assertEqual([], device.starts)
+
+        await executor.acknowledge({"control_epoch": 3, "binding_epoch": 3,
+                                    "ack_event_ids": [], "ignored_event_ids": []}, submitted)
+        await executor.local_action({"type": "resume_queue"})
+
+        executor._draining_boot_id = "11111111-1111-4111-8111-111111111111"
+        await executor.tick()
+        device.inspect.assert_not_awaited()
+        executor._draining_boot_id = None
+        await executor.tick()
+
+        device.inspect.assert_awaited_once()
+        self.assertEqual(1, len(device.starts))
+        self.assertEqual(2, checker.counter)
+        self.assertEqual(new_boot, await asyncio.to_thread(
+            self.store.execution_get_meta, "execution_handshake_boot"))
+
+    async def test_unlink_pending_reconciles_current_run_through_restart_drain_gate(self):
+        await self.seed_queue([RUNS[0]])
+        executor, device, _ = await self.online_executor()
+        await executor.tick()
+        self.assertEqual(1, len(device.starts))
+        self.assertEqual("preparing", (await asyncio.to_thread(
+            self.store.execution_state, RUNS[0]))["state"])
+
+        await asyncio.to_thread(self.store.request_unlink)
+        await asyncio.to_thread(self.store.update_binding, 2, 1, "paired", 2,
+                                owner_profile={"display_name": "Owner"}, unlink_pending=True)
+        await asyncio.to_thread(self.store.execution_set_meta, "execution_handshake_boot",
+                                "11111111-1111-4111-8111-111111111111")
+        executor._draining_boot_id = "22222222-2222-4222-8222-222222222222"
+        device.reconcile = AsyncMock(wraps=device.reconcile)
+
+        await executor.tick()
+
+        device.reconcile.assert_awaited_once()
+        self.assertEqual("printing", (await asyncio.to_thread(
+            self.store.execution_state, RUNS[0]))["state"])
+        self.assertEqual(1, len(device.starts))
+        self.assertEqual("11111111-1111-4111-8111-111111111111",
+                         await asyncio.to_thread(self.store.execution_get_meta,
+                                                 "execution_handshake_boot"))
+
+    async def test_unlink_quiescence_requires_positive_idle_runtime_evidence(self):
+        await asyncio.to_thread(self.store.update_binding, 1, 1, "paired", 1)
+        executor, device, _ = await self.online_executor()
+        self.assertTrue(await executor.unlink_quiescent())
+
+        for change in ({"state": "printing"}, {"phase": "preparing"},
+                       {"ready": False}, {"queue_safe": False}, {"service_active": True}):
+            for name, value in change.items():
+                setattr(device, name, value)
+            self.assertFalse(await executor.unlink_quiescent())
+            for name in change:
+                setattr(device, name, {"state": "idle", "phase": "idle", "ready": True,
+                                       "queue_safe": True, "service_active": False}[name])
 
     async def test_stop_after_current_survives_remote_resume_and_restart(self):
         await self.seed_queue(RUNS[:2])

@@ -20,6 +20,7 @@ MAX_JSON_BYTES = 2 * 1024 * 1024
 MAX_TRANSFER_BYTES = 100 * 1024 * 1024
 TIMEOUT_SECONDS = 10
 TOTAL_TIMEOUT_SECONDS = 120
+PAIRING_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
 class TransportError(ValueError):
@@ -63,7 +64,7 @@ class _BoundedResponse:
 
 # Блок 2: Единственный HTTPS origin и безопасное выполнение запросов.
 class AutoPrinterTransport:
-    def __init__(self, origin: str, secret: str) -> None:
+    def __init__(self, origin: str, secret: str, frontend_origin: str | None = None) -> None:
         parsed = urlsplit(origin)
         try:
             parsed.port
@@ -73,6 +74,16 @@ class AutoPrinterTransport:
                 or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
             raise TransportError("invalid_origin")
         self._origin = f"https://{parsed.netloc}"
+        frontend = urlsplit(frontend_origin or origin)
+        try:
+            frontend.port
+        except ValueError:
+            raise TransportError("invalid_frontend_origin") from None
+        if (frontend.scheme != "https" or not frontend.hostname or frontend.username
+                or frontend.password or frontend.query or frontend.fragment
+                or frontend.path not in ("", "/")):
+            raise TransportError("invalid_frontend_origin")
+        self._frontend_origin = f"https://{frontend.netloc}"
         self._secret = secret
         self._opener = build_opener(ProxyHandler({}), _NoRedirect)
 
@@ -118,7 +129,33 @@ class AutoPrinterTransport:
         return self._json("api/autoprinter/device/sync", "POST", payload)
 
     def pairing(self) -> dict[str, Any]:
-        return self._json("api/autoprinter/device/pairing", "POST")
+        result = self._json("api/autoprinter/device/pairing", "POST")
+        code, verification_url = result.get("code"), result.get("verification_url")
+        if (not _valid_pairing_code(code) or not isinstance(verification_url, str)
+                or not self._valid_verification_url(verification_url, code)):
+            raise TransportError("invalid_pairing_response")
+        return {"code": code, "expires_at": result.get("expires_at"),
+                "verification_url": verification_url}
+
+    def _valid_verification_url(self, value: str, code: str) -> bool:
+        parsed = urlsplit(value)
+        try:
+            port = parsed.port
+        except ValueError:
+            return False
+        expected = urlsplit(self._frontend_origin)
+        origin_matches = (parsed.scheme == expected.scheme
+                          and (parsed.hostname or "").lower() == (expected.hostname or "").lower()
+                          and (port or 443) == (expected.port or 443))
+        return (origin_matches and parsed.path == "/autoprinter/connect"
+                and not parsed.query and parsed.fragment == f"code={code}"
+                and not parsed.username and not parsed.password)
+
+    def unlink(self, binding_epoch: int, confirm: bool) -> dict[str, Any]:
+        if type(binding_epoch) is not int or binding_epoch < 1 or type(confirm) is not bool:
+            raise TransportError("invalid_unlink_request")
+        return self._json("api/autoprinter/device/unlink", "POST",
+                          {"binding_epoch": binding_epoch, "confirm": confirm})
 
     def receipt(self, asset_id: str, receipt: dict) -> dict[str, Any]:
         asset_id = _validate_asset_id(asset_id)
@@ -151,3 +188,9 @@ def _validate_asset_id(value: str) -> str:
     except (ValueError, AttributeError, TypeError):
         pass
     raise TransportError("invalid_asset_id")
+
+
+def _valid_pairing_code(value: Any) -> bool:
+    return (isinstance(value, str) and value.isascii() and value == value.upper()
+            and ((len(value) == 8 and all(char in PAIRING_ALPHABET for char in value))
+                 or (len(value) == 20 and value.isalnum())))

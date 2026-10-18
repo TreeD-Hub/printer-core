@@ -28,6 +28,7 @@ from .treed_autoprinter_transport import AutoPrinterTransport, TransportError
 
 STATUS_ENDPOINT = "/server/treed/autoprinter/status"
 PAIRING_ENDPOINT = "/server/treed/autoprinter/pairing"
+ACCOUNT_UNLINK_ENDPOINT = "/server/treed/autoprinter/account/unlink"
 CONTROL_ENDPOINT = "/server/treed/autoprinter/control"
 MAX_CREDENTIAL_BYTES = 8192
 LOGGER = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class TreeDAutoPrinter:
         self._recovery_required = False
         self.server.register_endpoint(STATUS_ENDPOINT, ["GET"], self._handle_status, wrap_result=False)
         self.server.register_endpoint(PAIRING_ENDPOINT, ["POST"], self._handle_pairing, wrap_result=False)
+        self.server.register_endpoint(ACCOUNT_UNLINK_ENDPOINT, ["POST"], self._handle_account_unlink, wrap_result=False)
         self.server.register_endpoint(CONTROL_ENDPOINT, ["POST"], self._handle_control, wrap_result=False)
         self.server.register_event_handler("server:shutdown", self.close)
 
@@ -121,15 +123,15 @@ class TreeDAutoPrinter:
         credentials = _read_credentials(credential_path)
         if credentials["printer_id"] != printer_id:
             raise ValueError("identity_mismatch")
-        transport = AutoPrinterTransport(origin, credentials["secret"])
+        transport = AutoPrinterTransport(origin, credentials["secret"], self._config.get("frontend_origin") or origin)
         store = AutoPrinterStore(
             Path(self._config.get("storage_path")), printer_id, profile_id,
             max_journal_bytes=int(self._config.get("max_journal_bytes", DEFAULT_MAX_JOURNAL_BYTES)),
         )
         return store, transport
 
-    async def _run_blocking(self, callback: Callable, *args):
-        worker = asyncio.create_task(asyncio.to_thread(callback, *args))
+    async def _run_blocking(self, callback: Callable, *args, **kwargs):
+        worker = asyncio.create_task(asyncio.to_thread(callback, *args, **kwargs))
         self._workers.add(worker)
         worker.add_done_callback(self._workers.discard)
         try:
@@ -150,6 +152,8 @@ class TreeDAutoPrinter:
                     "protocol_version": 1, "configuration_version": 1, "last_sync_at": None,
                     "binding_state": "unpaired", "physical_execution_enabled": False,
                     "execution_enabled": False, "queue_recovery_required": False,
+                    "display_name": None, "owner_profile": None, "unlink_pending": False,
+                    "capabilities": {"account_linking": True},
                     "blocked_reason": "device_unavailable" if self._device_unavailable else self._configuration_error}
         async with self._lock:
             if self._closed or self._store is None:
@@ -157,6 +161,8 @@ class TreeDAutoPrinter:
                         "protocol_version": 1, "configuration_version": 1, "last_sync_at": None,
                         "binding_state": "unpaired", "physical_execution_enabled": False,
                         "execution_enabled": False, "queue_recovery_required": self._recovery_required,
+                          "display_name": None, "owner_profile": None, "unlink_pending": False,
+                          "capabilities": {"account_linking": True},
                         "blocked_reason": "queue_recovery_required" if self._recovery_required else None}
             status = await self._run_blocking(self._store.status)
             execution = await self._executor.status() if self._executor is not None else {}
@@ -180,6 +186,7 @@ class TreeDAutoPrinter:
                        "physical_execution_enabled": False,
                        "queue_recovery_required": self._recovery_required,
                        **execution,
+                         "capabilities": {"account_linking": True, **execution.get("capabilities", {})},
                        "blocked_reason": ("queue_recovery_required" if self._recovery_required
                                           else execution.get("blocked_reason"))})
         return status
@@ -216,14 +223,83 @@ class TreeDAutoPrinter:
         async with self._lock:
             if self._closed:
                 raise self.server.error("AutoPrinter is unavailable", 503)
+            session = await self._run_blocking(self._store.session)
+            if session["binding_state"] != "unpaired" or session["unlink_pending"]:
+                raise self.server.error("AutoPrinter pairing is unavailable", 409)
             try:
                 result = await self._run_blocking(self._transport.pairing)
             except TransportError as error:
                 raise self.server.error("AutoPrinter pairing is unavailable", 503) from None
-            code, expires_at = result.get("code"), result.get("expires_at")
-            if not isinstance(code, str) or not 12 <= len(code) <= 128 or not _future_time(expires_at):
+            code, expires_at, verification_url = (result.get("code"), result.get("expires_at"),
+                                                   result.get("verification_url"))
+            if (not isinstance(code, str) or len(code) not in {8, 20} or not _future_time(expires_at)
+                    or not isinstance(verification_url, str)):
                 raise self.server.error("AutoPrinter pairing response is invalid", 502)
-            return {"code": code, "expires_at": expires_at}
+            return {"code": code, "expires_at": expires_at, "verification_url": verification_url}
+
+    async def _handle_account_unlink(self, web_request) -> dict[str, Any]:
+        if self._closed or self._store is None or self._transport is None:
+            raise self.server.error("AutoPrinter is unavailable", 503)
+        args = web_request.get_args()
+        if not isinstance(args, dict) or args:
+            raise self.server.error("Invalid AutoPrinter unlink payload", 400)
+        async with self._lock:
+            if self._closed:
+                raise self.server.error("AutoPrinter is unavailable", 503)
+            try:
+                await self._run_blocking(self._store.request_unlink)
+            except StoreError:
+                raise self.server.error("AutoPrinter unlink is unavailable", 409) from None
+            await self._drive_unlink()
+        return await self._handle_status(None)
+
+    async def _drive_unlink(self, *, tolerate_offline: bool = True) -> None:
+        intent = await self._run_blocking(self._store.unlink_intent)
+        if intent is None:
+            return
+        epoch, phase = intent["binding_epoch"], intent["phase"]
+        try:
+            if phase == "request":
+                response = await self._run_blocking(self._transport.unlink, epoch, False)
+                _validate_unlink_response(response, epoch, confirmed=False)
+                current = await self._run_blocking(self._store.session)
+                fields = {key: response[key] for key in ("owner_profile", "display_name", "unlink_pending")
+                          if key in response}
+                await self._run_blocking(self._store.update_binding, response["control_epoch"],
+                                         response["binding_epoch"], response["binding_state"],
+                                         response["queue_revision"] if response["binding_epoch"] != epoch
+                                         else current["queue_revision"], **fields)
+                if response["binding_state"] == "unpaired":
+                    return
+                await self._run_blocking(self._store.set_unlink_phase, epoch, "confirm")
+            if not await self._unlink_quiescent():
+                return
+            response = await self._run_blocking(self._transport.unlink, epoch, True)
+            _validate_unlink_response(response, epoch, confirmed=True)
+            current = await self._run_blocking(self._store.session)
+            fields = {key: response[key] for key in ("owner_profile", "display_name", "unlink_pending")
+                      if key in response}
+            event_boot_id = str(uuid.uuid4()) if response["binding_state"] == "unpaired" else None
+            await self._run_blocking(self._store.update_binding, response["control_epoch"],
+                                     response["binding_epoch"], response["binding_state"],
+                                     response["queue_revision"] if response["binding_epoch"] != epoch
+                                     else current["queue_revision"], **fields,
+                                     event_boot_id=event_boot_id)
+            if event_boot_id is not None and self._executor is not None:
+                self._executor.reset_outbox_namespace(event_boot_id)
+        except (TransportError, ValueError, StoreError):
+            if not tolerate_offline:
+                raise
+            self._connection = "offline"
+
+    async def _unlink_quiescent(self) -> bool:
+        device = self._device
+        if device is None:
+            try:
+                device = MoonrakerDevice(self.server)
+            except Exception:
+                return False
+        return await self._executor.unlink_quiescent(device) if self._executor is not None else False
 
     async def _sync_loop(self) -> None:
         # Блок 7: последовательный sync с ограниченным backoff без логирования деталей.
@@ -319,6 +395,7 @@ class TreeDAutoPrinter:
                 self._recovery_required = True
                 self._connection = "blocked"
                 raise StoreError("queue_recovery_required")
+            unlink_pending_before_sync = bool(session.get("unlink_pending"))
             execution_fields = await self._executor.sync_fields() if self._executor is not None else None
             self._snapshot_seq += 1
             payload = {
@@ -333,8 +410,11 @@ class TreeDAutoPrinter:
                 "acknowledged_event_ids": (execution_fields["acknowledged_event_ids"]
                                             if execution_fields else []),
             }
+            if unlink_pending_before_sync:
+                payload["events"] = []
+                payload["acknowledged_event_ids"] = []
+            payload["binding_epoch"] = session["binding_epoch"]
             submitted = copy.deepcopy(payload)
-            submitted["binding_epoch"] = session["binding_epoch"]
             response = await self._run_blocking(self._transport.sync, payload)
             _validate_response(response, self._store.printer_id, self._store.profile_id)
             mismatch = response.get("reason") == "control_epoch_mismatch"
@@ -347,11 +427,20 @@ class TreeDAutoPrinter:
             if ((mismatch and not changed_control)
                     or (not mismatch and changed_control and not revoked)):
                 raise ValueError("invalid_control_epoch")
-            await self._run_blocking(
-                self._store.update_binding, response["control_epoch"], response["binding_epoch"],
-                response["binding_state"], response["applied_queue_revision"],
-            )
-            if self._executor is not None:
+            binding_args = [response["control_epoch"], response["binding_epoch"],
+                            response["binding_state"], response["applied_queue_revision"]]
+            binding_fields = {key: response[key] for key in ("owner_profile", "display_name", "unlink_pending")
+                              if key in response}
+            event_boot_id = await self._run_blocking(
+                self._store.update_binding, *binding_args, **binding_fields)
+            if event_boot_id is not None and self._executor is not None:
+                self._executor.reset_outbox_namespace(event_boot_id)
+            current_session = await self._run_blocking(self._store.session)
+            if current_session["unlink_pending"]:
+                await self._drive_unlink(tolerate_offline=False)
+                self._last_sync_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+                return
+            if self._executor is not None and event_boot_id is None:
                 await self._executor.acknowledge(response, submitted)
             if mismatch or revoked:
                 self._last_sync_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
@@ -459,6 +548,34 @@ def _validate_receipt(value: object, asset_id: str, printer_id: str, binding_epo
         raise ValueError("invalid_receipt")
 
 
+def _validate_unlink_response(value: object, expected_epoch: int, *, confirmed: bool) -> None:
+    fields = {"binding_state", "binding_epoch", "control_epoch", "queue_revision",
+              "owner_profile", "unlink_pending"}
+    if (not isinstance(value, dict) or not fields <= value.keys()
+            or value["binding_state"] not in {"paired", "revoked", "unpaired"}
+            or any(type(value[key]) is not int or value[key] < 1
+                   for key in ("binding_epoch", "control_epoch", "queue_revision"))
+            or type(value["unlink_pending"]) is not bool
+            or value["owner_profile"] is not None and (
+                not isinstance(value["owner_profile"], dict)
+                or set(value["owner_profile"]) != {"display_name"}
+                or not isinstance(value["owner_profile"]["display_name"], str)
+                or len(value["owner_profile"]["display_name"]) > 100)
+            or "display_name" in value and (not isinstance(value["display_name"], str)
+                                             or len(value["display_name"]) > 100)):
+        raise ValueError("invalid_unlink_response")
+    pending = (value["binding_epoch"] == expected_epoch
+               and value["binding_state"] in {"paired", "revoked"}
+               and value["unlink_pending"])
+    completed = (value["binding_epoch"] == expected_epoch + 1
+                 and value["binding_state"] == "unpaired"
+                 and not value["unlink_pending"] and value["owner_profile"] is None)
+    if not pending and not completed:
+        raise ValueError("invalid_unlink_response")
+    if completed and not confirmed:
+        raise ValueError("invalid_unlink_response")
+
+
 def _validate_response(value: object, printer_id: str, profile_id: str) -> None:
     fields = {"protocol_version", "printer_id", "control_epoch", "binding_epoch", "binding_state",
               "state_version", "queue_revision", "applied_queue_revision", "execution_authority",
@@ -478,6 +595,22 @@ def _validate_response(value: object, printer_id: str, profile_id: str) -> None:
             or not isinstance(value["snapshot"], dict)
             or not isinstance(value["ack_event_ids"], list) or len(value["ack_event_ids"]) > 100
             or not isinstance(value["ignored_event_ids"], list) or len(value["ignored_event_ids"]) > 100):
+        raise ValueError("invalid_sync_response")
+    if ("owner_profile" in value and value["owner_profile"] is not None
+            and (not isinstance(value["owner_profile"], dict)
+                 or set(value["owner_profile"]) != {"display_name"}
+                 or not isinstance(value["owner_profile"]["display_name"], str)
+                 or len(value["owner_profile"]["display_name"]) > 100)
+            or "display_name" in value and (not isinstance(value["display_name"], str)
+                                             or len(value["display_name"]) > 100)
+            or "unlink_pending" in value and type(value["unlink_pending"]) is not bool):
+        raise ValueError("invalid_sync_response")
+    if (value.get("binding_state") in {"unpaired", "revoked"}
+            and value.get("owner_profile") not in (None,)):
+        raise ValueError("invalid_sync_response")
+    if value.get("unlink_pending") is True and value["binding_state"] not in {"paired", "revoked"}:
+        raise ValueError("invalid_sync_response")
+    if value.get("unlink_pending") is True and (value["commands"] or value["transfers"]):
         raise ValueError("invalid_sync_response")
     if value.get("reason") not in (None, "control_epoch_mismatch"):
         raise ValueError("invalid_sync_response")
