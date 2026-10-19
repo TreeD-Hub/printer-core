@@ -8,3 +8,6 @@ __pycache__/
 /.unlazy/
 /.unlazy-hook-state.json
 /GATES.md
+=======
+/.venv/
+
