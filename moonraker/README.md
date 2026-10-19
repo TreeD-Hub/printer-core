@@ -25,6 +25,8 @@
 
 После копирования loader компилирует компоненты runtime Python, перезапускает Moonraker и проверяет через `/server/info`, что `treed_shell_command`, `treed_detection`, `treed_host_network`, `treed_resonance`, `treed_filament_sensor`, `treed_update` и `treed_recovery` реально загружены.
 
+`treed_autoprinter` также доставляется и проверяется loader, но его секция содержит `enabled: false` и `execution_enabled: false`. Включение требует закрытого credential-файла и настроенного HTTPS origin. Физический запуск дополнительно требует квалифицированного live-провайдера проверки пустого стола; текущий production-контур его не предоставляет. Ограничения описаны в [README компонентов](components/README.md#назначение-treed_autoprinterpy) и [контракте AutoPrinter](../docs/autoprinter.md).
+
 `generated` слой:
 
 - расположен в `${PI_HOME}/printer_data/config/moonraker/generated/*.conf`;

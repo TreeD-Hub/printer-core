@@ -5,6 +5,11 @@
 
 ## Состав
 
+- `test_treed_autoprinter_component.py` — жизненный цикл выключенного компонента, локальный endpoint управления, закрытый credential, wire-синхронизация, default-off проверки стола, безопасная диагностика sync/журнала и независимый executor poll во время sync backoff с ожиданием задач при shutdown. Запуск `python -B tools/tests/test_treed_autoprinter_component.py`; без сети, Moonraker runtime и устройства.
+- `test_treed_autoprinter_store.py` — durable-приём assets, журнал результатов, восстановление очереди и receipts, лимит SQLite с откатом переполненной записи и сохранением событий после reopen. Запуск `python -B tools/tests/test_treed_autoprinter_store.py`; без сети и устройства.
+- `test_treed_autoprinter_execution.py` — durable-очередь исполнителя, восстановление, события, контекст проверки стола и запрет кандидату `empty` разрешать live-запуск или завершение. Запуск `python -B tools/tests/test_treed_autoprinter_execution.py`; с fake-устройством и без Moonraker runtime.
+- `test_treed_autoprinter_device.py` — fail-closed проверка runtime, безопасная подготовка G-code и штатные Klippy API на fake-компонентах. Запуск `python -B tools/tests/test_treed_autoprinter_device.py`; без устройства.
+
 - `test_hotend_limit.py` — нормализация целей хотэнда и PID, нижний предел,
   выключение, неконечные числа, отдельный аварийный порог и доставка расширения.
   Запуск `python -B tools/tests/test_hotend_limit.py`; без устройства.
@@ -50,7 +55,7 @@
 - `test_loader_optimizations.ps1` — runnable-проверка кэша APT-индекса и очистки webcam-конфигов на временных fixtures.
 - `test_treed_update_service.py` — request idempotency, busy lock, durable state, UI recovery и dispatch/recovery core worker. Запуск `python -B tools/tests/test_treed_update_service.py`; без systemd и устройства.
 - `test_treed_update_component.py` — быстрый POST, локальный polling, runtime manifest/capability и отказ для source-only release. Запуск `python -B tools/tests/test_treed_update_component.py`; без сети и устройства.
-- `test_treed_core_update.py` — пакет, checksum/allowlist, сохранение локальных данных, полный rollback и journal recovery после частичной установки. Запуск `python -B tools/tests/test_treed_core_update.py`; services/network изолированы, symlink и Linux dir_fd требуют соответствующих возможностей среды.
+- `test_treed_core_update.py` — пакет, checksum/allowlist, полнота AutoPrinter и загрузка доставленных модулей без ML, сохранение приватных данных, полный rollback и journal recovery после частичной установки. Проверяет readiness по manifest и отказ при failed-компоненте. Запуск `python -B tools/tests/test_treed_core_update.py`; services/network изолированы, symlink и Linux dir_fd требуют соответствующих возможностей среды.
 - `test_runtime_repo_sync.sh` — runnable-проверка exact Git sync, восстановления detached/shallow/wrong-origin checkout и сохранения dirty данных.
 - `test_mainsail_bundle_offline.sh` — runnable offline deployment bundled Mainsail без обращения к GitHub.
 - `test_runtime_update_contracts.ps1` — единая проверка runtime manifest, порядка host/firmware update и production fail-closed gate.

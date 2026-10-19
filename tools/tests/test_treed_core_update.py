@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -74,6 +75,48 @@ class CoreUpdateTests(unittest.TestCase):
         for key, data in self.old.items():
             self.assertEqual(core.destination(key, self.locations).read_bytes(), data, key)
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.1.0")
+
+    def seed_autoprinter_update(self):
+        private = {
+            "printer_data/system/treed-autoprinter-credentials.json": b'private-device-secret',
+            "printer_data/system/treed-autoprinter/store.sqlite3": b'private-journal',
+            "printer_data/system/treed-autoprinter/bindings/1/model.gcode": b'private-account-model',
+            "treed/models/e0.pth": b'private-weights',
+        }
+        paths = {}
+        for relative, data in private.items():
+            path = Path(self.env["TREED_UPDATE_PI_HOME"]) / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            paths[path] = data
+        for key in core.AUTOPRINTER_MODULES:
+            self.payload[key] = b"version = 2\n"
+        self.manifest["files"] = [{"path": key, "sha256": core.sha(data)}
+                                  for key, data in self.payload.items()]
+        return paths
+
+    def test_autoprinter_update_and_recovery_preserve_private_data(self):
+        private = self.seed_autoprinter_update()
+        self.assertEqual("applied", self.apply()["status"])
+        self.assertEqual("applied", core.recover(self.env, OPERATION)["status"])
+        for path, data in private.items():
+            self.assertEqual(data, path.read_bytes())
+        for key in core.AUTOPRINTER_MODULES:
+            self.assertEqual(self.payload[key], core.destination(key, self.locations).read_bytes())
+        self.assertTrue(all(any(row["path"] == "moonraker/treed_autoprinter.py"
+                                for row in call.args[0]["files"])
+                            for call in self.wait.call_args_list))
+
+    def test_failed_autoprinter_readiness_rolls_back_and_preserves_private_data(self):
+        private = self.seed_autoprinter_update()
+        self.wait.side_effect = [False, True]
+        self.assertEqual("rolled_back", self.apply()["status"])
+        self.assert_restored()
+        for path, data in private.items():
+            self.assertEqual(data, path.read_bytes())
+        self.assertFalse(any(core.destination(key, self.locations).exists()
+                             for key in core.AUTOPRINTER_MODULES))
+        self.assertEqual(self.previous, self.wait.call_args_list[-1].args[0])
 
     def seed_pid_calibration(self, extruder_already_saved=False):
         extruder = b"[extruder]\ncontrol: pid\npid_Kp: 11.818\npid_Ki: 0.435\npid_Kd: 80.218\n"
@@ -435,6 +478,62 @@ class CoreUpdateTests(unittest.TestCase):
 
 class PackageTests(unittest.TestCase):
     # Блок 4: Реальный release artifact; пути и checksum проверяются без extractall.
+    def test_incomplete_autoprinter_archive_is_rejected_but_legacy_is_supported(self):
+        base = {key: b"# fake runtime\n" for key in (
+            "config/printer.cfg", "config/moonraker.conf", "config/moonraker/base/00-core.conf",
+            "klipper/treed_driver_mode.py", "moonraker/treed_update.py", "sbin/treed-core-update",
+        )}
+        complete = {**base, **{key: b"# fake helper\n" for key in core.AUTOPRINTER_MODULES}}
+        cases = [base, complete] + [{key: value for key, value in complete.items() if key != missing}
+                                   for missing in sorted(core.AUTOPRINTER_MODULES)]
+        with tempfile.TemporaryDirectory() as temp:
+            archive = Path(temp) / core.ASSET
+            for index, payload in enumerate(cases):
+                with self.subTest(case=index):
+                    manifest = {"kind": core.KIND, "schema": 1, "version": "0.2.0", "tag": "v0.2.0",
+                                "sha": "1" * 40, "requires": {}, "files": [
+                                    {"path": key, "sha256": core.sha(data)} for key, data in payload.items()]}
+                    with zipfile.ZipFile(archive, "w") as bundle:
+                        bundle.writestr("manifest.json", json.dumps(manifest))
+                        for key, data in payload.items():
+                            bundle.writestr("payload/" + key, data)
+                    if index < 2:
+                        self.assertEqual(payload, core.load_package(archive, "v0.2.0")[1])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "неполный AutoPrinter"):
+                            core.load_package(archive, "v0.2.0")
+
+    def test_delivered_autoprinter_imports_without_ml_or_neighbour_checkout(self):
+        sources = core.sources(ROOT)
+        with tempfile.TemporaryDirectory() as temp:
+            package = Path(temp) / "delivered"
+            package.mkdir()
+            (package / "__init__.py").write_bytes(b"")
+            for key in core.AUTOPRINTER_MODULES:
+                (package / Path(key).name).write_bytes(sources[key].read_bytes())
+            script = '''import importlib.abc, sys
+class NoML(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, *args):
+        if fullname.split(".")[0] in {"torch", "torchvision", "rfdetr", "PIL"}:
+            raise AssertionError("heavy runtime imported during component load")
+sys.meta_path.insert(0, NoML())
+sys.path.insert(0, sys.argv[1])
+from delivered import treed_autoprinter as component
+class Server:
+    def register_endpoint(self, *args, **kwargs): pass
+    def register_event_handler(self, *args): pass
+class Config:
+    def get_server(self): return Server()
+    def getboolean(self, name, default=False): return default
+instance = component.load_component(Config())
+assert not instance.enabled and instance._store is None and instance._task is None
+print("DELIVERED_IMPORT_OK")
+'''
+            result = subprocess.run([sys.executable, "-I", "-B", "-c", script, temp],
+                                    cwd=temp, capture_output=True, text=True, timeout=15)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("DELIVERED_IMPORT_OK", result.stdout.strip())
+
     def test_repository_build_contains_only_runtime_payload(self):
         with tempfile.TemporaryDirectory() as temp:
             archive = Path(temp) / core.ASSET
@@ -560,6 +659,27 @@ class CoreGitOwnershipTests(unittest.TestCase):
 
 
 class PrinterUpdateGuardTests(unittest.TestCase):
+    def test_readiness_requires_candidate_autoprinter_and_rejects_failed_components(self):
+        loaded = ["treed_update", "treed_recovery", "treed_detection", "treed_host_network",
+                  "treed_filament_sensor", "treed_shell_command"]
+        legacy = {"klippy_state": "ready", "components": loaded, "failed_components": []}
+        candidate = {"files": [{"path": "moonraker/treed_autoprinter.py"}]}
+        for info, manifest, expected in (
+            (legacy, {"files": []}, True),
+            (legacy, candidate, False),
+            (legacy | {"components": loaded + ["treed_autoprinter"]}, candidate, True),
+            (legacy | {"components": loaded + ["treed_autoprinter"],
+                       "failed_components": ["treed_autoprinter"]}, candidate, False),
+            (legacy | {"failed_components": ["treed_update"]}, {"files": []}, False),
+            (legacy | {"components": "treed_update"}, candidate, False),
+            (legacy | {"failed_components": None}, candidate, False),
+        ):
+            with self.subTest(info=info, candidate=bool(manifest["files"])), \
+                    patch.object(core, "request_json", return_value=info), \
+                    patch.object(core.time, "sleep"), \
+                    patch.object(core.time, "monotonic", side_effect=[0, 1, 2, 3, 61]):
+                self.assertEqual(expected, core.wait_ready(manifest))
+
     def test_cancelled_job_with_stale_pause_and_heat_is_idle(self):
         status = {"print_stats": {"state": " CANCELLED "}, "pause_resume": {"is_paused": True},
                   "extruder": {"target": 140}, "heater_bed": {"target": 60}}
