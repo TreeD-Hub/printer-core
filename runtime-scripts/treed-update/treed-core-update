@@ -27,12 +27,13 @@ ASSET = "treed-core-runtime.zip"
 MARKER = b"#*# <---------------------- SAVE_CONFIG ---------------------->"
 SBIN = {"treed-core-update", "treed-update-service", "treed-update-apply", "treed-ui"}
 CAMERA = {"cam_env.sh", "session_start.sh", "session_stop.sh", "snapshot.sh", "stream_detect.py"}
+VISION = {"service.py", "models.json"}
 PRESERVED = {"local_overrides.cfg", "treed_variables.cfg", "filament_motion_runtime.cfg"}
 MAX_PACKAGE = 32 * 1024 * 1024
 MAX_CONTENT = 64 * 1024 * 1024
 AUTOPRINTER_MODULES = {f"moonraker/treed_autoprinter{suffix}.py" for suffix in (
     "", "_store", "_transport", "_execution", "_device", "_bed", "_bed_inference",
-)}
+)} | {"moonraker/treed_vision_client.py"}
 
 
 def validate_autoprinter_files(files):
@@ -61,6 +62,7 @@ def allowed(key):
         or group in {"klipper", "moonraker"} and len(parts) == 1
         and re.fullmatch(r"treed_[a-z0-9_]+\.py", parts[0]) is not None
         or group == "camera" and len(parts) == 1 and parts[0] in CAMERA
+        or group == "vision" and len(parts) == 1 and parts[0] in VISION
         or group == "sbin" and len(parts) == 1 and parts[0] in SBIN
     )
     if not valid:
@@ -86,6 +88,8 @@ def sources(repo):
     items["klipper/treed_sgt_calibration.py"] = repo / "tools/treed_sgt_calibration.py"
     for name in CAMERA:
         items[f"camera/{name}"] = repo / "runtime-scripts/treed-cam" / name
+    for name in VISION:
+        items[f"vision/{name}"] = repo / "runtime-scripts/treed-vision" / name
     for name in SBIN:
         directory = "treed-ui" if name == "treed-ui" else "treed-update"
         items[f"sbin/{name}"] = repo / "runtime-scripts" / directory / name
@@ -155,6 +159,7 @@ def roots(env):
         "klipper": Path(env.get("TREED_CORE_KLIPPER_DIR", str(home / "klipper"))) / "klippy/extras",
         "moonraker": Path(env.get("TREED_CORE_MOONRAKER_DIR", str(home / "moonraker"))) / "moonraker/components",
         "camera": home / "treed/cam/bin",
+        "vision": home / "treed/vision/bin",
         "sbin": Path("/usr/local/sbin"),
     }
     if not home.is_absolute() or ".." in home.parts or any(
@@ -344,12 +349,47 @@ def render(key, data, old, env):
                 pattern = rf"(?m)^\[update_manager {name}\][^\[]*"
                 previous = re.search(pattern, old.decode("utf-8"))
                 text = re.sub(pattern, lambda _m: previous[0] if previous else "", text)
+            text = merge_local_section(text, old.decode("utf-8"), "treed_autoprinter")
         data = text.encode("utf-8")
     if key.endswith(".py") or key.startswith("sbin/") and key != "sbin/treed-ui" and key != "sbin/treed-update-apply":
         compile(data, key, "exec")
     if key.endswith(".sh") or key in {"sbin/treed-ui", "sbin/treed-update-apply"}:
         subprocess.run(["bash", "-n"], input=data, check=True, timeout=10)
     return data
+
+
+def merge_local_section(default_text, previous_text, name):
+    # Локальная identity/storage остаётся у устройства; новые параметры берутся из defaults.
+    section = re.compile(rf"^\s*\[{re.escape(name)}\]\s*$", re.I)
+    header = re.compile(r"^\s*\[[^]]+\]\s*$")
+
+    def body(lines):
+        for start, line in enumerate(lines):
+            if section.fullmatch(line):
+                end = start + 1
+                while end < len(lines) and not header.fullmatch(lines[end]):
+                    end += 1
+                return start, end, lines[start], lines[start + 1:end]
+        return None, None, None, []
+
+    old_lines, new_lines = previous_text.splitlines(), default_text.splitlines()
+    _old_start, _old_end, old_header, old_body = body(old_lines)
+    new_start, new_end, new_header, new_body = body(new_lines)
+    if old_header is None or new_header is None:
+        return default_text
+    keys = set()
+    for line in old_body:
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        if match:
+            keys.add(match.group(1).lower())
+    additions = []
+    for line in new_body:
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        if match and match.group(1).lower() not in keys:
+            additions.append(line)
+            keys.add(match.group(1).lower())
+    new_lines[new_start:new_end] = [new_header, *old_body, *additions]
+    return "\n".join(new_lines) + "\n"
 
 
 # Блок 3: Release download, валидация архива и совместимости с текущим стеком.
@@ -411,6 +451,11 @@ def load_package(archive, tag):
                     "klipper/treed_driver_mode.py", "moonraker/treed_update.py", "sbin/treed-core-update"}
         if not required <= payload.keys():
             raise ValueError("Core пакет неполон")
+        if "moonraker/treed_vision_client.py" in payload:
+            vision_group = {"moonraker/treed_vision_client.py", "camera/stream_detect.py",
+                            "vision/service.py", "vision/models.json"}
+            if not vision_group <= payload.keys():
+                raise ValueError("Core пакет содержит неполный локальный vision runtime")
         validate_autoprinter_files(payload)
         return manifest, payload
 
@@ -470,7 +515,19 @@ def idle():
 
 
 def services(action):
-    subprocess.run(["systemctl", action, "moonraker.service", "klipper.service"], check=True, timeout=45)
+    vision_units = tuple(unit for unit in ("treed-vision.service", "treed-detection.service")
+                         if subprocess.run(["systemctl", "cat", unit], stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL, timeout=10).returncode == 0)
+    units = (vision_units[::-1] + ("moonraker.service", "klipper.service") if action == "stop"
+             else ("klipper.service", "moonraker.service") + vision_units)
+    subprocess.run(["systemctl", action, *units], check=True, timeout=60)
+
+
+def vision_units_installed():
+    # Updater доставляет runtime-файлы, но unit и окружение создаёт loader.
+    return len(tuple(unit for unit in ("treed-vision.service", "treed-detection.service")
+                     if subprocess.run(["systemctl", "cat", unit], stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, timeout=10).returncode == 0)) == 2
 
 
 def stop_heating():
@@ -485,9 +542,9 @@ def stop_heating():
 
 def wait_ready(manifest=None):
     # Старый runtime без AutoPrinter остаётся пригодным для миграции и rollback.
-    required = ("treed_autoprinter",) if manifest and any(
-        row["path"] == "moonraker/treed_autoprinter.py" for row in manifest["files"]
-    ) else ()
+    required = tuple(name for key, name in (
+        ("moonraker/treed_autoprinter.py", "treed_autoprinter"),
+    ) if manifest and any(row["path"] == key for row in manifest["files"]))
     deadline = time.monotonic() + 60
     consecutive = 0
     while time.monotonic() < deadline:
@@ -673,6 +730,8 @@ def apply(tag, operation, env, reset_configs=None):
         manifest, payload = load_package(archive, tag)
         check_compatibility(manifest, env)
         uid, gid = owner(env)
+        if not vision_units_installed():
+            raise ValueError("Локальный vision runtime ещё не установлен; сначала запустите loader")
         if not idle():
             raise ValueError("Core update требует готового принтера без активной печати или паузы")
         prepare(manifest, payload, env, journal, reset_configs)

@@ -35,6 +35,13 @@ class AutoPrinterExecutor:
         self._initialized = False
         self._snapshot_seq = 0
         self._ready = False
+        self._pending_detection_hold: dict[str, Any] | None = None
+
+    def mark_detection_hold_pending(self, reason: str, context: dict[str, Any]) -> None:
+        """Fail closed in memory before a detection hold reaches SQLite."""
+        if self._pending_detection_hold is None:
+            self._pending_detection_hold = {"reason": reason, "context": dict(context),
+                                            "created_at": _now()}
 
     async def _db(self, method: str, *args: Any, **kwargs: Any) -> Any:
         # Блокирующие SQLite/file operations должны завершиться даже при отмене caller.
@@ -211,6 +218,16 @@ class AutoPrinterExecutor:
         return result
 
     async def local_action(self, action: dict) -> dict:
+        if isinstance(action, dict) and action.get("type") == "cancel_package":
+            if (set(action) != {"type", "package_id", "action_id"}
+                    or not _uuid_valid(action.get("package_id"))
+                    or not _uuid_valid(action.get("action_id"))):
+                raise StoreError("invalid_action")
+            result = await self._db("execution_cancel_package", action["package_id"],
+                                    action["action_id"], _now())
+            status = await self.status()
+            status["action_result"] = {"type": "cancel_package", **result}
+            return status
         if not isinstance(action, dict) or action.get("type") not in _ACTIONS:
             raise StoreError("invalid_action")
         session = await self._db("session")
@@ -226,7 +243,28 @@ class AutoPrinterExecutor:
                 await self._db("execution_set_pause", local=True)
                 receipt.update(state="executed", result={})
             elif kind == "resume_queue":
-                await self._db("execution_set_pause", local=False)
+                holds = await self._db("execution_active_holds")
+                if self._pending_detection_hold is not None:
+                    pending = self._pending_detection_hold
+                    await self._db("execution_hold_for_detection", pending["reason"],
+                                   pending["context"], pending["created_at"])
+                    holds = await self._db("execution_active_holds")
+                if holds or session.get("local_pause"):
+                    observed = await self.device.inspect() if self.device is not None else None
+                    if (not _safe_observation(observed) or observed.get("phase") != "idle"
+                            or observed.get("state") not in {"idle", "complete", "cancelled", "error"}
+                            or observed.get("service_active") is not False
+                            or observed.get("queue_safe") is not True
+                            or await self._db("execution_has_unresolved_intent")):
+                        raise StoreError("hold_recovery_context_unsafe")
+                if await self._db("execution_get_meta", "boot_recovery_required", "0") == "1":
+                    await self._db("execution_set_meta", "offline_recovery_boot", self.process_boot_id)
+                    await self._db("execution_set_meta", "boot_recovery_required", "0")
+                if holds:
+                    await self._db("execution_release_holds", _now())
+                else:
+                    await self._db("execution_set_pause", local=False)
+                self._pending_detection_hold = None
                 await self._db("execution_set_meta", "stop_after_current", "0")
                 receipt.update(state="executed", result={})
             elif kind == "recheck_bed":
@@ -267,8 +305,11 @@ class AutoPrinterExecutor:
         except StoreError as exc:
             if kind in {"pause_current_print", "cancel_current_print"} or str(exc) in {"no_current_run", "invalid_uuid"}:
                 raise
+            if kind == "resume_queue":
+                receipt.update(state="rejected", result={"code": str(exc)})
         except Exception:
-            pass
+            if kind == "resume_queue":
+                receipt.update(state="rejected", result={"code": "local_action_failed"})
         status = await self.status()
         status["action_result"] = receipt
         return status
@@ -301,11 +342,8 @@ class AutoPrinterExecutor:
         hard_blocks = {"protocol_recovery_required", "protocol_epoch_mismatch", "event_rejected",
                        "binding_revoked"}
         if (not self.enabled or self.device is None
-                or self._draining_boot_id and not unlink_pending
                 or self._blocked_reason in hard_blocks
-                or await self._db("execution_get_meta", "protocol_recovery_required") == "1"
-                or (await self._db("execution_get_meta", "execution_handshake_boot") != self._active_boot_id
-                    and not unlink_pending)):
+                or await self._db("execution_get_meta", "protocol_recovery_required") == "1"):
             return
         self._blocked_reason = None
         if await self._db("execution_has_unresolved_intent"):
@@ -322,6 +360,9 @@ class AutoPrinterExecutor:
             else:
                 self._blocked_reason = "account_unlink_pending"
             return
+        if self._pending_detection_hold is not None:
+            self._blocked_reason = "detection_hold_persistence_pending"
+            return
         if (session["binding_state"] != "paired"
                 or await self._db("execution_outbox_count") >= 9900):
             self._blocked_reason = "execution_gate_closed"
@@ -329,6 +370,20 @@ class AutoPrinterExecutor:
         if session.get("local_pause") or session.get("remote_pause"):
             self._blocked_reason = "execution_gate_closed"
             return
+        handshake_boot = await self._db("execution_get_meta", "execution_handshake_boot")
+        offline_recovery_boot = await self._db("execution_get_meta", "offline_recovery_boot")
+        if handshake_boot != self._active_boot_id or self._draining_boot_id is not None:
+            pending_queue = await self._db("queue")
+            pending_states = await self._db("execution_states")
+            candidate = next((item for item in pending_queue
+                              if pending_states.get(item["run_id"], {}).get("state", "queued") == "queued"), None)
+            if candidate is None:
+                self._blocked_reason = "backend_handshake_required"
+                return
+            package_ok = await self._db("execution_run_is_accepted_package", candidate["run_id"])
+            if offline_recovery_boot != self.process_boot_id or not package_ok:
+                self._blocked_reason = "backend_handshake_required"
+                return
         observation = await self.device.inspect()
         self._ready = bool(_safe_observation(observation) and observation["ready"])
         if not _safe_observation(observation):
@@ -346,6 +401,13 @@ class AutoPrinterExecutor:
                     if states.get(r["run_id"], {}).get("state", "queued") == "queued"), None)
         if run is None:
             return
+        handshake_boot = await self._db("execution_get_meta", "execution_handshake_boot")
+        offline_recovery_boot = await self._db("execution_get_meta", "offline_recovery_boot")
+        if handshake_boot != self._active_boot_id:
+            package_ok = await self._db("execution_run_is_accepted_package", run["run_id"])
+            if offline_recovery_boot != self.process_boot_id or not package_ok:
+                self._blocked_reason = "backend_handshake_required"
+                return
         terminal_states = {"complete", "cancelled", "error"}
         safe_idle = observation["state"] == "idle"
         if observation["state"] in terminal_states:
@@ -401,6 +463,26 @@ class AutoPrinterExecutor:
         if observed["filename"] != run["filename"]:
             self._blocked_reason = "reconciliation_mismatch"
             return
+        stage = observed.get("completion_stage")
+        await self._db("execution_set_meta", "completion_stage", stage or "none")
+        if run.get("completion_profile", {}).get("auto_remove") is True and observed.get("phase") == "auto_remove":
+            if stage not in {"cooling", "removing", "verifying"}:
+                self._blocked_reason = "runtime_stage_unknown"
+                return
+            stage_state = {"cooling": "cooling", "removing": "removing", "verifying": "verifying"}[stage]
+            if observed["state"] == "printing" and run["state"] in {"printing", "cooling", "removing"}:
+                order = {"printing": 0, "cooling": 1, "removing": 2, "verifying": 3}
+                if order[stage_state] > order[run["state"]]:
+                    await self._db("execution_transition", run["run_id"], stage_state, self._active_boot_id,
+                                   (await self._db("session"))["control_epoch"], _now())
+                self._blocked_reason = None
+                return
+            if observed["state"] in {"complete", "completed"} and stage in {"cooling", "removing"}:
+                if run["state"] != stage_state:
+                    await self._db("execution_transition", run["run_id"], stage_state, self._active_boot_id,
+                                   (await self._db("session"))["control_epoch"], _now())
+                self._blocked_reason = "runtime_completion_in_progress"
+                return
         source = observed.get("evidence_source")
         if source not in {"runtime", "history"} or not _run_hash(run):
             self._blocked_reason = "reconciliation_unknown"
@@ -507,6 +589,7 @@ class AutoPrinterExecutor:
 
     async def _wire_snapshot(self) -> dict[str, Any]:
         session = await self._db("session")
+        local_status = await self._db("status")
         states = await self._db("execution_states")
         queue = await self._db("queue")
         current = next((states[run["run_id"]] for run in queue if session["binding_state"] == "paired" and run["run_id"] in states
@@ -516,12 +599,21 @@ class AutoPrinterExecutor:
                    else "stop_after_current" if await self._db("execution_get_meta", "stop_after_current") == "1"
                    else "paused" if session["local_pause"] or session["remote_pause"]
                    else "running")
+        local_hold = local_status.get("hold") or self._pending_detection_hold
+        hold = ({key: local_hold[key] for key in ("reason", "created_at", "context") if key in local_hold}
+                if isinstance(local_hold, dict) else None)
         return {"observed_at": _now(), "bed_epoch": int(await self._db("execution_get_meta", "bed_epoch", "0") or "0"),
                 "queue_control": control, "current_run_id": current["run_id"] if current else None,
                 "run_state": current["state"] if current else None,
                 "local_pause": session["local_pause"], "ready": self._ready and session["binding_state"] == "paired",
                 "print_paused": bool(await self._db("execution_get_meta", "print_paused", "0") == "1"),
-                "capabilities": {"bed_check": bool(self.bed_checker and getattr(self.bed_checker, "live_qualified", False))},
+                "active_package": local_status.get("active_package"),
+                "hold": hold,
+                "recovery_required": bool(local_status.get("recovery_required")
+                                            or self._pending_detection_hold is not None
+                                            or await self._db("execution_get_meta", "boot_recovery_required", "0") == "1"),
+                "capabilities": {"bed_check": bool(self.bed_checker and getattr(self.bed_checker, "live_qualified", False)),
+                                 "offline_packages_v1": True},
                 "model_version": getattr(self.bed_checker, "model_version", None)}
 
     async def status(self) -> dict[str, Any]:
@@ -529,9 +621,12 @@ class AutoPrinterExecutor:
         return {**snapshot,
                 "blocked_reason": self._blocked_reason,
                 "execution_enabled": bool(self.enabled and self.device is not None),
+                "completion_stage": await self._db("execution_get_meta", "completion_stage", "none"),
+                "hold": snapshot["hold"],
                 "stop_after_current": await self._db("execution_get_meta", "stop_after_current", "0") == "1",
                 "capabilities": {"bed_check": bool(self.bed_checker and getattr(self.bed_checker, "live_qualified", False)),
                                  "bed_check_diagnostic": self.bed_checker is not None,
+                                 "offline_packages_v1": True,
                                  "queue": True, "pairing": True}}
 
 
@@ -570,7 +665,8 @@ def _safe_observation(value: Any) -> bool:
     return (isinstance(value, dict) and fields <= value.keys() and type(value["ready"]) is bool
             and value["state"] in {"idle", "printing", "paused", "complete", "error", "cancelled", "unknown"}
             and type(value["queue_empty"]) is bool and type(value["queue_safe"]) is bool
-            and type(value["service_active"]) is bool)
+            and type(value["service_active"]) is bool
+            and value.get("completion_stage") in {None, "none", "cooling", "removing", "verifying"})
 
 
 def _run_hash(run: Mapping[str, Any]) -> str:

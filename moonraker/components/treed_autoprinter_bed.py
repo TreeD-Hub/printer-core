@@ -23,6 +23,11 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import uuid
 
+try:
+    from .treed_vision_client import TreeDVisionClient, VisionUnavailable
+except ImportError:
+    from treed_vision_client import TreeDVisionClient, VisionUnavailable
+
 
 MODEL_VERSION = "fdm-detail-e0-20261016-8de7e8aa22e2"
 MODEL_SHA256 = "8de7e8aa22e20893a563c0c04d28f0019dcad9ef8d805818df6fd2ec8b10866e"
@@ -46,19 +51,17 @@ class E0BedChecker:
     allowed_model_versions = frozenset({MODEL_VERSION})
 
     def __init__(self, printer_id: str, model_path: str, python_path: str,
-                 snapshot_url: str) -> None:
+                 snapshot_url: str, vision_client=None, socket_path: str | None = None) -> None:
         # Блок 2: только проверка конфигурации, без файлов, камеры и процессов.
         if not _is_uuid(printer_id):
             raise ValueError("invalid_printer_id")
-        if not isinstance(model_path, str) or not os.path.isabs(model_path):
-            raise ValueError("invalid_model_path")
-        if not isinstance(python_path, str) or not os.path.isabs(python_path):
-            raise ValueError("invalid_python_path")
         self._snapshot_parts = _parse_snapshot_url(snapshot_url)
         self.printer_id = printer_id
-        self.model_path = model_path
-        self.python_path = python_path
         self.model_version = MODEL_VERSION
+        self._vision_client = vision_client or TreeDVisionClient(
+            socket_path=socket_path,
+            timeout=MAX_CHECK_SECONDS,
+        )
         self._lock = asyncio.Lock()
         self._last_status: dict[str, Any] = {
             "state": "unavailable", "reason": "not_checked", "checked_at": None,
@@ -98,7 +101,11 @@ class E0BedChecker:
                 if remaining <= 0:
                     raise _CheckFailure("capture_timeout")
                 result = await asyncio.wait_for(
-                    self._infer(jpeg, remaining), timeout=remaining,
+                    self._infer(jpeg, remaining, {
+                        "check_id": check_id, "printer_id": self.printer_id,
+                        "after_run_id": after_run_id, "bed_epoch": bed_epoch,
+                        "agent_boot_id": boot_id, "frame_sha256": frame_sha256,
+                    }), timeout=remaining,
                 )
                 if time.monotonic() - started > MAX_CHECK_SECONDS:
                     verdict, confidence, reason = "unknown", None, "check_timeout"
@@ -130,37 +137,29 @@ class E0BedChecker:
                 "reason": reason,
             }
 
-    async def _infer(self, jpeg: bytes, timeout: float) -> dict[str, Any]:
-        # Блок 4: только штатный соседний runner получает ограниченный JPEG и путь к весам.
-        env = _offline_environment()
-        process = await asyncio.create_subprocess_exec(
-            self.python_path, "-B", "-s", str(INFERENCE_SCRIPT), self.model_path,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=subprocess.DEVNULL, env=env, limit=MAX_RESULT_BYTES + 1,
-        )
-        writer = asyncio.create_task(_write_stdin(process, jpeg))
-        reader = asyncio.create_task(_read_bounded_stdout(process))
+    async def _infer(self, jpeg: bytes, timeout: float,
+                     context: dict[str, Any] | None = None) -> dict[str, Any]:
+        # Блок 4: общий локальный worker; пустой ответ остаётся неквалифицированным.
         try:
-            await asyncio.wait_for(process.wait(), timeout=timeout)
-            await asyncio.wait_for(asyncio.gather(writer, reader), timeout=max(0.01, timeout))
-        except BaseException:
-            if process.returncode is None:
-                process.kill()
-                await process.wait()
-            for task in (writer, reader):
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(writer, reader, return_exceptions=True)
-            raise
-        if process.returncode != 0:
-            raise _CheckFailure("runner_failed")
-        try:
-            result = json.loads(reader.result())
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            raise _CheckFailure("invalid_result") from None
-        if not isinstance(result, dict):
+            response = await self._vision_client.infer("bed", context or {}, jpeg)
+        except VisionUnavailable:
+            raise _CheckFailure("vision_unavailable") from None
+        verdict = response["verdict"]
+        if verdict == "unavailable":
+            raise _CheckFailure(response.get("reason") or "vision_unavailable")
+        if response["model_version"] != MODEL_VERSION:
+            raise _CheckFailure("identity_mismatch")
+        boxes = response["boxes"]
+        if verdict == "occupied" and not boxes:
             raise _CheckFailure("invalid_result")
-        return result
+        count = len(boxes) if verdict == "occupied" else 0
+        return {
+            "schema_version": 1, "model_version": MODEL_VERSION,
+            "model_sha256": MODEL_SHA256,
+            "frame_sha256": (context or {}).get("frame_sha256"),
+            "width": 1, "height": 1, "detail_count": count,
+            "confidence": response["score"] if count else None,
+        }
 
     def _record(self, state: str, reason: str | None) -> None:
         self._last_status = {
@@ -301,6 +300,10 @@ def _capture_jpeg(parts: tuple[str, int, str], control: _CaptureControl) -> byte
         jpeg = bytes(chunks)
         if len(jpeg) > MAX_FRAME_BYTES:
             raise _CheckFailure("frame_too_large")
+        # USB-камера дополняет JPEG до границы буфера; допускаем только до 7 нулей после EOI.
+        padding = len(jpeg) - len(jpeg.rstrip(b"\x00"))
+        if 0 < padding <= 7:
+            jpeg = jpeg[:-padding]
         if len(jpeg) < 4 or not jpeg.startswith(b"\xff\xd8") or not jpeg.endswith(b"\xff\xd9"):
             raise _CheckFailure("invalid_frame")
         return jpeg

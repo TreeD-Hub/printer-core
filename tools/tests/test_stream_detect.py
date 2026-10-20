@@ -1,10 +1,11 @@
-"""Проверка MJPEG и handshake без камеры, сети и команд принтера."""
+"""Камера и адаптер локального vision IPC без сети и ML imports."""
 
 import importlib.util
 import io
 from pathlib import Path
-import unittest
 import tempfile
+import threading
+import unittest
 from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,64 +22,115 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(next(stream), b"abc")
         with self.assertRaises(EOFError):
             next(stream)
-        for invalid in (body.replace(b"Length: 3", b"Length: 999999999"), body[:body.index(b"abc")] + b"ab"):
-            with self.assertRaises((ValueError, EOFError)):
-                next(module.jpeg_frames(io.BytesIO(invalid)))
 
-    def test_handshake_and_response_binding(self):
-        server = module.Server("http://127.0.0.1:8000", "secret", "session", 1)
-        self.addCleanup(server.connection.close)
-        ready = {"ready": True, "protocol_version": 1, "session_id": "session",
-                 "model_kind": "spaghetti_presence", "model_version": "v5",
-                 "threshold": .5, "max_jpeg_bytes": 1024, "frame_endpoint": "/classify"}
-        server.post = lambda *args: ready
-        self.assertEqual(server.handshake(), ready)
-        response = {"protocol_version": 1, "session_id": "session", "frame_id": "1",
-                    "model_version": "v5", "threshold": .5, "spaghetti": True, "score": .9}
-        server.post = lambda *args: response
-        self.assertEqual(server.send(1, b"jpeg"), response)
-        for changes in ({"session_id": "old"}, {"frame_id": "2"}, {"score": float("nan")},
-                        {"spaghetti": "true"}, {"threshold": .7}, {"model_version": "other"}):
-            server.post = lambda *args: {**response, **changes}
-            with self.assertRaises(ValueError):
-                server.send(1, b"jpeg")
-        server.post = lambda *args: {**ready, "protocol_version": 2}
+    @unittest.skipUnless(hasattr(module.socket, "AF_UNIX"), "Unix socket runs on target Linux")
+    def test_local_vision_echoes_context_and_no_remote_config(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            path = Path(temp) / "vision.sock"
+            listener = module.socket.socket(module.socket.AF_UNIX, module.socket.SOCK_STREAM)
+            listener.bind(str(path))
+            listener.listen(1)
+            def reply():
+                conn, _ = listener.accept()
+                with conn:
+                    request = module.json.loads(conn.recv(4096).split(b"\n", 1)[0])
+                    response = {"protocol": 1, "request_id": request["request_id"],
+                                "task": "spaghetti", "context": request["context"],
+                                "worker_generation": "76867cc1-17e4-4cc3-a956-09395f2ba871",
+                                "model_version": "spaghetti_presence_v12",
+                                "verdict": "normal", "score": .1, "threshold": .3,
+                                "boxes": [], "reason": None, "processing_ms": 12.0}
+                    conn.sendall(module.json.dumps(response).encode() + b"\n")
+            thread = threading.Thread(target=reply)
+            thread.start()
+            context = {"session_id": "s", "frame_id": "1", "captured_at": "2026-10-20T12:00:00.000Z"}
+            result = module.LocalVision(str(path)).send(1, b"\xff\xd8x\xff\xd9", context)
+            thread.join()
+            listener.close()
+            self.assertEqual(result["context"], context)
+            self.assertEqual(result["verdict"], "normal")
+
+    def test_reaction_rejects_remote_moonraker(self):
         with self.assertRaises(ValueError):
-            server.handshake()
+            module.Reaction("http://192.168.0.197", ROOT, ROOT / "marker", 1)
 
-    def test_latest_frame_and_no_stale_frame(self):
-        camera = module.Camera("http://127.0.0.1:8080/?action=stream", .01)
-        camera.latest = (3, module.time.monotonic(), b"latest")
-        self.assertEqual(camera.next(1)[0], 3)
-        camera.latest = (4, module.time.monotonic() - 1, b"old")
-        with self.assertRaises(TimeoutError):
-            camera.next(3)
+    @unittest.skipUnless(hasattr(module.socket, "AF_UNIX"), "Unix socket runs on target Linux")
+    def test_local_vision_accepts_only_complete_unavailable_contract(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            path = Path(temp) / "vision.sock"
+            listener = module.socket.socket(module.socket.AF_UNIX, module.socket.SOCK_STREAM)
+            listener.bind(str(path))
+            listener.listen(1)
+            def reply():
+                conn, _ = listener.accept()
+                with conn:
+                    request = module.json.loads(conn.recv(4096).split(b"\n", 1)[0])
+                    response = {"protocol": 1, "request_id": request["request_id"],
+                                "task": "spaghetti", "context": request["context"],
+                                "worker_generation": "76867cc1-17e4-4cc3-a956-09395f2ba871",
+                                "model_version": "spaghetti_presence_v12", "verdict": "unavailable",
+                                "score": None, "threshold": .3, "boxes": [], "reason": "warming",
+                                "processing_ms": 0.0}
+                    conn.sendall(module.json.dumps(response).encode() + b"\n")
+            thread = threading.Thread(target=reply)
+            thread.start()
+            with self.assertRaises(RuntimeError):
+                module.LocalVision(str(path)).send(1, b"\xff\xd8x\xff\xd9")
+            thread.join()
+            listener.close()
 
-    def test_reaction_is_local_and_retries_unconfirmed_reset(self):
-        with tempfile.TemporaryDirectory() as temp:
+    def test_reaction_resets_series_after_session_change(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
             root = Path(temp)
             directory = root / "part"
             directory.mkdir()
             marker = root / "marker"
             marker.write_text(str(directory), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                module.Reaction("http://192.168.0.197", root, marker, 1)
             reaction = module.Reaction("http://localhost:7125", root, marker, 1)
-            status = {"active": True, "session_id": "1:part", "cancel_requested": False}
-            reaction.request = Mock(return_value=status)
+            status = {"active": True, "session_id": "print:part", "cancel_requested": False}
+            reset = {**status, "counter": 0}
+            reaction.request = Mock(side_effect=[status, reset])
             self.assertTrue(reaction.prepare())
-            reaction.frame = b"JPEG"
-            reaction.request = Mock(side_effect=OSError("offline"))
-            reaction.break_series()
-            self.assertTrue(reaction.reset_pending)
-            reaction.request = Mock(side_effect=[status, OSError("offline")])
-            with self.assertRaises(OSError):
-                reaction.prepare()
-            self.assertTrue(reaction.reset_pending)
-            marker.write_text(str(root.parent), encoding="utf-8")
-            reaction.request = Mock(return_value=status)
-            with self.assertRaises(ValueError):
-                reaction.prepare()
+            self.assertEqual(reaction.request.call_args_list[1].args,
+                             ("/server/treed/detection/reset", {"session_id": "print:part"}))
+            self.assertFalse(reaction.reset_pending)
+
+    def test_owned_frame_retention_is_global_and_never_deletes_snapshots(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temp:
+            root = Path(temp)
+            directory = root / "active"
+            directory.mkdir()
+            archived = root / "previous-session"
+            archived.mkdir()
+            marker = root / "marker"
+            marker.write_text(str(directory), encoding="utf-8")
+            reaction = module.Reaction("http://localhost:7125", root, marker, 1)
+            older = archived / ("detect_" + "1" * 32 + "_000000000001.jpg")
+            newer = directory / ("detect_" + "2" * 32 + "_000000000001.jpg")
+            snapshot = directory / "snapshot_001.jpg"
+            older.write_bytes(b"12345678")
+            newer.write_bytes(b"abcdefgh")
+            snapshot.write_bytes(b"user snapshot")
+            outside = root / "outside.jpg"
+            outside.write_bytes(b"outside user data")
+            linked = directory / ("detect_" + "3" * 32 + "_000000000001.jpg")
+            try:
+                linked.symlink_to(outside)
+            except OSError:
+                linked = None
+            module.os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+            original_limit = module.MAX_OWNED_FRAME_BYTES
+            try:
+                module.MAX_OWNED_FRAME_BYTES = 13
+                reaction._prune_owned_frames(incoming=5)
+            finally:
+                module.MAX_OWNED_FRAME_BYTES = original_limit
+            self.assertFalse(older.exists())
+            self.assertTrue(newer.exists())
+            self.assertEqual(snapshot.read_bytes(), b"user snapshot")
+            self.assertEqual(outside.read_bytes(), b"outside user data")
+            if linked is not None:
+                self.assertTrue(linked.is_symlink())
 
 
 if __name__ == "__main__":

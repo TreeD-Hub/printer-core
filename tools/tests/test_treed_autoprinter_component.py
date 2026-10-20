@@ -105,6 +105,33 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         transport.assert_not_called()
         device.assert_not_called()
 
+    async def test_defaults_enable_features_but_missing_credentials_do_not_start_workers(self):
+        config = FakeConfig()
+        config.values.pop("enabled")
+        with patch.object(component, "AutoPrinterStore") as store, \
+                patch.object(component, "AutoPrinterTransport") as transport, \
+                patch.object(component, "MoonrakerDevice") as device, \
+                patch.object(component, "E0BedChecker") as bed_checker:
+            instance = component.load_component(config)
+            try:
+                await instance.component_init()
+                status = await instance._handle_status(None)
+                self.assertTrue(instance.enabled)
+                self.assertFalse(instance.execution_enabled)
+                self.assertTrue(instance.bed_check_enabled)
+                self.assertTrue(status["enabled"])
+                self.assertFalse(status["configured"])
+                self.assertFalse(status["execution_enabled"])
+                self.assertEqual(status["blocked_reason"], "configuration_invalid")
+                self.assertIsNone(instance._task)
+                self.assertIsNone(instance._execution_task)
+                store.assert_not_called()
+                transport.assert_not_called()
+                device.assert_not_called()
+                bed_checker.assert_not_called()
+            finally:
+                await instance.close()
+
     async def test_control_endpoint_rejects_unlisted_actions_and_disabled_physical_actions(self):
         instance = component.TreeDAutoPrinter(FakeConfig())
         instance._store = object()
@@ -210,7 +237,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                     await instance.component_init()
                     make_checker.assert_called_once_with(
                         printer_id, str(root / "model.pth"), str(root / "python"),
-                        "http://127.0.0.1:8080/?action=snapshot")
+                        "http://127.0.0.1:8080/?action=snapshot", socket_path=None)
                     device.assert_not_called()
                     self.assertFalse(instance._executor.enabled)
                     self.assertIs(checker, instance._executor.bed_checker)
@@ -446,7 +473,8 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["configured"])
         self.assertEqual(1, result["protocol_version"])
         self.assertTrue(result["unlink_pending"])
-        self.assertEqual({"account_linking": True, "pairing_cancel": True}, result["capabilities"])
+        self.assertEqual({"account_linking": True, "pairing_cancel": True,
+                          "offline_packages_v1": True}, result["capabilities"])
 
     async def test_pending_unlink_preserves_old_control_outbox_until_confirm(self):
         printer_id = "11111111-1111-4111-8111-111111111111"

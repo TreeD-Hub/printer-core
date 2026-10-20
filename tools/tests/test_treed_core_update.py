@@ -33,7 +33,7 @@ class CoreUpdateTests(unittest.TestCase):
                     "TREED_UPDATE_PI_USER": "radxa", "TREED_UPDATE_PI_GROUP": "radxa",
                     "TREED_CORE_MANIFEST_FILE": str(self.root / "state/core-manifest.json"),
                     "TREED_CORE_STATE_DIR": str(self.root / "state/core")}
-        self.locations = {name: self.root / name for name in ("config", "klipper", "moonraker", "camera", "sbin")}
+        self.locations = {name: self.root / name for name in ("config", "klipper", "moonraker", "camera", "vision", "sbin")}
         self.old = {
             "config/printer.cfg": b"[include profiles/treed_v2_corexy_v1/macros.cfg]\n\n" + core.MARKER + b"\n#*# [input_shaper]\n#*# shaper_freq_x = 43\n",
             "config/profiles/treed_v2_corexy_v1/macros.cfg": b"[gcode_macro OLD]\ngcode: G4 P0\n",
@@ -59,6 +59,7 @@ class CoreUpdateTests(unittest.TestCase):
         self.stack.enter_context(patch.object(core, "roots", return_value=self.locations))
         self.stack.enter_context(patch.object(core, "download"))
         self.stack.enter_context(patch.object(core, "load_package", side_effect=lambda *_: (self.manifest, self.payload)))
+        self.vision_units = self.stack.enter_context(patch.object(core, "vision_units_installed", return_value=True))
         self.compatibility = self.stack.enter_context(patch.object(core, "check_compatibility"))
         self.phase = self.stack.enter_context(patch.object(core, "phase"))
         self.services = self.stack.enter_context(patch.object(core, "services"))
@@ -117,6 +118,10 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertFalse(any(core.destination(key, self.locations).exists()
                              for key in core.AUTOPRINTER_MODULES))
         self.assertEqual(self.previous, self.wait.call_args_list[-1].args[0])
+        self.assertEqual(2, self.wait.call_count)
+        self.assertTrue(any(row["path"] == "moonraker/treed_vision_client.py"
+                            for row in self.wait.call_args_list[0].args[0]["files"]))
+        self.assertEqual(self.previous, self.wait.call_args_list[1].args[0])
 
     def seed_pid_calibration(self, extruder_already_saved=False):
         extruder = b"[extruder]\ncontrol: pid\npid_Kp: 11.818\npid_Ki: 0.435\npid_Kd: 80.218\n"
@@ -381,6 +386,22 @@ class CoreUpdateTests(unittest.TestCase):
         self.assert_restored()
         self.assertFalse(core.journal_path(self.env, OPERATION).exists())
 
+    def test_missing_loader_vision_units_fails_before_mutation(self):
+        self.vision_units.return_value = False
+        with self.assertRaisesRegex(ValueError, "сначала запустите loader"):
+            self.apply()
+        self.services.assert_not_called()
+        self.stop_heating.assert_not_called()
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.1.0")
+        self.assertFalse(core.journal_path(self.env, OPERATION).exists())
+
+    def test_vision_service_and_manifest_are_in_runtime_bundle_not_model_weights(self):
+        items = core.sources(ROOT)
+        self.assertEqual(items["vision/service.py"], ROOT / "runtime-scripts/treed-vision/service.py")
+        self.assertEqual(items["vision/models.json"], ROOT / "runtime-scripts/treed-vision/models.json")
+        self.assertIn("moonraker/treed_vision_client.py", core.AUTOPRINTER_MODULES)
+        self.assertNotIn("vision/fdm-detail-e0-20261016-8de7e8aa22e2.pth", items)
+
     def test_readiness_failure_restores_every_file_and_confirmed_version(self):
         self.wait.side_effect = [False, True]
         self.assertEqual(self.apply()["status"], "rolled_back")
@@ -483,7 +504,9 @@ class PackageTests(unittest.TestCase):
             "config/printer.cfg", "config/moonraker.conf", "config/moonraker/base/00-core.conf",
             "klipper/treed_driver_mode.py", "moonraker/treed_update.py", "sbin/treed-core-update",
         )}
-        complete = {**base, **{key: b"# fake helper\n" for key in core.AUTOPRINTER_MODULES}}
+        complete = {**base, "camera/stream_detect.py": b"# fake camera\n",
+                    "vision/service.py": b"# fake service\n", "vision/models.json": b"{}",
+                    **{key: b"# fake helper\n" for key in core.AUTOPRINTER_MODULES}}
         cases = [base, complete] + [{key: value for key, value in complete.items() if key != missing}
                                    for missing in sorted(core.AUTOPRINTER_MODULES)]
         with tempfile.TemporaryDirectory() as temp:
@@ -524,7 +547,7 @@ class Server:
     def register_event_handler(self, *args): pass
 class Config:
     def get_server(self): return Server()
-    def getboolean(self, name, default=False): return default
+    def getboolean(self, name, default=False): return False if name == "enabled" else default
 instance = component.load_component(Config())
 assert not instance.enabled and instance._store is None and instance._task is None
 print("DELIVERED_IMPORT_OK")
@@ -542,6 +565,10 @@ print("DELIVERED_IMPORT_OK")
         self.assertEqual(manifest["kind"], core.KIND)
         self.assertIn("sbin/treed-core-update", payload)
         self.assertIn("klipper/treed_driver_mode.py", payload)
+        self.assertTrue({"vision/service.py", "vision/models.json", "camera/stream_detect.py",
+                         "moonraker/treed_vision_client.py"} <= payload.keys())
+        self.assertTrue(core.AUTOPRINTER_MODULES <= payload.keys())
+        self.assertFalse(any(key.startswith("vision/") and key.endswith(".pth") for key in payload))
         self.assertFalse(any("local_overrides.cfg" in key for key in payload))
         self.assertFalse(any(key.startswith("loader/") for key in payload))
 
@@ -596,6 +623,22 @@ print("DELIVERED_IMPORT_OK")
         self.assertIn(b"path: /my/device/path", result)
         self.assertIn(b"repo_path: /home/radxa/treed/printer-core", result)
         self.assertNotIn(b"[update_manager crowsnest]", result)
+
+    def test_render_preserves_local_autoprinter_identity_and_adds_new_defaults(self):
+        key = "config/moonraker/base/00-core.conf"
+        old = ("[treed_autoprinter]\nprinter_id: local-id\napi_origin: https://local.example\n"
+               "credentials_path: /private/credentials.json\nstorage_path: /private/state.sqlite3\n").encode()
+        new = ("[treed_autoprinter]\nprinter_id: new-default\napi_origin: https://default.example\n"
+               "credentials_path: /new/default.json\nstorage_path: /new/state.sqlite3\n"
+               "bed_check_socket: /home/radxa/treed/vision/run/vision.sock\n").encode()
+        result = core.render(key, new, old, {"TREED_UPDATE_PI_HOME": "/home/radxa",
+                                             "TREED_UPDATE_PI_USER": "radxa"}).decode()
+        self.assertIn("printer_id: local-id", result)
+        self.assertIn("api_origin: https://local.example", result)
+        self.assertIn("credentials_path: /private/credentials.json", result)
+        self.assertIn("storage_path: /private/state.sqlite3", result)
+        self.assertIn("bed_check_socket: /home/radxa/treed/vision/run/vision.sock", result)
+        self.assertNotIn("printer_id: new-default", result)
 
     def test_compatibility_checks_both_pinned_upstreams_and_tracked_edits(self):
         manifest = {"requires": {"klipper": "a" * 40, "moonraker": "b" * 40}}
@@ -663,11 +706,15 @@ class PrinterUpdateGuardTests(unittest.TestCase):
         loaded = ["treed_update", "treed_recovery", "treed_detection", "treed_host_network",
                   "treed_filament_sensor", "treed_shell_command"]
         legacy = {"klippy_state": "ready", "components": loaded, "failed_components": []}
-        candidate = {"files": [{"path": "moonraker/treed_autoprinter.py"}]}
+        candidate = {"files": [{"path": "moonraker/treed_autoprinter.py"},
+                               {"path": "moonraker/treed_vision_client.py"}]}
         for info, manifest, expected in (
             (legacy, {"files": []}, True),
             (legacy, candidate, False),
+            (legacy | {"components": loaded + ["treed_vision_client"]}, candidate, False),
             (legacy | {"components": loaded + ["treed_autoprinter"]}, candidate, True),
+            (legacy | {"components": loaded + ["treed_autoprinter"],
+                       "failed_components": ["treed_vision_client"]}, candidate, True),
             (legacy | {"components": loaded + ["treed_autoprinter"],
                        "failed_components": ["treed_autoprinter"]}, candidate, False),
             (legacy | {"failed_components": ["treed_update"]}, {"files": []}, False),
@@ -679,6 +726,17 @@ class PrinterUpdateGuardTests(unittest.TestCase):
                     patch.object(core.time, "sleep"), \
                     patch.object(core.time, "monotonic", side_effect=[0, 1, 2, 3, 61]):
                 self.assertEqual(expected, core.wait_ready(manifest))
+
+    def test_wait_ready_uses_registered_component_gate_for_candidate_and_rollback(self):
+        candidate = {"files": [{"path": "moonraker/treed_autoprinter.py"},
+                               {"path": "moonraker/treed_vision_client.py"}]}
+        previous = {"files": [{"path": "moonraker/treed_autoprinter.py"}]}
+        with patch.object(core, "ready", return_value=True) as ready, \
+             patch.object(core.time, "sleep"):
+            self.assertTrue(core.wait_ready(candidate))
+            self.assertTrue(core.wait_ready(previous))
+        self.assertEqual([("treed_autoprinter",)] * 6,
+                         [call.args[0] for call in ready.call_args_list])
 
     def test_cancelled_job_with_stale_pause_and_heat_is_idle(self):
         status = {"print_stats": {"state": " CANCELLED "}, "pause_resume": {"is_paused": True},

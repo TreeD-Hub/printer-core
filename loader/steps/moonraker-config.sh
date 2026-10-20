@@ -473,10 +473,58 @@ render_base_fragment_templates() {
 }
 
 deploy_base_fragments() {
+  local preserved_core=""
+  if [ "${DEPLOY_MODE}" = "preserve" ] && [ -f "${DST_BASE_DIR}/00-core.conf" ]; then
+    preserved_core="$(mktemp)"
+    cp -f "${DST_BASE_DIR}/00-core.conf" "${preserved_core}"
+  fi
   rm -rf "${DST_BASE_DIR}"
   ensure_dir "${DST_BASE_DIR}"
   cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
   render_base_fragment_templates
+  if [ -n "${preserved_core}" ]; then
+    python3 - "${preserved_core}" "${DST_BASE_DIR}/00-core.conf" <<'PY'
+import re, sys
+from pathlib import Path
+
+old_path, new_path = map(Path, sys.argv[1:])
+old, new = old_path.read_text(encoding="utf-8").splitlines(), new_path.read_text(encoding="utf-8").splitlines()
+section = re.compile(r"^\s*\[treed_autoprinter\]\s*$", re.I)
+header = re.compile(r"^\s*\[[^]]+\]\s*$")
+
+def body(lines):
+    for start, line in enumerate(lines):
+        if section.fullmatch(line):
+            end = start + 1
+            while end < len(lines) and not header.fullmatch(lines[end]):
+                end += 1
+            return lines[start], lines[start + 1:end]
+    return None, []
+
+old_header, old_body = body(old)
+new_header, new_body = body(new)
+if old_header and new_header:
+    keys = set()
+    for line in old_body:
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        if match:
+            keys.add(match.group(1).lower())
+    additions = []
+    for line in new_body:
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        if match and match.group(1).lower() not in keys:
+            additions.append(line)
+            keys.add(match.group(1).lower())
+    merged = old_body + additions
+    start = next(i for i, line in enumerate(new) if section.fullmatch(line))
+    end = start + 1
+    while end < len(new) and not header.fullmatch(new[end]):
+        end += 1
+    new[start:end] = [new_header, *merged]
+    new_path.write_text("\n".join(new) + "\n", encoding="utf-8")
+PY
+    rm -f "${preserved_core}"
+  fi
   configure_mainsail_updater_section
   configure_crowsnest_updater_section
   chown -R "${PI_USER}:${grp}" "${DST_BASE_DIR}" || true

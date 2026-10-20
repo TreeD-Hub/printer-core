@@ -180,5 +180,7 @@ start_required_service "klipper.service" "${TREED_KLIPPER_START_REQUIRE_ACTIVE}"
 start_required_service "moonraker.service"
 start_selected_ui_service
 start_best_effort_service "crowsnest.service"
+start_best_effort_service "treed-vision.service"
+start_best_effort_service "treed-detection.service"
 
 log_info "maintenance-start: OK"
