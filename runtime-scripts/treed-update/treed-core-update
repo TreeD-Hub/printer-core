@@ -507,7 +507,8 @@ def extract_source(archive, directory, manifest, payload):
         for row in infos:
             name = row.filename
             path = PurePosixPath(name)
-            if (not name or path.as_posix() != name or path.is_absolute() or "\\" in name
+            canonical = path.as_posix() + ("/" if row.is_dir() else "")
+            if (not name or canonical != name or path.is_absolute() or "\\" in name
                     or ".." in path.parts or name.startswith("/")):
                 raise ValueError("Недопустимый путь в source package")
             if row.is_dir():

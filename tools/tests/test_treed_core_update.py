@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import subprocess
 import sys
 import tempfile
@@ -739,9 +740,24 @@ print("DELIVERED_IMPORT_OK")
             temp = Path(temp)
             archive = temp / core.SOURCE_ASSET
             core.build_source(ROOT, archive)
+            with zipfile.ZipFile(archive) as bundle:
+                files = {name: bundle.read(name) for name in bundle.namelist()}
+            directories = set()
+            for name in files:
+                parent = PurePosixPath(name).parent
+                while parent.as_posix() != ".":
+                    directories.add(parent.as_posix() + "/")
+                    parent = parent.parent
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+                for name in sorted(directories):
+                    bundle.writestr(name, b"")
+                for name, data in files.items():
+                    bundle.writestr(name, data)
             target_archive = temp / core.ASSET
             core.build(ROOT, target_archive)
             manifest, payload = core.load_package(target_archive, "v" + (ROOT / "VERSION").read_text().strip())
+            with zipfile.ZipFile(archive) as bundle:
+                self.assertTrue(any(row.is_dir() for row in bundle.infolist()))
             core.extract_source(archive, temp / "source", manifest, payload)
             with zipfile.ZipFile(archive, "a") as bundle:
                 bundle.writestr("../escape", b"bad")
