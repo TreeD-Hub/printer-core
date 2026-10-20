@@ -52,6 +52,8 @@ Staging:
 Runtime:
 - `${PI_HOME}/printer_data/config` (раскладка `klipper-core`)
 - `${PI_HOME}/treed/cam/bin` (раскладка `treed-cam`)
+- `${PI_HOME}/treed/vision/bin` (локальный vision IPC runtime; loader и core updater)
+- `${PI_HOME}/treed/vision/models` (только явно выбранные hash-проверенные локальные артефакты; не входит в core bundle)
 - `${TREED_KLIPPERSCREEN_HOME}/styles/treed-oled` (раскладка `klipperscreen-theme`)
 
 ## 3. Ownership map (runtime)
@@ -72,6 +74,16 @@ Runtime:
 - `${PI_HOME}/printer_data/config/treed_variables.cfg` — штатный `save_variables`,
   включая режимы XYZ и обдува. `klipper-core.sh` сохраняет его в `preserve`
   с явной ошибкой при сбое копирования; `clean` сбрасывает настройки.
+- В `preserve` шаг `moonraker-config` переносит локальные опции `[treed_autoprinter]`
+  из действующего `moonraker/base/00-core.conf` поверх новых defaults; отсутствующие
+  в старой версии параметры добавляются из исходника. В `clean` используются только
+  значения репозитория.
+- `${PI_HOME}/treed/cam/config/runtime.env` и `/etc/default/treed-vision` сохраняют
+  локальные параметры камеры/авторизации и валидированный путь `VISION_PYTHON`;
+  loader не удаляет credentials или runtime override-файл.
+- `${PI_HOME}/treed/vision/models/*.pth` — локальные неизменяемые по manifest weights.
+  Loader ставит артефакт из явного локального пути через временный файл, сверяет
+  точные размер/SHA-256 и выполняет atomic rename после остановки обоих vision units.
 
 CAN-host слой:
 - `/etc/default/treed-can-setup`

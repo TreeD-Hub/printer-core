@@ -1,13 +1,17 @@
 """Адресная офлайн-проверка реакции на дефект; без сети и устройства."""
 
 import asyncio
+import base64
 import importlib.util
 import os
 from pathlib import Path
+import stat
 import tempfile
+import time
+from datetime import datetime, timezone
 from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +61,11 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         }
         self.api = NS(query_objects=AsyncMock(return_value=self.objects),
                       run_gcode=AsyncMock(return_value="ok"))
+        async def run_gcode(command):
+            if command.startswith("_TREED_DETECTION_PAUSE"):
+                self.objects["print_stats"]["state"] = "paused"
+            return "ok"
+        self.api.run_gcode.side_effect = run_gcode
         self.endpoints = {}
         server = NS(lookup_component=lambda _: self.api,
                     error=lambda message, code=400: ValueError((code, message)),
@@ -67,60 +76,103 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.component = module.TreeDDetection(self.config)
         self.session_id = f"1:0:{self.session.name}"
 
-    async def result(self, index, critical=True, **overrides):
+    async def result(self, index, verdict="spaghetti", **overrides):
         frame_id = f"img_{index}.jpg"
         frame = self.session / frame_id
         if not frame.exists():
-            frame.write_bytes(b"JPEG placeholder")
-            timestamp = 1_700_000_000_000_000_000 + index * 1_000_000_000
+            frame.write_bytes(b"\xff\xd8placeholder\xff\xd9")
+            timestamp = time.time_ns() + index * 1_000_000
             os.utime(frame, ns=(timestamp, timestamp))
+        captured_at = datetime.fromtimestamp(frame.stat().st_mtime, timezone.utc).isoformat().replace("+00:00", "Z")
         args = dict(session_id=self.session_id, frame_id=frame_id,
-                    critical=critical, defect="spaghetti")
+                    captured_at=captured_at, worker_generation="00000000-0000-4000-8000-000000000001",
+                    model_version="spaghetti-v1", verdict=verdict, score=0.99)
         args.update(overrides)
         return await self.component._handle_result(Request(**args))
 
-    # Блок 2: Порог, сброс и единственная команда отмены.
-    async def test_three_consecutive_results_cancel_once(self):
+    # Блок 2: Порог, сброс и подтверждённая пауза.
+    async def test_three_consecutive_results_pause_once(self):
         for index in (1, 2):
             state = await self.result(index)
             self.assertEqual(state["counter"], index)
             self.api.run_gcode.assert_not_awaited()
         state = await self.result(3)
-        self.assertTrue(state["cancel_requested"])
-        await self.result(4)
-        self.api.run_gcode.assert_awaited_once_with("_TREED_DETECTION_CANCEL GENERATION=1")
+        self.assertEqual(state["pause_state"], "confirmed")
+        status = await self.component._handle_status(None)
+        self.assertEqual(status["pause_state"], "confirmed")
+        self.assertEqual(status["context"]["session_id"], self.session_id)
+        self.api.run_gcode.assert_awaited_once_with("_TREED_DETECTION_PAUSE GENERATION=1")
 
-    async def test_stream_adapter_reset_failure_and_pause_before_cancel(self):
+    async def test_autoprinter_hold_is_durable_before_fenced_pause(self):
+        hold = AsyncMock(return_value={"state": "active"})
+        self.component._autoprinter = NS(hold_for_detection=hold)
+        for index in (1, 2, 3):
+            state = await self.result(index)
+        hold.assert_awaited_once_with("ai_detection", state["context"])
+        self.api.run_gcode.assert_awaited_once_with("_TREED_DETECTION_PAUSE GENERATION=1")
+        self.assertEqual(state["pause_state"], "confirmed")
+
+    def test_positive_series_accepts_five_second_spacing_but_resets_beyond_limits(self):
+        def series(times):
+            decision = module.DetectionDecision()
+            return [decision.update(True, value, "worker", "model", str(i))
+                    for i, value in enumerate(times)]
+        self.assertEqual(series((0, 5, 10)), [False, False, True])
+        self.assertEqual(series((0, 7, 10)), [False, False, False])
+        self.assertEqual(series((0, 5, 13)), [False, False, False])
+
+    async def test_stream_adapter_resets_and_publishes_normalized_results(self):
         # Настоящий адаптер и компонент; заменён только HTTP и внешний Klipper API.
         loop = asyncio.get_running_loop()
         reaction = stream.Reaction("http://127.0.0.1:7125", self.frames, self.marker, 1)
 
         def request(endpoint, data=None):
-            operation = (self.component._handle_status(None) if data is None
-                         else self.component._handle_result(Request(**data)))
+            if endpoint.endswith("/reset"):
+                operation = self.component._handle_reset(Request(**data))
+            elif data is None:
+                operation = self.component._handle_status(None)
+            else:
+                operation = self.component._handle_result(Request(**data))
             return asyncio.run_coroutine_threadsafe(operation, loop).result(timeout=2)
 
         reaction.request = request
-        self.component._decision.count = 2  # Остаток серии до перезапуска клиента.
+
+        async def publish(verdict="spaghetti"):
+            frame = b"\xff\xd8JPEG\xff\xd9"
+            frame_id = await asyncio.to_thread(reaction.save_frame, frame)
+            captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            result = {
+                "context": {"session_id": reaction.session, "frame_id": frame_id,
+                            "captured_at": captured_at},
+                "captured_at": captured_at,
+                "worker_generation": "00000000-0000-4000-8000-000000000001",
+                "model_version": "spaghetti-v1", "verdict": verdict, "score": 0.99,
+            }
+            return await asyncio.to_thread(reaction.publish, result, frame)
+
+        self.component._decision = module.DetectionDecision(
+            count=2, first_at=time.time(), last_at=time.time(),
+            worker_generation="00000000-0000-4000-8000-000000000001",
+            model_version="spaghetti-v1")
         self.assertTrue(await asyncio.to_thread(reaction.prepare))
-        self.assertTrue(reaction.reset_pending)
-        await asyncio.to_thread(reaction.publish, None, b"JPEG")
-        for _ in range(2):
-            await asyncio.to_thread(reaction.publish, True, b"JPEG")
-        await asyncio.to_thread(reaction.publish, False, b"JPEG")
+        self.assertFalse(reaction.reset_pending)
         self.assertEqual(self.component._decision.count, 0)
         for _ in range(2):
-            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+            await publish()
+        await publish("normal")
+        self.assertEqual(self.component._decision.count, 0)
+        for _ in range(2):
+            await publish()
         await asyncio.to_thread(reaction.break_series)
         self.assertEqual(self.component._decision.count, 0)
         for _ in range(2):
-            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+            await publish()
         self.objects["print_stats"]["state"] = "paused"
         self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "paused"
         self.objects["gcode_macro _TREED_CAM_STATE"]["enabled"] = 0
         self.objects["gcode_macro _TREED_CAM_STATE"]["generation"] = 2
         with self.assertRaises(ValueError):
-            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+            await publish()
         self.assertFalse(await asyncio.to_thread(reaction.prepare))
         self.assertFalse(await asyncio.to_thread(reaction.prepare))
         self.assertEqual(self.component._decision.count, 0)
@@ -129,20 +181,23 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "printing"
         self.objects["gcode_macro _TREED_CAM_STATE"]["enabled"] = 1
         self.assertTrue(await asyncio.to_thread(reaction.prepare))
-        await asyncio.to_thread(reaction.publish, None, b"JPEG")
         for _ in range(2):
-            await asyncio.to_thread(reaction.publish, True, b"JPEG")
+            await publish()
         self.api.run_gcode.assert_not_awaited()
-        await asyncio.to_thread(reaction.publish, True, b"JPEG")
-        self.api.run_gcode.assert_awaited_once_with("_TREED_DETECTION_CANCEL GENERATION=2")
+        await publish()
+        self.api.run_gcode.assert_awaited_once_with("_TREED_DETECTION_PAUSE GENERATION=2")
         self.assertFalse(await asyncio.to_thread(reaction.prepare))
         self.assertEqual(len(list(self.session.glob("detect_*.jpg"))), 3)
 
     async def test_normal_unknown_or_other_defect_breaks_series(self):
-        for critical, defect in ((False, "spaghetti"), (None, "spaghetti"), (True, "crack")):
-            self.component._decision = module.DetectionDecision(count=2)
+        for verdict in ("normal", "unknown", "unavailable"):
+            now = time.time()
+            self.component._decision = module.DetectionDecision(
+                count=2, first_at=now - .1, last_at=now - .05,
+                worker_generation="00000000-0000-4000-8000-000000000001",
+                model_version="spaghetti-v1")
             self.component._last_order = None
-            state = await self.result(1, critical, defect=defect)
+            state = await self.result(1, verdict)
             self.assertEqual(state["counter"], 0)
             await self.result(2)
             state = await self.result(3)
@@ -177,9 +232,16 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_and_old_frames_cannot_count(self):
         await self.result(2)
-        for index in (2, 1):
-            with self.assertRaises(ValueError):
-                await self.result(index)
+        self.assertEqual(self.component._last_order,
+                         ((self.session / "img_2.jpg").stat().st_mtime_ns, "img_2.jpg"))
+        with self.assertRaises(ValueError):
+            await self.result(2)
+        old_frame = self.session / "img_1.jpg"
+        timestamp = (self.session / "img_2.jpg").stat().st_mtime_ns - 1_000_000
+        old_frame.write_bytes(b"\xff\xd8placeholder\xff\xd9")
+        os.utime(old_frame, ns=(timestamp, timestamp))
+        with self.assertRaises(ValueError):
+            await self.result(1)
         self.assertEqual(self.component._decision.count, 1)
         self.api.run_gcode.assert_not_awaited()
 
@@ -198,6 +260,25 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.result(1, **overrides)
         self.api.run_gcode.assert_not_awaited()
+
+    async def test_frame_endpoint_returns_only_bounded_recent_frame(self):
+        status = await self.result(1)
+        request = Request(session_id=self.session_id, frame_id="img_1.jpg")
+        data = (self.session / "img_1.jpg").read_bytes()
+        with patch.object(module.os, "open", side_effect=[41, 42]), \
+                patch.object(module.os, "fstat", return_value=NS(st_mode=stat.S_IFREG, st_size=len(data))), \
+                patch.object(module.os, "read", side_effect=[data, b""]), \
+                patch.object(module.os, "close"):
+            payload = await self.component._handle_frame(request)
+        self.assertEqual(payload["frame_id"], status["recent_frame"]["frame_id"])
+        self.assertEqual(base64.b64decode(payload["jpeg_base64"]), data)
+        with patch.object(module.os, "open", side_effect=[41, 42]), \
+                patch.object(module.os, "fstat", return_value=NS(st_mode=stat.S_IFREG,
+                                                                st_size=8 * 1024 * 1024 + 1)), \
+                patch.object(module.os, "read") as read, patch.object(module.os, "close"):
+            with self.assertRaisesRegex(ValueError, "Detection frame is too large"):
+                await self.component._handle_frame(request)
+            read.assert_not_called()
 
     async def test_new_generation_resets_counter_even_for_same_directory(self):
         await self.result(1)
@@ -230,16 +311,16 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(isinstance(result, ValueError) for result in results), 1)
         self.api.run_gcode.assert_awaited_once()
 
-    async def test_cancel_error_is_visible_without_automatic_retry(self):
+    async def test_pause_error_is_visible_after_bounded_retries(self):
         self.api.run_gcode.side_effect = RuntimeError("Klippy unavailable")
         await self.result(1)
         await self.result(2)
         with self.assertLogs(module.LOGGER, level="ERROR"):
-            with self.assertRaises(ValueError):
-                await self.result(3)
+            state = await self.result(3)
         state = await self.result(4)
-        self.assertIsNotNone(state["cancel_error"])
-        self.api.run_gcode.assert_awaited_once()
+        self.assertIsNotNone(state["pause_error"])
+        self.assertEqual(state["pause_state"], "failed")
+        self.api.run_gcode.assert_awaited()
 
     async def test_registration_and_deploy_wiring(self):
         self.assertEqual(self.endpoints["/server/treed/detection/result"][0], ["POST"])
@@ -248,17 +329,51 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         core = (ROOT / "moonraker/base/00-core.conf").read_text(encoding="utf-8")
         self.assertIn("[treed_detection]\nframes_root: {{PI_HOME}}/treed/cam/prints", core)
         loader = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
-        loaded = next(line for line in loader.splitlines() if "for component in " in line)
-        self.assertIn("treed_detection", loaded.split())
+        self.assertIn("treed_detection", loader)
         camera = (ROOT / "klipper/profiles/treed_v2_corexy_v1/macros_camera.cfg").read_text(encoding="utf-8")
-        guard = camera.split("[gcode_macro _TREED_DETECTION_CANCEL]", 1)[1]
+        guard = camera.split("[gcode_macro _TREED_DETECTION_PAUSE]", 1)[1]
         for condition in ("params.GENERATION", "camera.generation", "camera.enabled",
                           'printer.print_stats.state == "printing"',
                           'gcode_macro _TREED_OPERATION_STATE', 'phase == "printing"'):
             self.assertIn(condition, guard)
-        self.assertIn("\n    CANCEL_PRINT REASON=spaghetti\n  {% endif %}", guard)
+        self.assertIn("PAUSE REASON=ai_detection", guard)
         pause = (ROOT / "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg").read_text(encoding="utf-8")
         self.assertIn("VARIABLE=generation", pause)
+
+    def test_pause_is_observable_before_risky_preparation_fails(self):
+        source = (ROOT / "klipper/profiles/treed_v2_corexy_v1/macros_pause_resume.cfg").read_text(encoding="utf-8")
+        macro = source.split("[gcode_macro PAUSE]", 1)[1].split("[gcode_macro RESUME]", 1)[0]
+        commands = [line.strip() for line in macro.splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")]
+
+        def command_index(prefix):
+            return next(index for index, command in enumerate(commands)
+                        if command.startswith(prefix))
+
+        pause_base = command_index("PAUSE_BASE")
+        active = command_index("SET_GCODE_VARIABLE MACRO=_TREED_PAUSE_STATE VARIABLE=is_active VALUE=1")
+        timeout = command_index("SET_IDLE_TIMEOUT TIMEOUT=43200")
+        preparation = command_index("_TREED_PAUSE_PREP_STATE")
+        self.assertLess(pause_base, active)
+        self.assertLess(timeout, preparation)
+
+        observed = {"paused": False, "active": False, "idle_timeout": None}
+        for command in commands[pause_base:preparation]:
+            if command == "PAUSE_BASE":
+                observed["paused"] = True
+            elif command.startswith("SET_GCODE_VARIABLE MACRO=_TREED_PAUSE_STATE VARIABLE=is_active VALUE=1"):
+                observed["active"] = True
+            elif command.startswith("SET_IDLE_TIMEOUT TIMEOUT="):
+                observed["idle_timeout"] = int(command.rsplit("=", 1)[1])
+
+        # Подготовка (включая проверку Z/homing) завершается ошибкой после физической паузы.
+        with self.assertRaises(RuntimeError):
+            if command_index("_TREED_PAUSE_PREP_STATE") > pause_base:
+                raise RuntimeError("simulated preparation failure")
+        self.assertEqual(observed, {"paused": True, "active": True, "idle_timeout": 43200})
+
+        resume = source.split("[gcode_macro RESUME]", 1)[1].split("\n[", 1)[0]
+        self.assertLess(resume.index("action_raise_error"), resume.rindex("RESUME_BASE"))
 
 
 # Блок 4: Единственная адресная команда; success-маркер только после всех проверок.

@@ -39,9 +39,9 @@ class TreeDAutoPrinter:
     def __init__(self, config) -> None:
         # Блок 2: выключенный компонент не открывает storage, task или сеть.
         self.server = config.get_server()
-        self.enabled = config.getboolean("enabled", False)
+        self.enabled = config.getboolean("enabled", True)
         self.execution_enabled = config.getboolean("execution_enabled", False)
-        self.bed_check_enabled = config.getboolean("bed_check_enabled", False)
+        self.bed_check_enabled = config.getboolean("bed_check_enabled", True)
         self._lock = asyncio.Lock()
         self._store = None
         self._transport = None
@@ -93,6 +93,7 @@ class TreeDAutoPrinter:
                     self._config.get("bed_check_model_path", ""),
                     self._config.get("bed_check_python", ""),
                     self._config.get("bed_check_snapshot_url", "http://127.0.0.1:8080/?action=snapshot"),
+                    socket_path=self._config.get("bed_check_socket"),
                 )
             except (OSError, ValueError, TypeError):
                 self._bed_check_status = {
@@ -155,7 +156,8 @@ class TreeDAutoPrinter:
                     "binding_state": "unpaired", "physical_execution_enabled": False,
                     "execution_enabled": False, "queue_recovery_required": False,
                     "display_name": None, "owner_profile": None, "unlink_pending": False,
-                    "capabilities": {"account_linking": True},
+                    "active_package": None, "hold": None, "recovery_required": self._recovery_required,
+                    "capabilities": {"account_linking": True, "offline_packages_v1": False},
                     "blocked_reason": "device_unavailable" if self._device_unavailable else self._configuration_error}
         async with self._lock:
             if self._closed or self._store is None:
@@ -163,8 +165,9 @@ class TreeDAutoPrinter:
                         "protocol_version": 1, "configuration_version": 1, "last_sync_at": None,
                         "binding_state": "unpaired", "physical_execution_enabled": False,
                         "execution_enabled": False, "queue_recovery_required": self._recovery_required,
+                        "active_package": None, "hold": None, "recovery_required": self._recovery_required,
                           "display_name": None, "owner_profile": None, "unlink_pending": False,
-                          "capabilities": {"account_linking": True},
+                        "capabilities": {"account_linking": True, "offline_packages_v1": False},
                         "blocked_reason": "queue_recovery_required" if self._recovery_required else None}
             status = await self._run_blocking(self._store.status)
             execution = await self._executor.status() if self._executor is not None else {}
@@ -188,7 +191,8 @@ class TreeDAutoPrinter:
                        "physical_execution_enabled": False,
                        "queue_recovery_required": self._recovery_required,
                        **execution,
-                         "capabilities": {"account_linking": True, "pairing_cancel": True, **execution.get("capabilities", {})},
+                         "capabilities": {"account_linking": True, "pairing_cancel": True,
+                                          "offline_packages_v1": True, **execution.get("capabilities", {})},
                        "blocked_reason": ("queue_recovery_required" if self._recovery_required
                                           else execution.get("blocked_reason"))})
         return status
@@ -200,13 +204,17 @@ class TreeDAutoPrinter:
         args = web_request.get_args()
         if (not isinstance(args, dict) or not isinstance(args.get("type"), str) or args["type"] not in {
                 "pause_queue", "resume_queue", "stop_after_current", "pause_current_print",
-                "cancel_current_print", "recheck_bed"}):
+                "cancel_current_print", "cancel_package", "recheck_bed"}):
             raise self.server.error("Invalid AutoPrinter control action", 400)
         kind = args["type"]
         physical = kind in {"pause_current_print", "cancel_current_print"}
-        expected = {"type", "run_id", "action_id"} if physical else {"type"}
+        package_cancel = kind == "cancel_package"
+        expected = ({"type", "run_id", "action_id"} if physical else
+                    {"type", "package_id", "action_id"} if package_cancel else {"type"})
         if (set(args) != expected or (physical and not (
-                _is_uuid(args["run_id"]) and _is_uuid(args["action_id"])) )):
+                _is_uuid(args["run_id"]) and _is_uuid(args["action_id"])) )
+                or (package_cancel and not (
+                    _is_uuid(args["package_id"]) and _is_uuid(args["action_id"])) )):
             raise self.server.error("Invalid AutoPrinter control payload", 400)
         if physical and not self._executor.enabled:
             raise self.server.error("Physical execution is disabled", 503)
@@ -282,6 +290,26 @@ class TreeDAutoPrinter:
                 raise self.server.error("AutoPrinter unlink is unavailable", 409) from None
             await self._drive_unlink()
         return await self._handle_status(None)
+
+    async def hold_for_detection(self, reason: str, context: dict[str, Any]) -> dict[str, Any]:
+        """Durably block future queue starts; detection owns the fenced PAUSE command."""
+        if self._closed or self._store is None or self._executor is None:
+            raise StoreError("store_unavailable")
+        async with self._lock:
+            if self._closed or self._store is None or self._executor is None:
+                raise StoreError("store_unavailable")
+            self._executor.mark_detection_hold_pending(reason, context)
+            try:
+                hold = await self._run_blocking(
+                    self._store.execution_hold_for_detection, reason, context,
+                    datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                )
+            except Exception:
+                # The in-memory barrier stays set until a human recovery action
+                # successfully persists and releases the hold.
+                raise
+            self._executor._pending_detection_hold = None
+            return hold
 
     async def _drive_unlink(self, *, tolerate_offline: bool = True) -> None:
         intent = await self._run_blocking(self._store.unlink_intent)
@@ -658,10 +686,10 @@ def _validate_response(value: object, printer_id: str, profile_id: str) -> None:
             raise ValueError("invalid_command")
         if value.get("reason") is None and (
                 command["control_epoch"] != value["control_epoch"]
-                or (command["type"] in {"enqueue_series", "reorder_queue"}
+                or (command["type"] in {"enqueue_series", "enqueue_package", "reorder_queue"}
                     and command["payload"].get("binding_epoch") != value["binding_epoch"])):
             raise ValueError("invalid_command")
-        if command["type"] in {"enqueue_series", "reorder_queue"}:
+        if command["type"] in {"enqueue_series", "enqueue_package", "reorder_queue"}:
             payload = command["payload"]
             previous, revision = payload.get("previous_queue_revision"), payload.get("queue_revision")
             if (type(previous) is not int or type(revision) is not int or revision != previous + 1
@@ -678,7 +706,7 @@ def _validate_command(command: object, response: dict[str, Any]) -> dict[str, An
     payload = command.get("payload", {})
     if not isinstance(payload, dict):
         raise ValueError("invalid_command")
-    if kind in {"enqueue_series", "reorder_queue"}:
+    if kind in {"enqueue_series", "enqueue_package", "reorder_queue"}:
         if payload.get("binding_epoch") != response["binding_epoch"]:
             raise ValueError("invalid_command")
     return command

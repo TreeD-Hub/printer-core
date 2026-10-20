@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 from moonraker.components.treed_autoprinter_execution import AutoPrinterExecutor
 from moonraker.components.treed_autoprinter_store import AutoPrinterStore, StoreError
+from moonraker.components import treed_autoprinter_store as store_module
 
 
 PRINTER = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -251,12 +252,17 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["result"], (await asyncio.to_thread(self.store.pending_results))[0]["result"])
 
     async def test_wire_snapshot_uses_only_backend_snapshot_keys(self):
+        await asyncio.to_thread(self.store.execution_hold_for_detection, "occupied", {"source": "test"},
+                                "2026-10-20T00:00:00Z")
         executor = AutoPrinterExecutor(self.store, None, BOOT_1)
         fields = await executor.sync_fields()
 
         self.assertEqual({"observed_at", "bed_epoch", "queue_control", "current_run_id", "run_state",
-                          "local_pause", "ready", "print_paused", "capabilities", "model_version"},
+                          "local_pause", "ready", "print_paused", "active_package",
+                          "hold", "recovery_required", "capabilities", "model_version"},
                          set(fields["snapshot"]))
+        self.assertEqual({"reason", "created_at", "context"}, set(fields["snapshot"]["hold"]))
+        self.assertIn("completion_stage", await executor.status())
 
     async def test_ignored_event_persistently_blocks_protocol(self):
         await asyncio.to_thread(self.store.execution_set_boot, BOOT_1)
@@ -384,9 +390,69 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(resumed["stop_after_current"])
         self.assertEqual("executed", resumed["action_result"]["state"])
 
+    async def test_unpersisted_detection_hold_stays_fail_closed_until_explicit_recovery(self):
+        await self.seed_queue([RUNS[0]])
+        executor, device, _ = await self.online_executor()
+        hold = {"reason": "occupied", "context": {"generation": 9}, "created_at": "2026-10-20T00:00:00Z"}
+        executor._pending_detection_hold = hold
+        await executor.tick()
+        self.assertEqual([], device.starts)
+        self.assertEqual("detection_hold_persistence_pending", executor._blocked_reason)
+
+        resumed = await executor.local_action({"type": "resume_queue"})
+        self.assertEqual("executed", resumed["action_result"]["state"])
+        self.assertIsNone(executor._pending_detection_hold)
+        self.assertEqual([], await asyncio.to_thread(self.store.execution_active_holds))
+
         await executor.tick()
 
         self.assertEqual(1, len(device.starts))
+
+    async def test_reboot_recovery_allows_only_locally_accepted_package_without_handshake(self):
+        digest = hashlib.sha256(DATA).hexdigest()
+        await asyncio.to_thread(self.store.update_binding, 1, 1, "paired", 1)
+        await asyncio.to_thread(self.store.store_asset,
+                                {"asset_id": ASSET, "sha256": digest, "size_bytes": len(DATA),
+                                 "profile_id": PROFILE}, BytesIO(DATA))
+        await asyncio.to_thread(self.store.confirm_receipt, ASSET)
+        package_id = "88888888-8888-4888-8888-888888888888"
+        series_id = "77777777-7777-4777-8777-777777777777"
+        group = {"series_id": series_id, "asset_id": ASSET, "sha256": digest,
+                 "size_bytes": len(DATA), "copies_per_run": 1,
+                 "completion_profile": {"version": 1, "profile_id": PROFILE, "auto_remove": False},
+                 "run_ids": [RUNS[0]]}
+        manifest = {"package_id": package_id, "version": 1, "printer_id": PRINTER,
+                    "binding_epoch": 1, "profile_id": PROFILE, "policy_version": 1,
+                    "runs": [group]}
+        command = {"command_id": "99999999-9999-4999-8999-999999999999",
+                   "type": "enqueue_package", "control_epoch": 1,
+                   "expires_at": "2000-01-01T00:00:00Z", "queue_revision": 2,
+                   "payload": {"binding_epoch": 1, "previous_queue_revision": 1,
+                               "queue_revision": 2, "manifest": manifest,
+                               "manifest_hash": store_module._manifest_hash(manifest)}}
+        accepted = await asyncio.to_thread(self.store.apply_command, command)
+        self.assertEqual("executed", accepted["state"])
+
+        device = _FakeDevice()
+        first = AutoPrinterExecutor(self.store, device, BOOT_1, enabled=True,
+                                    bed_checker=_FakeBedChecker(PRINTER))
+        await first.initialize()
+        await first.local_action({"type": "resume_queue"})
+        restarted = AutoPrinterExecutor(self.store, device, BOOT_2, enabled=True,
+                                        bed_checker=_FakeBedChecker(PRINTER))
+        await restarted.initialize()
+        self.assertEqual("1", await asyncio.to_thread(
+            self.store.execution_get_meta, "boot_recovery_required"))
+        await restarted.local_action({"type": "resume_queue"})
+        self.assertEqual("", await asyncio.to_thread(
+            self.store.execution_get_meta, "execution_handshake_boot", ""))
+
+        await restarted.tick()
+
+        self.assertEqual(1, len(device.starts))
+        state = await asyncio.to_thread(self.store.execution_state, RUNS[0])
+        self.assertEqual("preparing", state["state"])
+        self.assertTrue(state["start_intent"])
 
     async def test_unlink_pending_blocks_resume_and_new_starts(self):
         await self.seed_queue([RUNS[0]])
@@ -441,11 +507,11 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
 
         executor._draining_boot_id = "11111111-1111-4111-8111-111111111111"
         await executor.tick()
-        device.inspect.assert_not_awaited()
+        device.inspect.assert_awaited_once()
         executor._draining_boot_id = None
         await executor.tick()
 
-        device.inspect.assert_awaited_once()
+        self.assertEqual(2, device.inspect.await_count)
         self.assertEqual(1, len(device.starts))
         self.assertEqual(2, checker.counter)
         self.assertEqual(new_boot, await asyncio.to_thread(

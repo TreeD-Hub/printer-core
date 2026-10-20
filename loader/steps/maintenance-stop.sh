@@ -34,6 +34,8 @@ REQUIRED_SERVICES=(
 BEST_EFFORT_SERVICES=(
   "KlipperScreen.service"
   "treed-shell.service"
+  "treed-detection.service"
+  "treed-vision.service"
   "crowsnest.service"
 )
 

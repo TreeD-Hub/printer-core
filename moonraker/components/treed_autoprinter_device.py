@@ -50,7 +50,7 @@ class MoonrakerDevice:
             queue = self.server.lookup_component("job_queue")
             objects = await self.klippy.query_objects({
                 "print_stats": None, "virtual_sdcard": None,
-                "gcode_macro _TREED_OPERATION_STATE": ["phase"],
+                "gcode_macro _TREED_OPERATION_STATE": ["phase", "completion_stage"],
             })
             stats = objects["print_stats"]
             sd = objects["virtual_sdcard"]
@@ -58,7 +58,11 @@ class MoonrakerDevice:
             update = self.server.lookup_component("treed_update")
             update_state = await asyncio.to_thread(_read_update_state, update.state_file)
             operation_phase = macro.get("phase") if isinstance(macro, dict) else None
+            completion_stage = macro.get("completion_stage") if isinstance(macro, dict) else None
             if operation_phase not in {"idle", "printing", "paused", "preparing", "auto_remove"} or update_state is None:
+                result["phase"] = "service_state_unknown"
+                return result
+            if completion_stage is not None and completion_stage not in {"none", "cooling", "removing", "verifying"}:
                 result["phase"] = "service_state_unknown"
                 return result
             result["service_active"] = update_state["busy"] or operation_phase in {"preparing", "auto_remove"}
@@ -81,6 +85,7 @@ class MoonrakerDevice:
                 return result
             result["ready"] = True
             result["phase"] = operation_phase
+            result["completion_stage"] = None if completion_stage in {None, "none"} else completion_stage
         except Exception:
             return result
         return result
@@ -211,7 +216,8 @@ class MoonrakerDevice:
 
 def _observation() -> dict[str, Any]:
     return {"ready": False, "state": "unknown", "filename": None, "job_id": None,
-            "queue_empty": False, "queue_safe": False, "service_active": True, "phase": None}
+            "queue_empty": False, "queue_safe": False, "service_active": True, "phase": None,
+            "completion_stage": None}
 
 
 # Блок 7: Чтение ограниченного updater-состояния и подтверждение точных байтов.

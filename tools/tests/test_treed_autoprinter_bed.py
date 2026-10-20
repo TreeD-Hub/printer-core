@@ -48,10 +48,11 @@ def result(frame=JPEG, count=1, confidence=0.8, **changes):
     return value
 
 
-def checker():
+def checker(vision_client=None):
     return bed.E0BedChecker(
         PRINTER_ID, "G:/models/e0.pth", "C:/Python/python.exe",
         "http://127.0.0.1:8080/webcam/?action=snapshot",
+        vision_client=vision_client,
     )
 
 
@@ -119,6 +120,16 @@ class _FakeProcess:
 
 
 class E0BedCheckerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_worker_needs_no_legacy_runner_paths(self):
+        socket_path = os.path.abspath("vision.sock")
+        instance = bed.E0BedChecker(
+            PRINTER_ID, "", "", "http://127.0.0.1:8080/?action=snapshot",
+            socket_path=socket_path,
+        )
+        self.assertEqual(instance._vision_client.socket_path, socket_path)
+        with self.assertRaises(ValueError):
+            bed.TreeDVisionClient("relative.sock")
+
     async def test_constructor_is_io_free_and_empty_candidate_is_unknown(self):
         with patch.object(bed, "_capture_jpeg", side_effect=AssertionError("camera access")), \
                 patch.object(bed.asyncio, "create_subprocess_exec", side_effect=AssertionError("process")):
@@ -178,24 +189,23 @@ class E0BedCheckerTest(unittest.IsolatedAsyncioTestCase):
                 bed._parse_snapshot_url(value)
         self.assertEqual(bed._parse_snapshot_url("http://[::1]:8080/snapshot")[1], 8080)
 
-    async def test_subprocess_timeout_kills_and_reaps_child(self):
-        process = _FakeProcess(block=True)
-        with patch.object(bed.asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)):
-            with self.assertRaises(asyncio.TimeoutError):
-                await checker()._infer(JPEG, 0.01)
-        self.assertTrue(process.killed)
-        self.assertTrue(process.reaped)
+    async def test_bed_uses_shared_vision_client_and_keeps_empty_unknown(self):
+        client = types.SimpleNamespace(infer=AsyncMock(return_value={
+            "verdict": "normal", "model_version": bed.MODEL_VERSION,
+            "boxes": [], "score": 0.9,
+        }))
+        instance = checker(client)
+        result_value = await instance._infer(JPEG, 1)
+        self.assertEqual(result_value["detail_count"], 0)
+        client.infer.assert_awaited_once_with("bed", {}, JPEG)
 
-    async def test_subprocess_cancellation_kills_and_reaps_child(self):
-        process = _FakeProcess(block=True)
-        with patch.object(bed.asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)):
-            task = asyncio.create_task(checker()._infer(JPEG, 10))
-            await process.wait_started.wait()
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await task
-        self.assertTrue(process.killed)
-        self.assertTrue(process.reaped)
+    async def test_bed_occupied_requires_box_evidence(self):
+        client = types.SimpleNamespace(infer=AsyncMock(return_value={
+            "verdict": "occupied", "model_version": bed.MODEL_VERSION,
+            "boxes": [], "score": 0.9,
+        }))
+        with self.assertRaisesRegex(bed._CheckFailure, "invalid_result"):
+            await checker(client)._infer(JPEG, 1)
 
 
 class InferenceBoundaryTest(unittest.IsolatedAsyncioTestCase):
@@ -266,15 +276,22 @@ class InferenceBoundaryTest(unittest.IsolatedAsyncioTestCase):
             Response({"Content-Type": "image/jpeg", "Age": "1"}),
             Response({"Content-Type": "text/plain"}),
             Response({"Content-Type": "image/jpeg", "Content-Length": str(bed.MAX_FRAME_BYTES + 1)}),
-            Response({"Content-Type": "image/jpeg"}),
         ]
+        responses.extend(Response({"Content-Type": "image/jpeg"}, JPEG + suffix)
+                         for suffix in (b"", b"\x00", b"\x00" * 7,
+                                        b"\x00" * 8, b"\x00\x01", b"\x00\xff\xd9\x00\x01"))
         with patch.object(bed.http.client, "HTTPConnection", Connection), \
                 patch.object(bed.http.client, "HTTPResponse", side_effect=lambda *_args, **_kwargs: responses.pop(0)):
             for expected in ("stale_frame", "invalid_frame", "frame_too_large"):
                 with self.assertRaisesRegex(bed._CheckFailure, expected):
                     bed._capture_jpeg(("127.0.0.1", 8080, "/snapshot"), bed._CaptureControl())
-            self.assertEqual(bed._capture_jpeg(("127.0.0.1", 8080, "/snapshot?x=1"),
-                                               bed._CaptureControl()), JPEG)
+            for padding in (0, 1, 7):
+                with self.subTest(padding=padding):
+                    self.assertEqual(bed._capture_jpeg(("127.0.0.1", 8080, "/snapshot?x=1"),
+                                                       bed._CaptureControl()), JPEG)
+            for suffix in ("excessive_zero_padding", "nonzero_trailer", "embedded_eoi"):
+                with self.subTest(suffix=suffix), self.assertRaisesRegex(bed._CheckFailure, "invalid_frame"):
+                    bed._capture_jpeg(("127.0.0.1", 8080, "/snapshot"), bed._CaptureControl())
         self.assertIn("_treed_capture=", connections[-1].target)
         self.assertEqual(connections[-1].headers["Cache-Control"], "no-cache, no-store, max-age=0")
         self.assertNotIn("Authorization", connections[-1].headers)
@@ -544,6 +561,64 @@ class InferenceBoundaryTest(unittest.IsolatedAsyncioTestCase):
             bed._interpret_result({"schema_version": 1, "error": "runtime_unavailable"}, "0" * 64)
         with self.assertRaisesRegex(bed._CheckFailure, "invalid_result"):
             bed._interpret_result({"schema_version": 1, "error": "private path"}, "0" * 64)
+
+
+class VisionClientTest(unittest.IsolatedAsyncioTestCase):
+    class Writer:
+        def __init__(self):
+            self.payload = b""
+
+        def write(self, payload):
+            self.payload = payload
+
+        async def drain(self):
+            return None
+
+        def close(self):
+            return None
+
+        async def wait_closed(self):
+            return None
+
+    async def _infer_with_response(self, changes=None, read_error=None):
+        writer = self.Writer()
+
+        class Reader:
+            async def readline(_self):
+                if read_error:
+                    raise read_error
+                request = json.loads(writer.payload)
+                response = {
+                    "protocol": 1, "request_id": request["request_id"],
+                    "task": request["task"], "context": request["context"],
+                    "worker_generation": "44444444-4444-4444-8444-444444444444",
+                    "model_version": bed.MODEL_VERSION, "verdict": "occupied",
+                    "score": 0.8, "threshold": 0.5, "boxes": [{"xyxy": [0, 0, 1, 1]}],
+                    "reason": None, "processing_ms": 1.5,
+                }
+                response.update(changes or {})
+                return json.dumps(response, allow_nan=True).encode() + b"\n"
+
+        async def open_connection(_path, **_kwargs):
+            return Reader(), writer
+
+        client = bed.TreeDVisionClient(os.path.abspath("vision.sock"), timeout=1)
+        with patch.object(bed.asyncio, "open_unix_connection", new=open_connection, create=True):
+            return await client.infer("bed", {"check_id": "test"}, JPEG)
+
+    async def test_client_accepts_matching_context_and_rejects_nonfinite_numbers(self):
+        response = await self._infer_with_response()
+        self.assertEqual(response["context"], {"check_id": "test"})
+        for invalid in ({"score": float("nan")}, {"threshold": float("inf")},
+                        {"processing_ms": float("nan")},
+                        {"context": {"check_id": "foreign"}}, {"request_id": "foreign"}):
+            with self.subTest(invalid=invalid), self.assertRaises(bed.VisionUnavailable):
+                await self._infer_with_response(invalid)
+
+    async def test_client_maps_bounded_line_errors_to_unavailable(self):
+        for error in (asyncio.LimitOverrunError("response too long", 1), ValueError("line too long")):
+            with self.subTest(error=type(error).__name__), self.assertRaises(bed.VisionUnavailable):
+                await self._infer_with_response(read_error=error)
 
 
 if __name__ == "__main__":

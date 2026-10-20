@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "models": {
+    "spaghetti": {
+      "version": "spaghetti_presence_v12",
+      "filename": "spaghetti_presence_v12.pth",
+      "size": 44790539,
+      "sha256": "95c6e676301c77f294250961f77e5773707a0a0d57a5b7fe7e8b6fbe54eb81e9",
+      "threshold": 0.3
+    },
+    "bed": {
+      "version": "fdm-detail-e0-20261016-8de7e8aa22e2",
+      "filename": "fdm-detail-e0-20261016-8de7e8aa22e2.pth",
+      "size": 127479855,
+      "sha256": "8de7e8aa22e20893a563c0c04d28f0019dcad9ef8d805818df6fd2ec8b10866e",
+      "threshold": 0.5191324353218079,
+      "nms": 0.8,
+      "positive_class": 0,
+      "checkpoint_class_names": ["\u0420\u0491\u0420\u00b5\u0421\u201a\u0420\u00b0\u0420\u00bb\u0421\u040a"]
+    }
+  }
+}

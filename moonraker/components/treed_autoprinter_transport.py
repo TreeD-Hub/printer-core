@@ -1,4 +1,4 @@
-"""Bounded HTTPS transport for the disabled-by-default AutoPrinter adapter.
+"""Ограниченный HTTPS-транспорт компонента AutoPrinter.
 Контур: required для синхронизации; не следует redirect и не принимает URL клиента.
 """
 

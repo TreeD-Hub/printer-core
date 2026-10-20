@@ -135,6 +135,10 @@ class AutoPrinterStore:
             CREATE TABLE IF NOT EXISTS runs (
                 binding_epoch INTEGER NOT NULL, run_id TEXT NOT NULL, payload TEXT NOT NULL,
                 position INTEGER NOT NULL, PRIMARY KEY(binding_epoch, run_id));
+            CREATE TABLE IF NOT EXISTS packages (
+                binding_epoch INTEGER NOT NULL, package_id TEXT NOT NULL, version INTEGER NOT NULL,
+                manifest_hash TEXT NOT NULL, manifest TEXT NOT NULL, created_at TEXT NOT NULL,
+                PRIMARY KEY(binding_epoch, package_id, version));
             CREATE TABLE IF NOT EXISTS commands (
                 command_id TEXT PRIMARY KEY, body_hash TEXT NOT NULL, state TEXT NOT NULL,
                 result TEXT NOT NULL, binding_epoch INTEGER NOT NULL, reported INTEGER NOT NULL DEFAULT 0);
@@ -154,6 +158,10 @@ class AutoPrinterStore:
                 UNIQUE(boot_id, event_seq));
             CREATE TABLE IF NOT EXISTS execution_receipts (
                 receipt_id TEXT PRIMARY KEY, boot_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS detection_holds (
+                hold_id TEXT PRIMARY KEY, binding_epoch INTEGER NOT NULL, reason TEXT NOT NULL,
+                context TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL,
+                released_at TEXT);
             """
         )
         defaults = {"printer_id": self.printer_id, "profile_id": profile_id, "control_epoch": "1",
@@ -312,13 +320,19 @@ class AutoPrinterStore:
             if control_changed and not changed:
                 self._set("local_pause", 1)
                 self._set("remote_pause", 0)
-                self._set("bed_epoch", int(self.execution_get_meta("bed_epoch", "0") or "0") + 1)
+                self._set("bed_epoch", int(self._get("bed_epoch") or "0") + 1)
+                self._set("offline_recovery_boot", "")
+                self._set("boot_recovery_required", "0")
+                self._set("execution_handshake_boot", "")
             if changed:
                 self._set("queue_revision", applied_queue_revision)
                 self._set("applied_queue_revision", applied_queue_revision)
                 self._set("local_pause", 1)
                 self._set("remote_pause", 0)
-                self._set("bed_epoch", int(self.execution_get_meta("bed_epoch", "0") or "0") + 1)
+                self._set("bed_epoch", int(self._get("bed_epoch") or "0") + 1)
+                self._set("offline_recovery_boot", "")
+                self._set("boot_recovery_required", "0")
+                self._set("execution_handshake_boot", "")
                 if event_boot_id is not None:
                     self._set("execution_boot_id", event_boot_id)
                     self._set("snapshot_seq", 0)
@@ -534,7 +548,7 @@ class AutoPrinterStore:
                 result = {"code": "not_paired"}
             elif command.get("control_epoch") != control:
                 result = {"code": "epoch_mismatch"}
-            elif not _not_expired(command.get("expires_at")):
+            elif kind != "enqueue_package" and not _not_expired(command.get("expires_at")):
                 result = {"code": "expired"}
             elif kind == "pause_queue":
                 self._set("local_pause", 1)
@@ -542,12 +556,12 @@ class AutoPrinterStore:
             elif kind in {"resume_queue", "start_run", "pause_current_print", "stop_after_current", "cancel_current_print", "recheck_bed"}:
                 result = {"code": "account_unlink_pending" if int(self._get("unlink_pending_epoch")) == binding
                           else "stage1_execution_disabled"}
-            elif kind in {"enqueue_series", "reorder_queue"} and isinstance(payload, dict):
+            elif kind in {"enqueue_series", "enqueue_package", "reorder_queue"} and isinstance(payload, dict):
                 if int(self._get("unlink_pending_epoch")) == binding:
                     result = {"code": "account_unlink_pending", "queue_revision": int(self._get("queue_revision"))}
                 else:
                     state, result = self._apply_queue_command(kind, command, payload, binding)
-            if kind in {"enqueue_series", "reorder_queue"}:
+            if kind in {"enqueue_series", "enqueue_package", "reorder_queue"}:
                 current = int(self._get("queue_revision"))
                 previous = payload.get("previous_queue_revision") if isinstance(payload, dict) else None
                 if state == "rejected" and (type(previous) is not int or previous != current):
@@ -558,7 +572,7 @@ class AutoPrinterStore:
             return {"command_id": command_id, "state": state, "result": result}
 
     def _apply_queue_command(self, kind: str, command: Mapping[str, Any], payload: Mapping[str, Any], binding: int):
-        if not _not_expired(command.get("expires_at")):
+        if kind != "enqueue_package" and not _not_expired(command.get("expires_at")):
             return "rejected", {"code": "expired"}
         previous, revision = payload.get("previous_queue_revision"), payload.get("queue_revision")
         if (type(previous) is not int or type(revision) is not int or revision != previous + 1
@@ -569,6 +583,8 @@ class AutoPrinterStore:
             return "uncertain", {"code": "revision_conflict", "queue_revision": current}
         if type(payload.get("binding_epoch")) is not int or payload["binding_epoch"] != binding:
             return "rejected", {"code": "epoch_mismatch", "queue_revision": current}
+        if kind == "enqueue_package":
+            return self._apply_package_command(command, payload, binding, current, revision)
         if kind == "enqueue_series":
             try:
                 asset_id = _uuid(payload.get("asset_id"))
@@ -617,8 +633,10 @@ class AutoPrinterStore:
                 self._conn.execute("INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(?,?,?,?)", (binding, run_id, _json(manifest), self._conn.execute("SELECT COALESCE(MAX(position),0)+1 FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0]))
         else:
             run_ids = payload.get("run_ids")
-            rows = self._conn.execute("SELECT r.run_id,r.position,e.state,e.start_intent FROM runs r LEFT JOIN execution_runs e ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id WHERE r.binding_epoch=? ORDER BY r.position", (binding,)).fetchall()
+            rows = self._conn.execute("SELECT r.run_id,r.position,e.state,e.start_intent,r.payload FROM runs r LEFT JOIN execution_runs e ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id WHERE r.binding_epoch=? ORDER BY r.position", (binding,)).fetchall()
             queued_rows = [r for r in rows if r[2] in (None, "queued") and not r[3]]
+            if any(json.loads(row[4]).get("package_id") is not None for row in queued_rows):
+                return "rejected", {"code": "package_immutable", "queue_revision": current}
             queued_ids = {r[0] for r in queued_rows}
             try:
                 normalized = [_uuid(x) for x in run_ids] if isinstance(run_ids, list) else None
@@ -631,6 +649,119 @@ class AutoPrinterStore:
             for position, run_id in zip(queued_positions, normalized):
                 self._conn.execute("UPDATE runs SET position=? WHERE binding_epoch=? AND run_id=?",
                                    (position, binding, run_id))
+        self._set("queue_revision", revision)
+        return "executed", {"queue_revision": revision}
+
+    def _apply_package_command(self, command: Mapping[str, Any], payload: Mapping[str, Any],
+                               binding: int, current: int, revision: int):
+        if set(payload) != {"binding_epoch", "previous_queue_revision", "queue_revision",
+                            "manifest", "manifest_hash"}:
+            return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+        manifest, digest = payload.get("manifest"), payload.get("manifest_hash")
+        try:
+            actual_hash = _manifest_hash(manifest)
+        except StoreError:
+            return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+        if (not isinstance(manifest, dict) or not isinstance(digest, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or actual_hash != digest):
+            return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+        if set(manifest) != {"package_id", "version", "printer_id", "binding_epoch", "profile_id", "policy_version", "runs"}:
+            return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+        try:
+            package_id = _uuid(manifest["package_id"])
+        except StoreError:
+            return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+        groups = manifest["runs"]
+        if (type(manifest["version"]) is not int or manifest["version"] < 1
+                or manifest["printer_id"] != self.printer_id or type(manifest["binding_epoch"]) is not int
+                or manifest["binding_epoch"] != binding or manifest["profile_id"] != self.profile_id
+                or type(manifest["policy_version"]) is not int or manifest["policy_version"] != 1
+                or not isinstance(groups, list) or not groups):
+            return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+        previous_package = self._conn.execute(
+            "SELECT version FROM packages WHERE binding_epoch=? AND package_id=? ORDER BY version DESC LIMIT 1",
+            (binding, package_id),
+        ).fetchone()
+        if previous_package:
+            if manifest["version"] != previous_package[0] + 1:
+                return "rejected", {"code": "package_version_conflict", "queue_revision": current}
+            previous_runs = self._conn.execute(
+                "SELECT e.state FROM runs r LEFT JOIN execution_runs e "
+                "ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id "
+                "WHERE r.binding_epoch=? AND json_extract(r.payload,'$.package_id')=?",
+                (binding, package_id),
+            ).fetchall()
+            if any(row[0] not in {"completed", "failed", "cancelled"} for row in previous_runs):
+                return "rejected", {"code": "package_not_quiescent", "queue_revision": current}
+        seen_series: set[str] = set()
+        seen_run_ids: set[str] = set()
+        rows: list[tuple[str, dict[str, Any]]] = []
+        for group in groups:
+            if (not isinstance(group, dict)
+                    or set(group) != {"series_id", "asset_id", "sha256", "size_bytes", "copies_per_run", "completion_profile", "run_ids"}
+                    or type(group.get("copies_per_run")) is not int
+                    or not 1 <= group["copies_per_run"] <= self.max_runs
+                    or not isinstance(group.get("sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", group["sha256"])
+                    or type(group.get("size_bytes")) is not int
+                    or not 1 <= group["size_bytes"] <= self.max_asset_bytes):
+                return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+            completion = group.get("completion_profile")
+            if (not isinstance(completion, dict) or set(completion) != {"version", "profile_id", "auto_remove"}
+                    or type(completion.get("version")) is not int or completion["version"] != 1
+                    or completion.get("profile_id") != self.profile_id or type(completion.get("auto_remove")) is not bool):
+                return "rejected", {"code": "invalid_completion_profile", "queue_revision": current}
+            try:
+                series_id, asset_id = _uuid(group["series_id"]), _uuid(group["asset_id"])
+                run_ids = [_uuid(value) for value in group["run_ids"]]
+            except (StoreError, TypeError):
+                return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+            if (not isinstance(group["run_ids"], list) or not 1 <= len(run_ids) <= self.max_runs
+                    or len(set(run_ids)) != len(run_ids) or series_id in seen_series
+                    or seen_run_ids.intersection(run_ids)):
+                return "rejected", {"code": "invalid_package_manifest", "queue_revision": current}
+            asset = self._conn.execute(
+                "SELECT sha256,size_bytes,path FROM assets WHERE binding_epoch=? AND asset_id=? AND confirmed=1",
+                (binding, asset_id),
+            ).fetchone()
+            expected_path = self._binding_dir(binding) / f"{asset_id}.gcode"
+            try:
+                if (asset is None or asset[:2] != (group["sha256"], group["size_bytes"])
+                        or Path(asset[2]) != expected_path or _is_link(expected_path)
+                        or _file_digest(expected_path) != asset[:2]):
+                    return "rejected", {"code": "asset_mismatch", "queue_revision": current}
+            except (OSError, StoreError):
+                return "rejected", {"code": "asset_mismatch", "queue_revision": current}
+            seen_series.add(series_id)
+            seen_run_ids.update(run_ids)
+            run_manifest = {"series_id": series_id, "package_id": package_id,
+                            "package_version": manifest["version"], "asset_id": asset_id,
+                            "sha256": group["sha256"], "size_bytes": group["size_bytes"],
+                            "profile_id": self.profile_id, "copies_per_run": group["copies_per_run"],
+                            "completion_profile": completion}
+            rows.extend((run_id, run_manifest) for run_id in run_ids)
+        existing = {row[0] for row in self._conn.execute(
+            "SELECT run_id FROM runs WHERE binding_epoch=?", (binding,))}
+        current_count = len(existing)
+        if (not rows or existing.intersection(seen_run_ids)
+                or current_count + len(rows) > self.max_runs):
+            return "rejected", {"code": "invalid_runs", "queue_revision": current}
+        pending_events = self._conn.execute(
+            "SELECT COUNT(*) FROM execution_events WHERE acknowledged=0").fetchone()[0]
+        if pending_events + 4 * len(rows) > 10000:
+            return "rejected", {"code": "outbox_capacity", "queue_revision": current}
+        created = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        self._conn.execute(
+            "INSERT INTO packages(binding_epoch,package_id,version,manifest_hash,manifest,created_at) VALUES(?,?,?,?,?,?)",
+            (binding, package_id, manifest["version"], digest, _json(manifest), created),
+        )
+        position = self._conn.execute(
+            "SELECT COALESCE(MAX(position),0)+1 FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0]
+        self._conn.executemany(
+            "INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(?,?,?,?)",
+            [(binding, run_id, _json(run), position + offset) for offset, (run_id, run) in enumerate(rows)],
+        )
         self._set("queue_revision", revision)
         return "executed", {"queue_revision": revision}
 
@@ -796,6 +927,8 @@ class AutoPrinterStore:
                 self._conn.execute("UPDATE execution_runs SET state='uncertain' WHERE start_intent=1 AND state NOT IN ('completed','failed','cancelled')")
                 self._set("local_pause", 1)
                 self._set("bed_epoch", int(self._get("bed_epoch")) + 1)
+                self._set("boot_recovery_required", "1")
+                self._set("offline_recovery_boot", "")
             events = [self._event_json(r) for r in self._conn.execute("SELECT event_id,boot_id,event_seq,control_epoch,event_type,occurred_at,run_id,payload FROM execution_events WHERE acknowledged=0 AND boot_id=? ORDER BY event_seq", (old,)).fetchall()] if old else []
             receipts = self._conn.execute("SELECT COUNT(*) FROM execution_receipts WHERE boot_id=?", (old,)).fetchone()[0] if old else 0
             if old and old != boot_id and (events or receipts):
@@ -915,6 +1048,22 @@ class AutoPrinterStore:
                 raise StoreError("asset_integrity_error")
             return path
 
+    def execution_run_is_accepted_package(self, run_id: str) -> bool:
+        run_id = _uuid(run_id)
+        with self._lock:
+            binding = int(self._get("binding_epoch"))
+            row = self._conn.execute("SELECT payload FROM runs WHERE binding_epoch=? AND run_id=?", (binding, run_id)).fetchone()
+            if row is None:
+                return False
+            payload = json.loads(row[0])
+            package_id, version = payload.get("package_id"), payload.get("package_version")
+            if not isinstance(package_id, str) or type(version) is not int:
+                return False
+            return self._conn.execute(
+                "SELECT 1 FROM packages WHERE binding_epoch=? AND package_id=? AND version=? LIMIT 1",
+                (binding, package_id, version),
+            ).fetchone() is not None
+
     def execution_set_pause(self, *, local: bool | None = None, remote: bool | None = None) -> None:
         with self._transaction():
             pending = (int(self._get("unlink_pending_epoch")) == int(self._get("binding_epoch"))
@@ -923,6 +1072,109 @@ class AutoPrinterStore:
                 self._set("local_pause", int(local or pending))
             if remote is not None:
                 self._set("remote_pause", int(remote or pending))
+
+    def execution_hold_for_detection(self, reason: str, context: Mapping[str, Any], occurred_at: str) -> Dict[str, Any]:
+        if (not isinstance(reason, str) or not reason or len(reason) > 128
+                or not isinstance(context, Mapping)):
+            raise StoreError("invalid_detection_hold")
+        try:
+            encoded = json.dumps(dict(context), sort_keys=True, separators=(",", ":"),
+                                 ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError, UnicodeError):
+            raise StoreError("invalid_detection_hold") from None
+        if len(encoded.encode("utf-8")) > 16384:
+            raise StoreError("invalid_detection_hold")
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            existing = self._conn.execute(
+                "SELECT hold_id,created_at FROM detection_holds "
+                "WHERE binding_epoch=? AND reason=? AND context=? AND state='active' ORDER BY created_at LIMIT 1",
+                (binding, reason, encoded),
+            ).fetchone()
+            if existing:
+                return {"hold_id": existing[0], "reason": reason, "context": dict(context),
+                        "state": "active", "created_at": existing[1]}
+            hold_id = str(uuid.uuid4())
+            self._conn.execute(
+                "INSERT INTO detection_holds(hold_id,binding_epoch,reason,context,state,created_at) "
+                "VALUES(?,?,?,?,'active',?)", (hold_id, binding, reason, encoded, occurred_at),
+            )
+            self._set("local_pause", 1)
+            return {"hold_id": hold_id, "reason": reason, "context": dict(context),
+                    "state": "active", "created_at": occurred_at}
+
+    def execution_active_holds(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            binding = int(self._get("binding_epoch"))
+            rows = self._conn.execute(
+                "SELECT hold_id,reason,context,state,created_at FROM detection_holds "
+                "WHERE binding_epoch=? AND state='active' ORDER BY created_at,hold_id", (binding,),
+            ).fetchall()
+            return [{"hold_id": row[0], "reason": row[1], "context": json.loads(row[2]),
+                     "state": row[3], "created_at": row[4]} for row in rows]
+
+    def execution_cancel_package(self, package_id: str, action_id: str,
+                                 occurred_at: str) -> Dict[str, Any]:
+        package_id, action_id = _uuid(package_id), _uuid(action_id)
+        body_hash = hashlib.sha256(_json({"type": "cancel_package", "package_id": package_id}).encode("utf-8")).hexdigest()
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            old = self._conn.execute(
+                "SELECT body_hash,state,result,binding_epoch FROM commands WHERE command_id=?", (action_id,),
+            ).fetchone()
+            if old:
+                if old[3] != binding:
+                    raise StoreError("command_unavailable")
+                if old[0] != body_hash:
+                    raise StoreError("command_conflict")
+                return {"command_id": action_id, "state": old[1], "result": json.loads(old[2])}
+            package = self._conn.execute(
+                "SELECT version FROM packages WHERE binding_epoch=? AND package_id=? ORDER BY version DESC LIMIT 1",
+                (binding, package_id),
+            ).fetchone()
+            if self._get("binding_state") != "paired" or package is None:
+                raise StoreError("package_not_found")
+            queued = self._conn.execute(
+                "SELECT r.run_id FROM runs r LEFT JOIN execution_runs e "
+                "ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id "
+                "WHERE r.binding_epoch=? AND json_extract(r.payload,'$.package_id')=? "
+                "AND json_extract(r.payload,'$.package_version')=? "
+                "AND COALESCE(e.state,'queued')='queued' AND COALESCE(e.start_intent,0)=0 "
+                "ORDER BY r.position", (binding, package_id, package[0]),
+            ).fetchall()
+            pending = self._conn.execute(
+                "SELECT COUNT(*) FROM execution_events WHERE acknowledged=0",
+            ).fetchone()[0]
+            if pending + len(queued) > 10000:
+                raise StoreError("outbox_full")
+            result = {"cancelled_run_ids": [row[0] for row in queued], "scope": "remaining_queued_runs"}
+            self._conn.execute(
+                "INSERT INTO commands(command_id,body_hash,state,result,binding_epoch,reported) VALUES(?,?,'executed',?,?,1)",
+                (action_id, body_hash, _json(result), binding),
+            )
+            for (run_id,) in queued:
+                self._conn.execute(
+                    "INSERT INTO execution_runs(binding_epoch,run_id,state,error_code) VALUES(?,?,'cancelled','package_cancelled') "
+                    "ON CONFLICT(binding_epoch,run_id) DO UPDATE SET state='cancelled',error_code='package_cancelled' "
+                    "WHERE execution_runs.state='queued' AND execution_runs.start_intent=0",
+                    (binding, run_id),
+                )
+                self._insert_event(self._get("execution_boot_id"), int(self._get("control_epoch")),
+                                   "run_state", occurred_at, run_id,
+                                   {"state": "cancelled", "error_code": "package_cancelled",
+                                    "package_id": package_id, "package_version": package[0]})
+            return {"command_id": action_id, "state": "executed", "result": result}
+
+    def execution_release_holds(self, occurred_at: str) -> None:
+        with self._transaction():
+            binding = int(self._get("binding_epoch"))
+            self._conn.execute(
+                "UPDATE detection_holds SET state='released',released_at=? "
+                "WHERE binding_epoch=? AND state='active'", (occurred_at, binding),
+            )
+            pending = (int(self._get("unlink_pending_epoch")) == binding
+                       and self._get("binding_state") in {"paired", "revoked"})
+            self._set("local_pause", int(pending))
 
     def execution_get_meta(self, key: str, default: str | None = None) -> str | None:
         with self._lock:
@@ -1008,6 +1260,28 @@ class AutoPrinterStore:
                 queue.append({"run_id": run_id, "position": position,
                               "state": state or "queued", "series_id": manifest.get("series_id"),
                               "copies_per_run": manifest.get("copies_per_run")})
+            active_package = None
+            package_row = self._conn.execute(
+                "SELECT p.package_id,p.version,p.manifest_hash,COUNT(r.run_id),"
+                "SUM(CASE WHEN COALESCE(e.state,'queued') NOT IN ('completed','failed','cancelled') THEN 1 ELSE 0 END),"
+                "MAX(CASE WHEN COALESCE(e.state,'queued') NOT IN ('queued','completed','failed','cancelled') THEN 1 ELSE 0 END) "
+                "FROM packages p LEFT JOIN runs r ON r.binding_epoch=p.binding_epoch "
+                "AND json_extract(r.payload,'$.package_id')=p.package_id "
+                "AND json_extract(r.payload,'$.package_version')=p.version "
+                "LEFT JOIN execution_runs e ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id "
+                "WHERE p.binding_epoch=? GROUP BY p.package_id,p.version,p.manifest_hash "
+                "ORDER BY (SUM(CASE WHEN COALESCE(e.state,'queued') NOT IN ('completed','failed','cancelled') "
+                "THEN 1 ELSE 0 END)>0) DESC, "
+                "MIN(CASE WHEN COALESCE(e.state,'queued') NOT IN ('completed','failed','cancelled') "
+                "THEN r.position END) ASC, MAX(p.rowid) DESC LIMIT 1", (binding,),
+            ).fetchone() if paired else None
+            if package_row:
+                run_count, remaining, active = int(package_row[3]), int(package_row[4] or 0), bool(package_row[5])
+                active_package = {"package_id": package_row[0], "version": package_row[1],
+                                  "manifest_hash": package_row[2],
+                                  "state": "completed" if remaining == 0 else "running" if active else "queued",
+                                  "run_count": run_count, "remaining_count": remaining}
+            holds = self.execution_active_holds()
             result = {"binding_state": self._get("binding_state"), "binding_epoch": binding,
                     "queue_revision": int(self._get("queue_revision")), "asset_count": self._conn.execute("SELECT COUNT(*) FROM assets WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
                     "run_count": self._conn.execute("SELECT COUNT(*) FROM runs WHERE binding_epoch=?", (binding,)).fetchone()[0] if paired else 0,
@@ -1018,7 +1292,11 @@ class AutoPrinterStore:
                     "owner_profile": json.loads(self._get("owner_profile")) if paired else None,
                     "pairing": self.pairing(),
                     "unlink_pending": pending,
-                    "local_pause": True, "remote_pause": False, "physical_execution_enabled": False}
+                    "local_pause": bool(int(self._get("local_pause"))),
+                    "remote_pause": self.execution_get_meta("remote_pause", "0") == "1",
+                    "active_package": active_package, "hold": holds[0] if holds else None,
+                    "recovery_required": self.execution_get_meta("protocol_recovery_required", "0") == "1",
+                    "physical_execution_enabled": False}
             if paired:
                 page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
                 allocated = self._conn.execute("PRAGMA page_count").fetchone()[0] * page_size
@@ -1053,6 +1331,27 @@ def _json(value: Any) -> str:
         return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     except (TypeError, ValueError):
         raise StoreError("invalid_payload")
+
+
+def _manifest_hash(value: Any) -> str:
+    def valid(item: Any) -> bool:
+        if type(item) is float:
+            return False
+        if isinstance(item, dict):
+            return all(isinstance(key, str) and key.isascii() and valid(child)
+                       for key, child in item.items())
+        if isinstance(item, list):
+            return all(valid(child) for child in item)
+        return item is None or type(item) in {str, int, bool}
+
+    if not valid(value):
+        raise StoreError("invalid_package_manifest")
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        raise StoreError("invalid_package_manifest") from None
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _not_expired(value: Any) -> bool:
