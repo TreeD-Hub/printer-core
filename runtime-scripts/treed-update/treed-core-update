@@ -12,6 +12,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import signal
 import stat
 import subprocess
 import sys
@@ -24,8 +25,10 @@ from contextlib import contextmanager
 
 KIND = "treed-core-runtime"
 ASSET = "treed-core-runtime.zip"
+SOURCE_ASSET = "treed-mainshellos-source.zip"
 MARKER = b"#*# <---------------------- SAVE_CONFIG ---------------------->"
-SBIN = {"treed-core-update", "treed-update-service", "treed-update-apply", "treed-ui"}
+SBIN = {"treed-core-update", "treed-update-service", "treed-update-apply", "treed-ui",
+        "treed-loading-screen"}
 CAMERA = {"cam_env.sh", "session_start.sh", "session_stop.sh", "snapshot.sh", "stream_detect.py"}
 VISION = {"service.py", "models.json"}
 PRESERVED = {"local_overrides.cfg", "treed_variables.cfg", "filament_motion_runtime.cfg"}
@@ -120,7 +123,23 @@ def package_manifest(repo):
             raise ValueError(f"Отсутствует закреплённый SHA {component}")
         requirements[component.lower()] = match[1]
     return {"kind": KIND, "schema": 1, "version": version, "tag": f"v{version}",
-            "sha": git_head(repo), "requires": requirements, "files": []}
+            "sha": git_head(repo), "requires": requirements,
+            "provisioning": {"schema": 1, "revision": provisioning_revision(repo)}, "files": []}
+
+
+def provisioning_revision(repo):
+    digest = hashlib.sha256()
+    paths = (sorted(path for path in (repo / "loader").rglob("*.sh"))
+             + [repo / "runtime-versions.env", repo / "runtime-scripts/treed-vision/models.json"])
+    for path in paths:
+        if path.is_symlink():
+            raise ValueError(f"Provisioning source is a symlink: {path}")
+        if path.is_file():
+            relative = path.relative_to(repo).as_posix().encode("utf-8")
+            data = path.read_bytes()
+            digest.update(len(relative).to_bytes(4, "big")); digest.update(relative)
+            digest.update(len(data).to_bytes(8, "big")); digest.update(data)
+    return digest.hexdigest()
 
 
 def build(repo, archive):
@@ -132,6 +151,19 @@ def build(repo, archive):
             manifest["files"].append({"path": key, "sha256": sha(data)})
             bundle.writestr("payload/" + key, data)
         bundle.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+
+
+def build_source(repo, archive):
+    repo = repo.resolve()
+    paths = subprocess.check_output(["git", "-C", str(repo), "ls-files", "-z"], timeout=10).split(b"\0")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for raw in sorted(path for path in paths if path):
+            relative = PurePosixPath(raw.decode("utf-8"))
+            path = repo.joinpath(*relative.parts)
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"Source package содержит ссылку или отсутствующий файл: {relative}")
+            bundle.writestr(relative.as_posix(), path.read_bytes())
 
 
 # Блок 2: Root-owned настройки; архив не может назначать произвольные пути.
@@ -393,7 +425,7 @@ def merge_local_section(default_text, previous_text, name):
 
 
 # Блок 3: Release download, валидация архива и совместимости с текущим стеком.
-def download(tag, archive, env):
+def download(tag, archive, env, asset_name=ASSET):
     api = env.get("TREED_CORE_RELEASE_API_URL", "https://api.github.com/repos/TreeD-Hub/printer-core/releases")
     if not api.startswith("https://api.github.com/repos/"):
         raise ValueError("Core release API должен быть GitHub HTTPS")
@@ -403,23 +435,23 @@ def download(tag, archive, env):
         release = json.load(response)
     if release.get("tag_name") != tag or release.get("draft") or release.get("prerelease"):
         raise ValueError("Выпуск core не является опубликованным стабильным релизом")
-    asset = next((row for row in release.get("assets", []) if row.get("name") == ASSET), {})
+    asset = next((row for row in release.get("assets", []) if row.get("name") == asset_name), {})
     digest = asset.get("digest", "")
     url = asset.get("browser_download_url", "")
     if (not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
             or not url.startswith("https://github.com/")):
-        raise ValueError("Отсутствует core пакет с SHA-256 GitHub")
+        raise ValueError(f"Отсутствует пакет {asset_name} с SHA-256 GitHub")
     with urllib.request.urlopen(url, timeout=30) as response, archive.open("wb") as output:
         size = 0
         checksum = hashlib.sha256()
         while block := response.read(65536):
             size += len(block)
             if size > MAX_PACKAGE:
-                raise ValueError("Core пакет превышает допустимый размер")
+                raise ValueError(f"Пакет {asset_name} превышает допустимый размер")
             checksum.update(block)
             output.write(block)
     if checksum.hexdigest() != digest.removeprefix("sha256:"):
-        raise ValueError("SHA-256 core пакета не совпадает с GitHub")
+        raise ValueError(f"SHA-256 {asset_name} не совпадает с GitHub")
 
 
 def load_package(archive, tag):
@@ -460,6 +492,56 @@ def load_package(archive, tag):
         return manifest, payload
 
 
+def extract_source(archive, directory, manifest, payload):
+    provisioning = manifest.get("provisioning")
+    if not isinstance(provisioning, dict) or provisioning.get("schema") != 1 or not re.fullmatch(
+            r"[0-9a-f]{64}", str(provisioning.get("revision", ""))):
+        raise ValueError("В target manifest отсутствует корректная provisioning revision")
+    with zipfile.ZipFile(archive) as bundle:
+        infos = bundle.infolist()
+        names = [row.filename for row in infos]
+        if (len(names) != len(set(names)) or len(names) > 4096
+                or sum(row.file_size for row in infos) > MAX_CONTENT
+                or any(stat.S_ISLNK(row.external_attr >> 16) for row in infos)):
+            raise ValueError("Повреждён или небезопасен source package")
+        for row in infos:
+            name = row.filename
+            path = PurePosixPath(name)
+            if (not name or path.as_posix() != name or path.is_absolute() or "\\" in name
+                    or ".." in path.parts or name.startswith("/")):
+                raise ValueError("Недопустимый путь в source package")
+            if row.is_dir():
+                continue
+            target = directory.joinpath(*path.parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(bundle.read(row))
+    if not (directory / "loader/loader.sh").is_file():
+        raise ValueError("Source package не содержит entrypoint loader")
+    if (directory / "VERSION").read_text(encoding="utf-8").strip() != manifest["version"]:
+        raise ValueError("VERSION source package не совпадает с runtime manifest")
+    source_manifest = package_manifest_for_source(directory, manifest)
+    if source_manifest["provisioning"]["revision"] != provisioning["revision"]:
+        raise ValueError("Provisioning revision source package не совпадает с target manifest")
+    source_files = sources(directory)
+    for key, data in payload.items():
+        source = source_files.get(key)
+        if source is None or source.read_bytes() != data:
+            raise ValueError(f"Source package не совпадает с target payload: {key}")
+    return directory
+
+
+def package_manifest_for_source(repo, target_manifest):
+    runtime = (repo / "runtime-versions.env").read_text(encoding="utf-8")
+    requirements = {}
+    for component in ("KLIPPER", "MOONRAKER"):
+        match = re.search(rf'^TREED_{component}_REF="([0-9a-f]{{40}})"$', runtime, re.M)
+        if not match or match[1] != target_manifest["requires"].get(component.lower()):
+            raise ValueError(f"Source package pins {component} не совпадают с target manifest")
+        requirements[component.lower()] = match[1]
+    return {"provisioning": {"schema": 1, "revision": provisioning_revision(repo)},
+            "requires": requirements}
+
+
 def check_compatibility(manifest, env):
     locations = roots(env)
     for name, repo in (("klipper", locations["klipper"].parents[1]),
@@ -467,10 +549,44 @@ def check_compatibility(manifest, env):
         if git_head(repo) != manifest["requires"].get(name):
             raise ValueError(f"Пакет требует другую версию {name}; обновление зависимостей выполняется отдельно")
         dirty = subprocess.check_output(["git", "-c", f"safe.directory={repo.resolve().as_posix()}",
-                                        "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+                                        "-C", str(repo), "status", "--porcelain"],
                                         text=True, timeout=10).strip()
         if dirty:
             raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
+
+
+def check_upstream_clean(locations):
+    for name, repo in (("klipper", locations["klipper"].parents[1]),
+                       ("moonraker", locations["moonraker"].parents[1])):
+        dirty = subprocess.check_output(["git", "-c", f"safe.directory={repo.resolve().as_posix()}",
+                                        "-C", str(repo), "status", "--porcelain"],
+                                        text=True, timeout=10).strip()
+        if dirty:
+            raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
+
+
+def needs_provisioning(target, installed, env):
+    requirements = target.get("requires")
+    provision = target.get("provisioning")
+    if not isinstance(requirements, dict) or any(
+            not re.fullmatch(r"[0-9a-f]{40}", str(requirements.get(name, "")))
+            for name in ("klipper", "moonraker")):
+        raise ValueError("Target manifest не содержит закреплённые upstream SHA")
+    if not isinstance(provision, dict) or provision.get("schema") != 1 or not re.fullmatch(
+            r"[0-9a-f]{64}", str(provision.get("revision", ""))):
+        raise ValueError("Target manifest не содержит корректный provisioning revision")
+    if not isinstance(installed, dict) or installed.get("kind") != KIND or installed.get("schema") != 1:
+        raise ValueError("Установленный runtime baseline повреждён")
+    if not installed.get("provisioning") or installed["provisioning"] != provision:
+        return True
+    locations = roots(env)
+    if not vision_units_installed():
+        return True
+    for name, repo in (("klipper", locations["klipper"].parents[1]),
+                       ("moonraker", locations["moonraker"].parents[1])):
+        if git_head(repo) != requirements[name]:
+            return True
+    return False
 
 
 def phase(name, message):
@@ -563,6 +679,50 @@ def manifest_path(env):
 def journal_path(env, operation):
     uuid.UUID(operation)
     return Path(env.get("TREED_CORE_STATE_DIR", "/var/lib/treed-update/core")) / operation / "journal.json"
+
+
+def process_group_exists(group_id):
+    try:
+        os.killpg(group_id, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def terminate_process_group(process, grace=5):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline and process_group_exists(process.pid):
+        time.sleep(0.05)
+    if process_group_exists(process.pid):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.wait()
+
+
+def run_managed_loader(source, child_env, log_path, timeout=1500):
+    with log_path.open("xb") as log:
+        os.chmod(log_path, 0o600)
+        try:
+            process = subprocess.Popen(["bash", "loader/loader.sh"], cwd=source, env=child_env,
+                                       stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        except Exception:
+            log.flush()
+            os.fsync(log.fileno())
+            raise
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            terminate_process_group(process)
+            code = 124
+        log.flush()
+        os.fsync(log.fileno())
+    return code
 
 
 def baseline(repo, env):
@@ -697,6 +857,16 @@ def recover(env, operation):
                 "message": "Обновление core прервано до изменения файлов."}
     if transaction.get("schema") != 1:
         raise ValueError("Неизвестный journal core")
+    if transaction.get("provisioningStarted") or transaction.get("stage") in {
+            "provisioning", "provisioning_failed", "provisioned"}:
+        if transaction.get("stage") == "committed":
+            installed = read_json(manifest_path(env))
+            expected = read_json(journal.parent / "manifest.new.json")
+            if installed == expected and wait_ready(expected):
+                return {"status": "applied", "resultCode": "core_updated_recovered",
+                        "message": "Готовность установленного TreeD Core после provisioning подтверждена."}
+        return {"status": "error", "resultCode": "provisioning_interrupted",
+                "message": "Provisioning прерван; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
     if transaction["stage"] == "committed":
         installed = read_json(manifest_path(env))
         expected = read_json(journal.parent / "manifest.new.json")
@@ -728,9 +898,22 @@ def apply(tag, operation, env, reset_configs=None):
         archive = Path(temp) / ASSET
         download(tag, archive, env)
         manifest, payload = load_package(archive, tag)
-        check_compatibility(manifest, env)
+        previous = read_json(manifest_path(env))
+        provision = "provisioning" in manifest
+        if provision:
+            check_upstream_clean(roots(env))
+            provision = needs_provisioning(manifest, previous, env)
+            if provision:
+                source_archive = journal.parent / SOURCE_ASSET
+                journal.parent.mkdir(parents=True, exist_ok=True)
+                download(tag, source_archive, env, SOURCE_ASSET)
+                extract_source(source_archive, journal.parent / "source", manifest, payload)
+            else:
+                check_compatibility(manifest, env)
+        else:
+            check_compatibility(manifest, env)
         uid, gid = owner(env)
-        if not vision_units_installed():
+        if not provision and not vision_units_installed():
             raise ValueError("Локальный vision runtime ещё не установлен; сначала запустите loader")
         if not idle():
             raise ValueError("Core update требует готового принтера без активной печати или паузы")
@@ -757,8 +940,38 @@ def apply(tag, operation, env, reset_configs=None):
                 executable = system or row["path"].startswith("camera/") and row["path"].endswith(".sh")
                 write_file(path, data, 0o755 if executable else 0o644, 0 if system else uid, 0 if system else gid)
         clear_bytecode(transaction["entries"], roots(env))
+        if provision:
+            transaction["stage"] = "provisioning"
+            transaction["provisioningStarted"] = True
+            write_json(journal, transaction)
+            phase("installing", "Обновляем зависимости и службы через loader, сохраняя настройки устройства.")
+            child_env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "USER", "LOGNAME") if key in os.environ}
+            locations = roots(env)
+            child_env.update({"PI_USER": env["TREED_UPDATE_PI_USER"], "PI_HOME": env["TREED_UPDATE_PI_HOME"],
+                              "TREED_UPDATE_MANAGED": "1", "TREED_UPDATE_MANAGED_LOADER": "1",
+                              "TREED_UPDATE_OPERATION_ID": operation, "TREED_DEPLOY_MODE": "preserve",
+                              "TREED_SHELL_INSTALL": "0",
+                              "TREED_KLIPPER_SRC_DIR": str(locations["klipper"].parents[1]),
+                              "TREED_MOONRAKER_SRC_DIR": str(locations["moonraker"].parents[1])})
+            source = journal.parent / "source"
+            result = run_managed_loader(source, child_env, journal.parent / "loader.log")
+            if result:
+                transaction["stage"] = "provisioning_failed"
+                write_json(journal, transaction)
+                return {"status": "error", "resultCode": "provisioning_failed",
+                        "message": "Loader не завершил provisioning; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
+            transaction["stage"] = "provisioned"
+            write_json(journal, transaction)
+            check_compatibility(manifest, env)
+            if not vision_units_installed():
+                raise RuntimeError("Loader завершился без обязательных runtime units")
+            for row in current["files"]:
+                data, _info = read_file(destination(row["path"], roots(env)))
+                if data is None or content_hash(row["path"], data) != row["runtimeSha256"]:
+                    raise RuntimeError(f"После loader runtime файл отличается от проверенного target: {row['path']}")
         phase("restarting", "Запускаем Klipper и Moonraker.")
-        services("start")
+        if not provision:
+            services("start")
         phase("verifying", "Проверяем готовность Klipper и загрузку компонентов Moonraker.")
         if not wait_ready(manifest):
             raise RuntimeError("Новая версия TreeD Core не прошла readiness")
@@ -768,13 +981,23 @@ def apply(tag, operation, env, reset_configs=None):
         return {"status": "applied", "resultCode": "core_updated", "message": "Обновление TreeD Core завершено."}
     except Exception as error:
         print(f"Core update failed: {error}", file=sys.stderr)
-        return rollback(env, journal, read_json(journal))
+        transaction = read_json(journal)
+        if transaction and (transaction.get("provisioningStarted") or transaction.get("stage") in {
+                "provisioning", "provisioning_failed", "provisioned"}):
+            transaction["stage"] = "provisioning_failed"
+            write_json(journal, transaction)
+            return {"status": "error", "resultCode": "provisioning_failed",
+                    "message": "Provisioning не подтверждён; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
+        return rollback(env, journal, transaction)
 
 
 # Блок 5: CLI build не требует root; device-команды запускаются worker или loader.
 def main(argv):
     if len(argv) == 4 and argv[1] == "build":
         build(Path(argv[2]).resolve(), Path(argv[3]).resolve())
+        return 0
+    if len(argv) == 4 and argv[1] == "build-source":
+        build_source(Path(argv[2]).resolve(), Path(argv[3]).resolve())
         return 0
     if len(argv) == 2 and argv[1] == "inspect":
         print(json.dumps({"configConflicts": config_conflicts(settings()), "supportsConfigReset": True}, ensure_ascii=False))
@@ -802,7 +1025,7 @@ def main(argv):
     elif len(argv) == 3 and argv[1] == "recover":
         result = recover(env, argv[2])
     else:
-        raise ValueError("usage: treed-core-update build repo zip | inspect | baseline repo | apply tag operationId | recover operationId")
+        raise ValueError("usage: treed-core-update build repo zip | build-source repo zip | inspect | baseline repo | apply tag operationId | recover operationId")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "applied" or argv[1] == "recover" and result["status"] == "rolled_back" else 1
 

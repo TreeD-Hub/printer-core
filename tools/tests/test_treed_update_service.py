@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVICE_PATH = ROOT / "runtime-scripts/treed-update/treed-update-service"
 service = types.ModuleType("treed_update_service")
 sys.modules[service.__name__] = service
+service.__file__ = str(SERVICE_PATH)
 exec(compile(SERVICE_PATH.read_text(encoding="utf-8"), str(SERVICE_PATH), "exec"), service.__dict__)
 
 
@@ -109,6 +110,12 @@ class UpdateServiceTests(unittest.TestCase):
         service.fcntl = types.SimpleNamespace(LOCK_EX=1, LOCK_NB=2, LOCK_UN=4,
                                                flock=lambda *_args: None)
         self.root = root
+        fchmod = patch.object(service.os, "fchmod", lambda *_args: None, create=True)
+        fchmod.start()
+        self.addCleanup(fchmod.stop)
+        self.loading_screen = patch.object(service, "loading_screen")
+        self.loading_screen.start()
+        self.addCleanup(self.loading_screen.stop)
 
     def test_submit_is_idempotent_and_does_not_replace_active_operation(self):
         command = ["11111111-1111-4111-8111-111111111111", "printer-ui", "ui-main-123-1"]
@@ -367,7 +374,8 @@ class UpdateServiceTests(unittest.TestCase):
         selection = [{"path": key, "sha256": "a" * 64} for key in (
             "config/profiles/treed_v2_corexy_v1/service_fans.cfg", "config/moonraker/base/00-core.conf",
             "config/moonraker.conf", "klipper/treed_driver_mode.py", "moonraker/treed_update.py",
-            "camera/stream_detect.py", "sbin/treed-core-update")]
+            "camera/stream_detect.py", "vision/service.py", "vision/models.json", "sbin/treed-core-update",
+            "sbin/treed-loading-screen")]
         request = "11111111-1111-4111-8111-111111111111"
         with patch.object(service.os, "geteuid", return_value=0, create=True), \
              patch.object(service, "acquire", return_value=FakeLock()), \
@@ -379,12 +387,42 @@ class UpdateServiceTests(unittest.TestCase):
              patch.object(service, "acquire") as acquire:
             for invalid in ([{"path": "config/../printer.cfg", "sha256": "a" * 64}],
                             [{"path": "camera/unknown.py", "sha256": "a" * 64}],
+                            [{"path": "vision/unknown.py", "sha256": "a" * 64}],
                             [{"path": "/etc/shadow", "sha256": "a" * 64}], selection * 2, False):
                 with self.assertRaises(ValueError):
                     service.submit(request, "printer-core", "v0.2.0", "", json.dumps(invalid))
             with self.assertRaises(ValueError):
                 service.submit(request, "printer-ui", "ui-main-123-1", "", json.dumps(selection))
             acquire.assert_not_called()
+
+    def test_worker_starts_splash_after_idle_check_and_stops_before_unlock(self):
+        service.write_state({"operationId": "op", "requestId": "request", "targetId": "printer-ui",
+                             "targetTag": "ui-main-123-1", "status": "queued", "busy": True})
+        events = []
+        class OrderedLock(FakeLock):
+            def close(self):
+                events.append("unlock")
+        service.fcntl.flock = lambda *_args: None
+        self.loading_screen.stop()
+
+        def mocked_run(command, **_kwargs):
+            if len(command) == 3 and Path(command[1]) == service.LOADING_SCREEN:
+                events.append("splash:" + command[2])
+            else:
+                events.append("apply")
+            return types.SimpleNamespace(returncode=0)
+
+        with (patch.object(service.os, "geteuid", return_value=0, create=True),
+              patch.object(service, "acquire", return_value=OrderedLock()),
+              patch.object(service.os, "fchmod", lambda *_args: None, create=True),
+              patch.object(service, "printer_is_idle", side_effect=lambda: events.append("idle") or True),
+              patch.object(service, "loading_screen", wraps=service.loading_screen),
+              patch.object(service.subprocess, "run", side_effect=mocked_run)):
+            self.assertEqual(service.run_worker(), 0)
+        self.assertLess(events.index("idle"), events.index("splash:start"))
+        self.assertLess(events.index("splash:start"), events.index("apply"))
+        self.assertLess(events.index("apply"), events.index("splash:stop"))
+        self.assertLess(events.index("splash:stop"), events.index("unlock"))
 
 
 if __name__ == "__main__":

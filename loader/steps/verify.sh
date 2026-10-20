@@ -1173,19 +1173,29 @@ check_required_service_active "klipper.service"
 check_required_service_active "moonraker.service"
 check_required_service_active "nginx.service"
 check_required_service_active "${CAN_UNIT}" "running exited"
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+  check_required_service_active "treed-vision.service"
+  check_required_service_active "treed-detection.service"
+fi
 
 if [ -f "${TREED_MAINSAIL_WEB_PATH}/release_info.json" ]; then
   pass "Mainsail web root release_info present (${TREED_MAINSAIL_WEB_PATH}/release_info.json)"
 else
   failf "Mainsail web root release_info present (${TREED_MAINSAIL_WEB_PATH}/release_info.json)"
 fi
-mainsail_manifest_version_check
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+  log_info "VERIFY Mainsail exact version check skipped (managed update leaves UI unchanged)"
+else
+  mainsail_manifest_version_check
+fi
 
 runtime_repo_check "Klipper" "${KLIPPER_RUNTIME_DIR}" "${TREED_KLIPPER_REF}" "${TREED_KLIPPER_REPO}" "${TREED_KLIPPER_BRANCH}"
 runtime_repo_check "Moonraker" "${MOONRAKER_RUNTIME_DIR}" "${TREED_MOONRAKER_REF}" "${TREED_MOONRAKER_REPO}" "${TREED_MOONRAKER_BRANCH}"
-runtime_repo_check "KlipperScreen" "${TREED_KLIPPERSCREEN_HOME}" "${TREED_KLIPPERSCREEN_REF}" "${TREED_KLIPPERSCREEN_REPO}" "${TREED_KLIPPERSCREEN_PRIMARY_BRANCH}"
-if [ "${TREED_CROWSNEST_INSTALL:-1}" = "1" ]; then
-  runtime_repo_check "Crowsnest" "${CROWSNEST_RUNTIME_DIR}" "${TREED_CROWSNEST_REF}" "${TREED_CROWSNEST_REPO}" "${TREED_CROWSNEST_BRANCH}"
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
+  runtime_repo_check "KlipperScreen" "${TREED_KLIPPERSCREEN_HOME}" "${TREED_KLIPPERSCREEN_REF}" "${TREED_KLIPPERSCREEN_REPO}" "${TREED_KLIPPERSCREEN_PRIMARY_BRANCH}"
+  if [ "${TREED_CROWSNEST_INSTALL:-1}" = "1" ]; then
+    runtime_repo_check "Crowsnest" "${CROWSNEST_RUNTIME_DIR}" "${TREED_CROWSNEST_REF}" "${TREED_CROWSNEST_REPO}" "${TREED_CROWSNEST_BRANCH}"
+  fi
 fi
 
 if [ -f "${TREED_MAINSAIL_WEB_PATH}/index.html" ]; then
@@ -1434,7 +1444,9 @@ print_runtime_summary
 
 if [ "${fail}" -eq 0 ]; then
   # Блок 13.1: Версия и ownership baseline фиксируются после успешного verify.
-  if [ "${TREED_ALLOW_HARDWARE_NOT_READY:-0}" = "0" ]; then
+  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+    log_info "verify: updater will record the managed runtime manifest after verification"
+  elif [ "${TREED_ALLOW_HARDWARE_NOT_READY:-0}" = "0" ]; then
     /usr/local/sbin/treed-core-update baseline "${REPO_DIR}"
   else
     log_warn "verify: core update baseline skipped without hardware readiness"

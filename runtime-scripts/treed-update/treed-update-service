@@ -31,6 +31,7 @@ LOG = Path(os.environ.get("TREED_UPDATE_LOG_FILE", "/var/log/treed-update/worker
 APPLY = os.environ.get("TREED_UPDATE_APPLY", "/usr/local/sbin/treed-update-apply")
 UNIT = os.environ.get("TREED_UPDATE_UNIT", "treed-update.service")
 CORE_APPLY = os.environ.get("TREED_CORE_UPDATE_COMMAND", "/usr/local/sbin/treed-core-update")
+LOADING_SCREEN = Path(__file__).with_name("treed-loading-screen")
 TARGET_RE = {
     "printer-ui": re.compile(r"^ui-main-[0-9]+-[0-9]+$"),
     "printer-core": re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$"),
@@ -131,7 +132,8 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
                     r"profiles/treed_v2_corexy_v1/[a-zA-Z0-9_-]+\.cfg|moonraker/base/[a-zA-Z0-9_-]+\.conf)|"
                     r"(?:klipper|moonraker)/treed_[a-z0-9_]+\.py|"
                     r"camera/(?:cam_env\.sh|session_start\.sh|session_stop\.sh|snapshot\.sh|stream_detect\.py)|"
-                    r"sbin/(?:treed-core-update|treed-update-service|treed-update-apply|treed-ui))", row["path"])
+                    r"vision/(?:service\.py|models\.json)|"
+                    r"sbin/(?:treed-core-update|treed-update-service|treed-update-apply|treed-ui|treed-loading-screen))", row["path"])
                 or not isinstance(row.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"])
                 or row["path"] in paths):
             raise ValueError("invalid config reset file")
@@ -251,7 +253,8 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
         with LOG.open("a", encoding="utf-8") as log:
             log.write(f"{now()} core {'recovery' if recovery else 'apply'} {state['operationId']}\n")
             log.flush()
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=log, text=True, check=False)
+            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=log, text=True,
+                                    check=False, timeout=1800)
             log.write(result.stdout + "\n")
         payload = json.loads(result.stdout)
         if not isinstance(payload, dict):
@@ -278,6 +281,7 @@ def run_worker() -> int:
             if result != 0 or state.get("status") != "queued" or state.get("busy") is not True:
                 return result
     finally:
+        loading_screen("stop")
         if lock is not None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
@@ -295,6 +299,7 @@ def run_current() -> int:
     if not printer_is_idle():
         finish(state, "rejected", "printer_not_idle", "Принтер печатает или его состояние недоступно.")
         return 1
+    loading_screen("start")
     if state.get("targetId") == "printer-core":
         return run_core(state)
     transition("downloading", "Загружаем и проверяем UI bundle.")
@@ -357,9 +362,21 @@ def recover() -> int:
                    "Обновление прервано до записи результата; проверьте текущую версию перед повтором.")
         return 0
     finally:
+        loading_screen("stop")
         if lock is not None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
+
+
+def loading_screen(action: str) -> None:
+    """Запускает необязательный splash без влияния на результат обновления."""
+    try:
+        result = subprocess.run([sys.executable, str(LOADING_SCREEN), action], check=False,
+                                timeout=90, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if result.returncode:
+            print(f"Не удалось выполнить loading screen ({action}).", file=sys.stderr)
+    except (OSError, subprocess.SubprocessError):
+        print(f"Не удалось выполнить loading screen ({action}).", file=sys.stderr)
 
 
 def shell_runtime_dir() -> Path:

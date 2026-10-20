@@ -197,6 +197,7 @@ deploy_treed_update_command() {
   local apply_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
   local service_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-service"
   local core_src="${REPO_DIR}/runtime-scripts/treed-update/treed-core-update"
+  local loading_src="${REPO_DIR}/runtime-scripts/treed-update/treed-loading-screen"
   local ab_src="${REPO_DIR}/runtime-scripts/treed-ab/treed-ab"
   local worker_unit_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update.service"
   local path_unit_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update.path"
@@ -206,7 +207,7 @@ deploy_treed_update_command() {
   local src=""
 
   # Блок 3.1: Root-worker, runtime updater TreeD и отдельный fail-closed A/B probe.
-  for src in "${apply_src}" "${service_src}" "${core_src}" "${ab_src}" "${worker_unit_src}" "${path_unit_src}" "${recover_unit_src}"; do
+  for src in "${apply_src}" "${service_src}" "${core_src}" "${loading_src}" "${ab_src}" "${worker_unit_src}" "${path_unit_src}" "${recover_unit_src}"; do
     if [ ! -f "${src}" ]; then
       log_error "treed update runtime file not found in repo: ${src}"
       exit 1
@@ -215,6 +216,7 @@ deploy_treed_update_command() {
   install -m 0755 "${apply_src}" /usr/local/sbin/treed-update-apply
   install -m 0755 "${service_src}" /usr/local/sbin/treed-update-service
   install -m 0755 "${core_src}" /usr/local/sbin/treed-core-update
+  install -m 0755 "${loading_src}" /usr/local/sbin/treed-loading-screen
   install -m 0755 "${ab_src}" /usr/local/sbin/treed-ab
   install -m 0644 "${worker_unit_src}" /etc/systemd/system/treed-update.service
   install -m 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
@@ -238,6 +240,7 @@ deploy_treed_update_command() {
   systemctl enable treed-update-recover.service
   systemctl enable --now treed-update.path
 
+  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ] || [ ! -e "${env_file}" ]; then
   cat > "${env_file}" <<EOF
 TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/printer-core"
 TREED_UPDATE_PI_USER="${PI_USER}"
@@ -253,6 +256,9 @@ TREED_SHELL_RUNTIME_DIR="${PI_HOME}/treed/treed-shell-runtime"
 TREED_SHELL_SERVICE="treed-shell.service"
 EOF
   chmod 0644 "${env_file}"
+  else
+    log_info "moonraker-config: preserving existing updater environment ${env_file}"
+  fi
 
   cat > "${sudoers_file}" <<EOF
 ${PI_USER} ALL=(root) NOPASSWD: /usr/local/sbin/treed-update-service submit *
@@ -562,6 +568,14 @@ EOF
 }
 
 # Блок 4: Основной сценарий деплоя moonraker-конфига и компонентов.
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+  ensure_moonraker_allowed_service "treed-shell"
+  deploy_treed_update_command
+  restart_and_verify_moonraker_components
+  log_info "moonraker-config: managed runtime already installed; preserved local configs"
+  exit 0
+fi
+
 validate_repo_moonraker_layout
 
 if [ "${DEPLOY_MODE}" = "preserve" ]; then

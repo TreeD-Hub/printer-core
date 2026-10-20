@@ -44,6 +44,8 @@
 
 - `test_sgt_calibration.py` / `test_sgt_executor.py` — поиск SGT, модель Klipper, восстановление и отказы; [контракт и запуск](../../docs/sgt-calibration.md).
 - `test_loader_contracts.ps1` — PowerShell-проверка ключевых контрактов bootstrap/runtime/verify.
+- `test_managed_loader.py` — адресные shell-проверки управляемого перехода updater к loader: реестр шагов, сохранение пользовательской конфигурации и отсутствие конкурирующего baseline. Запуск `python3 -B tools/tests/test_managed_loader.py`; требуется Bash, runtime-службы не запускаются.
+- `test_treed_loading_screen.py` — показ существующей темы TreeD, владение Plymouth и восстановление интерфейса после ошибки; системные команды заменяются заглушками. Запуск `python3 -B tools/tests/test_treed_loading_screen.py`.
 - `test_can_txqueue_contracts.ps1` / `test_can_txqueue_runtime.sh` — default `128` и повторное применение qlen к существующему `can0`.
 - `test_klipper_eddy_contracts.ps1` — PowerShell-проверка Eddy Z-home, штатной парковки и единственного START_PRINT-сценария.
 - `test_klipper_parking_contracts.ps1` — PowerShell-проверка парковки `END_PRINT`/`PAUSE` и отсутствия XY-движений в `CANCEL_PRINT`.

@@ -15,6 +15,29 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TREED_LOADER_MODE="${TREED_LOADER_MODE:-apply}"
 
+# Блок 1.1: Проверка изолированного вызова loader из транзакции updater.
+TREED_UPDATE_MANAGED_LOADER="${TREED_UPDATE_MANAGED_LOADER:-0}"
+case "${TREED_UPDATE_MANAGED_LOADER}" in
+  0) ;;
+  1)
+    if [ "${EUID:-$(id -u)}" -ne 0 ] || [ "${TREED_UPDATE_MANAGED:-0}" != "1" ] ||
+      ! [[ "${TREED_UPDATE_OPERATION_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+      echo "[loader] ERROR: managed loader requires root, TREED_UPDATE_MANAGED=1 and a valid TREED_UPDATE_OPERATION_ID" >&2
+      exit 1
+    fi
+    TREED_LOADER_MODE="apply"
+    TREED_DEPLOY_MODE="preserve"
+    TREED_KLIPPERSCREEN_INSTALL_SERVICE="0"
+    TREED_FIRMWARE_BUILD_ENABLED="0"
+    TREED_ALLOW_HARDWARE_NOT_READY="0"
+    export TREED_LOADER_MODE TREED_DEPLOY_MODE TREED_KLIPPERSCREEN_INSTALL_SERVICE TREED_FIRMWARE_BUILD_ENABLED TREED_ALLOW_HARDWARE_NOT_READY
+    ;;
+  *)
+    echo "[loader] ERROR: TREED_UPDATE_MANAGED_LOADER must be 0 or 1" >&2
+    exit 1
+    ;;
+esac
+
 case "${TREED_LOADER_MODE}" in
   apply|check)
     ;;
@@ -28,9 +51,11 @@ esac
 # - Убираем CRLF для *.sh в loader/**,
 # - Восстанавливаем executable-бит для entrypoint и step-скриптов.
 if [ "${TREED_LOADER_MODE}" != "check" ] && [ -d "${REPO_DIR}/loader" ]; then
-  find "${REPO_DIR}/loader" -type f -name "*.sh" -print0 | xargs -0 -r sed -i 's/\r$//'
-  chmod +x "${REPO_DIR}/loader/loader.sh" || true
-  chmod +x "${REPO_DIR}/loader/steps/"*.sh 2>/dev/null || true
+  if [ "${TREED_UPDATE_MANAGED_LOADER}" != "1" ]; then
+    find "${REPO_DIR}/loader" -type f -name "*.sh" -print0 | xargs -0 -r sed -i 's/\r$//'
+    chmod +x "${REPO_DIR}/loader/loader.sh" || true
+    chmod +x "${REPO_DIR}/loader/steps/"*.sh 2>/dev/null || true
+  fi
 fi
 
 # Блок 3: Определение целевого пользователя deploy и его home.
@@ -562,6 +587,18 @@ STEPS=(
   "maintenance-start"        # Запуск required/best-effort сервисов после provisioning.
   "verify"                   # Финальная валидация всего контура (must-pass).
 )
+if [ "${TREED_UPDATE_MANAGED_LOADER}" = "1" ]; then
+  STEPS=(
+    "check-env"
+    "maintenance-stop"
+    "packages-core"
+    "runtime-bootstrap"
+    "moonraker-config"
+    "treed-cam"
+    "maintenance-start"
+    "verify"
+  )
+fi
 
 # Блок 16: Явный список optional-шагов (не прерывают provisioning при ошибке).
 OPTIONAL_STEPS=(
@@ -613,12 +650,57 @@ if [ "${TREED_LOADER_MODE}" = "check" ]; then
   exit 1
 fi
 
-# Блок 20: Основной цикл выполнения шагов по реестру STEPS.
+# Блок 20: Временный экран standalone provisioning.
+# Managed loader вызывается updater-ом, который владеет экраном снаружи.
 . "${REPO_DIR}/loader/lib/progress.sh"
-loader_progress_start "${#STEPS[@]}"
-trap 'loader_progress_stop "$?"' EXIT
+LOADER_PROGRESS_ACTIVE=0
+LOADER_SCREEN_ACTIVE=0
+LOADER_SCREEN_CLEANUP_NEEDED=0
+LOADER_SCREEN_HELPER="${REPO_DIR}/runtime-scripts/treed-update/treed-loading-screen"
+
+loader_screen_start() {
+  if [ "${TREED_UPDATE_MANAGED_LOADER}" = "1" ] || [ "${LOADER_SCREEN_ACTIVE}" = "1" ]; then
+    return 0
+  fi
+  if [ ! -f "${LOADER_SCREEN_HELPER}" ] || ! command -v python3 >/dev/null 2>&1; then
+    log_warn "loading screen unavailable; continuing loader without display handoff"
+    return 1
+  fi
+  if python3 "${LOADER_SCREEN_HELPER}" start; then
+    LOADER_SCREEN_ACTIVE=1
+    LOADER_SCREEN_CLEANUP_NEEDED=1
+    log_info "TreeD update loading screen started"
+    return 0
+  fi
+  if ! python3 "${LOADER_SCREEN_HELPER}" stop; then
+    LOADER_SCREEN_CLEANUP_NEEDED=1
+    log_warn "loading screen start left cleanup state for loader exit"
+  fi
+  log_warn "loading screen could not be started; continuing loader"
+  return 1
+}
+
+loader_exit_cleanup() {
+  local rc="$1"
+  trap - EXIT
+  if declare -F loader_progress_stop >/dev/null; then
+    loader_progress_stop "${rc}"
+  fi
+  if [ "${LOADER_SCREEN_ACTIVE}" = "1" ] || [ "${LOADER_SCREEN_CLEANUP_NEEDED}" = "1" ]; then
+    if ! python3 "${LOADER_SCREEN_HELPER}" stop; then
+      log_warn "loading screen cleanup failed; preserving loader result rc=${rc}"
+    fi
+  fi
+  exit "${rc}"
+}
+
+# Блок 21: Основной цикл выполнения шагов по реестру STEPS.
+trap 'loader_exit_cleanup "$?"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+loader_progress_start "${#STEPS[@]}"
+# На свежем хосте тема появится после provisioning пакетов; шаг темы даст повторную попытку.
+loader_screen_start || true
 LOADER_STEP_INDEX=0
 for step in "${STEPS[@]}"; do
   CURRENT_STEP="$step"
@@ -657,6 +739,9 @@ for step in "${STEPS[@]}"; do
     run_step_script "${script}"
   fi
   loader_progress_step_done "${step_result}"
+  if [ "${step}" = "plymouth-theme-install" ] && [ "${LOADER_SCREEN_ACTIVE}" != "1" ]; then
+    loader_screen_start || true
+  fi
 done
 
 # Блок 21: Успешное завершение полного контура provisioning.

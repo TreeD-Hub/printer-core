@@ -55,6 +55,9 @@ MOONRAKER_BRANCH="${TREED_MOONRAKER_BRANCH}"
 MOONRAKER_POLKIT_SETUP="${TREED_MOONRAKER_POLKIT_SETUP:-1}"
 MOONRAKER_POLKIT_REQUIRED="${TREED_MOONRAKER_POLKIT_REQUIRED:-0}"
 MOONRAKER_RECREATE="${TREED_MOONRAKER_RECREATE:-0}"
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+  MOONRAKER_RECREATE=0
+fi
 CROWSNEST_DIR="${TREED_CROWSNEST_SRC_DIR:-${PI_HOME}/crowsnest}"
 CROWSNEST_REPO="${TREED_CROWSNEST_REPO}"
 CROWSNEST_REF="${TREED_CROWSNEST_REF}"
@@ -474,6 +477,9 @@ install_moonraker_policykit_rules() {
 }
 
 update_crowsnest_repo() {
+  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+    return 0
+  fi
   if [ "${CROWSNEST_UPDATE}" != "1" ] || [ -n "${CROWSNEST_REF}" ]; then
     return 0
   fi
@@ -591,7 +597,9 @@ ensure_dir "${PRINTER_CFG_DIR}"
 ensure_dir "${PRINTER_LOG_DIR}"
 ensure_dir "${PRINTER_GCODE_DIR}"
 ensure_dir "${PRINTER_COMMS_DIR}"
-chown -R "${PI_USER}:${PI_GROUP}" "${PRINTER_DATA_DIR}"
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
+  chown -R "${PI_USER}:${PI_GROUP}" "${PRINTER_DATA_DIR}"
+fi
 
 if getent group dialout >/dev/null 2>&1; then
   usermod -a -G dialout "${PI_USER}" || true
@@ -600,6 +608,7 @@ fi
 # Блок 6: Klipper env/service (репозиторий ожидается локально, clone fallback включен).
 ensure_repo_present "${KLIPPER_DIR}" "${KLIPPER_REPO}" "${KLIPPER_REF}" "${KLIPPER_BRANCH}" "Klipper"
 # Экспериментальные моторные контуры отключены; удаляем старый runtime-код.
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
 rm -f \
   "${KLIPPER_DIR}/klippy/extras/treed_motor_calibration.py" \
   "${KLIPPER_DIR}/klippy/extras/treed_motor_math.py" \
@@ -620,6 +629,7 @@ for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor
   install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${REPO_DIR}/${sgt_source}" \
     "${KLIPPER_DIR}/klippy/extras/${sgt_source##*/}"
 done
+fi
 
 KLIPPER_REQ_FILE="${KLIPPER_DIR}/scripts/klippy-requirements.txt"
 if [ ! -f "${KLIPPER_REQ_FILE}" ]; then
@@ -716,17 +726,23 @@ EOF
 install_moonraker_policykit_rules
 
 # Блок 8: Crowsnest repo/service (best-effort, если камера не required).
-ensure_crowsnest_runtime
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
+  ensure_crowsnest_runtime
+fi
 
 # Блок 9: Активация systemd unit-файлов.
 systemctl daemon-reload
 systemctl enable klipper.service >/dev/null
 systemctl enable moonraker.service >/dev/null
-systemctl enable crowsnest.service >/dev/null 2>&1 || true
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
+  systemctl enable crowsnest.service >/dev/null 2>&1 || true
+fi
 
-chown -R "${PI_USER}:${PI_GROUP}" "${KLIPPER_DIR}" "${KLIPPY_ENV_DIR}" "${MOONRAKER_DIR}" "${MOONRAKER_ENV_DIR}" "${PRINTER_DATA_DIR}"
-if [ -d "${CROWSNEST_DIR}" ]; then
-  chown -R "${PI_USER}:${PI_GROUP}" "${CROWSNEST_DIR}"
+if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
+  chown -R "${PI_USER}:${PI_GROUP}" "${KLIPPER_DIR}" "${KLIPPY_ENV_DIR}" "${MOONRAKER_DIR}" "${MOONRAKER_ENV_DIR}" "${PRINTER_DATA_DIR}"
+  if [ -d "${CROWSNEST_DIR}" ]; then
+    chown -R "${PI_USER}:${PI_GROUP}" "${CROWSNEST_DIR}"
+  fi
 fi
 
 log_info "runtime-bootstrap: OK"
