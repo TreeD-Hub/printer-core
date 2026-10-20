@@ -18,6 +18,11 @@
 *.json    text eol=lf
 *.ps1     text eol=lf
 
+# Runtime-команды без расширения тоже исполняются на Linux.
+runtime-scripts/treed-update/treed-* text eol=lf
+runtime-scripts/treed-ui/treed-ui text eol=lf
+runtime-scripts/treed-vision/service.py text eol=lf
+
 # Treat common binaries as binary (no EOL conversions)
 *.png     binary
 *.jpg     binary
