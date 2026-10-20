@@ -166,8 +166,9 @@ class AutoPrinterStoreTest(unittest.TestCase):
 
     def test_unlink_intent_survives_restart_and_new_epoch_hides_account_data(self):
         self.paired()
+        profile = {"display_name": "Owner", "avatar_url": "https://treed.example/avatar.jpg"}
         self.store.update_binding(1, 1, "paired", 1,
-                                  {"display_name": "Owner"}, "Printer")
+                                  profile, "Printer")
         self.store._conn.execute(
             "INSERT INTO runs(binding_epoch,run_id,payload,position) VALUES(1,?,?,1)",
             (RUN_1, "{}"))
@@ -176,12 +177,13 @@ class AutoPrinterStoreTest(unittest.TestCase):
         self.store.execution_set_pause(local=False, remote=False)
         self.assertTrue(self.store.session()["local_pause"])
         self.assertTrue(self.store.session()["unlink_pending"])
-        self.assertEqual({"display_name": "Owner"}, self.store.status()["owner_profile"])
+        self.assertEqual(profile, self.store.status()["owner_profile"])
         self.store.close()
         self.store = AutoPrinterStore(self.root, PRINTER, PROFILE,
                                       max_asset_bytes=128, max_total_bytes=256, max_runs=4)
 
         self.assertTrue(self.store.session()["unlink_pending"])
+        self.assertEqual(profile, self.store.status()["owner_profile"])
         self.assertEqual("request", self.store.unlink_intent()["phase"])
         self.store.update_binding(2, 2, "unpaired", 1)
 
@@ -193,6 +195,20 @@ class AutoPrinterStoreTest(unittest.TestCase):
         self.assertEqual(1, self.store._conn.execute(
             "SELECT COUNT(*) FROM runs WHERE binding_epoch=1 AND run_id=?", (RUN_1,)
         ).fetchone()[0])
+
+    def test_owner_avatar_validation_and_revocation(self):
+        for avatar in ("javascript:alert(1)", "http://treed.example/a.jpg",
+                       "https://user:pass@treed.example/a.jpg", "https://", 42,
+                       "https://treed.example/\navatar.jpg", "https://treed.example/" + "x" * 2048):
+            with self.subTest(avatar=avatar), self.assertRaises(StoreError):
+                self.store.update_binding(1, 1, "paired", 1,
+                                          owner_profile={"display_name": "Owner", "avatar_url": avatar})
+        for profile in ({"display_name": "Owner"}, {"display_name": "Owner", "avatar_url": None},
+                        {"display_name": "Owner", "avatar_url": "https://treed.example/a.jpg"}):
+            self.store.update_binding(1, 1, "paired", 1, owner_profile=profile)
+            self.assertEqual(profile, self.store.status()["owner_profile"])
+        self.store.update_binding(1, 1, "revoked", 1)
+        self.assertIsNone(self.store.status()["owner_profile"])
 
     def test_confirmed_unlink_isolates_old_outbox_without_acknowledging_it(self):
         old_boot = "11111111-1111-4111-8111-111111111111"

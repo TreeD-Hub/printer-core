@@ -7,6 +7,7 @@ from __future__ import annotations
 
 # Блок 1: Стандартная библиотека для атомарного spool и SQLite-журнала.
 import hashlib
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import sqlite3
 import threading
 from typing import Any, BinaryIO, Dict, List, Mapping
 import uuid
+from urllib.parse import urlsplit
 
 DEFAULT_MAX_JOURNAL_BYTES = 64 * 1024 * 1024
 
@@ -28,6 +30,28 @@ class StoreError(ValueError):
 
 
 _UNSET = object()
+
+
+def valid_owner_profile(value: Any) -> bool:
+    if value is None:
+        return True
+    if (not isinstance(value, dict) or not {"display_name"} <= value.keys()
+            or not value.keys() <= {"display_name", "avatar_url"}
+            or not isinstance(value["display_name"], str) or len(value["display_name"]) > 100):
+        return False
+    avatar = value.get("avatar_url")
+    if avatar is None:
+        return True
+    if (not isinstance(avatar, str) or len(avatar) > 2048
+            or any(char.isspace() or ord(char) < 32 or char == "\\" for char in avatar)):
+        return False
+    try:
+        url = urlsplit(avatar)
+        port = url.port
+        return (url.scheme == "https" and bool(url.hostname) and (port is None or port > 0)
+                and url.username is None and url.password is None)
+    except ValueError:
+        return False
 
 
 class AutoPrinterStore:
@@ -136,7 +160,7 @@ class AutoPrinterStore:
                     "binding_epoch": "1", "binding_state": "unpaired", "queue_revision": "1",
                     "applied_queue_revision": "1", "local_pause": "1", "remote_pause": "0", "bed_epoch": "0",
                     "owner_profile": "null", "display_name": "", "unlink_pending_epoch": "0",
-                    "unlink_phase": ""}
+                    "unlink_phase": "", "account_pairing": "null"}
         with self._transaction():
             for key, value in defaults.items():
                 self._conn.execute("INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)", (key, value))
@@ -227,10 +251,7 @@ class AutoPrinterStore:
                        event_boot_id: str | None = None) -> str | None:
         if any(type(v) is not int or v < 1 for v in (control_epoch, binding_epoch, applied_queue_revision)) or binding_state not in {"unpaired", "paired", "revoked"}:
             raise StoreError("invalid_binding")
-        if (owner_profile is not _UNSET and owner_profile is not None
-                and (not isinstance(owner_profile, dict) or set(owner_profile) != {"display_name"}
-                     or not isinstance(owner_profile["display_name"], str)
-                     or len(owner_profile["display_name"]) > 100)):
+        if owner_profile is not _UNSET and not valid_owner_profile(owner_profile):
             raise StoreError("invalid_owner_profile")
         if display_name is not _UNSET and (not isinstance(display_name, str) or len(display_name) > 100):
             raise StoreError("invalid_display_name")
@@ -243,6 +264,8 @@ class AutoPrinterStore:
             if control_epoch < current_control or binding_epoch < current_binding:
                 raise StoreError("epoch_regression")
             changed = binding_epoch != current_binding
+            if changed or binding_state != "unpaired":
+                self._set("account_pairing", "null")
             previous_state = self._get("binding_state")
             if (binding_state == "unpaired" and previous_state in {"paired", "revoked"}
                     and binding_epoch == current_binding):
@@ -309,6 +332,36 @@ class AutoPrinterStore:
                 self._set("unlink_phase", "confirm")
                 self._set("local_pause", 1)
             return event_boot_id
+
+    def pairing(self) -> dict | None:
+        # Код хранится только в закрытой локальной БД и не входит в sync snapshot.
+        with self._lock:
+            if self._get("binding_state") != "unpaired":
+                return None
+            value = json.loads(self._get("account_pairing"))
+            if value is not None and value["expires_at"] is not None:
+                if datetime.fromisoformat(value["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+                    return None
+            return value
+
+    def save_pairing(self, value: dict | None) -> None:
+        if value is not None:
+            if (not isinstance(value, dict) or set(value) != {"code", "expires_at", "verification_url"}
+                    or not isinstance(value["code"], str)
+                    or re.fullmatch(r"(?:[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}|[A-Z0-9]{20})", value["code"]) is None
+                    or not isinstance(value["verification_url"], str) or len(value["verification_url"]) > 4096):
+                raise StoreError("invalid_pairing")
+            if value["expires_at"] is not None:
+                try:
+                    expires = datetime.fromisoformat(value["expires_at"].replace("Z", "+00:00"))
+                    if expires <= datetime.now(timezone.utc):
+                        raise ValueError
+                except (AttributeError, TypeError, ValueError):
+                    raise StoreError("invalid_pairing") from None
+        with self._transaction():
+            if value is not None and self._get("binding_state") != "unpaired":
+                raise StoreError("invalid_pairing_state")
+            self._set("account_pairing", _json(value))
 
     def request_unlink(self) -> int:
         with self._transaction():
@@ -963,6 +1016,7 @@ class AutoPrinterStore:
                     "queue_truncated": queue_total > len(queue),
                     "display_name": self._get("display_name") or None,
                     "owner_profile": json.loads(self._get("owner_profile")) if paired else None,
+                    "pairing": self.pairing(),
                     "unlink_pending": pending,
                     "local_pause": True, "remote_pause": False, "physical_execution_enabled": False}
             if paired:

@@ -58,6 +58,22 @@ class FakeConfig:
 
 # Блок 2: Проверки границ конфигурации, identity, sync и команд.
 class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
+    def test_avatar_negotiation_and_unlink_profile_validation(self):
+        transport = AutoPrinterTransport("https://treed.example", "test-secret")
+        with patch.object(transport, "_opener") as opener:
+            opener.open.return_value = io.BytesIO(b"{}")
+            transport.sync({})
+            request = opener.open.call_args.args[0]
+            self.assertEqual("avatar-v1", request.get_header("X-treed-owner-profile"))
+            self.assertEqual("persistent-v1", request.get_header("X-treed-pairing"))
+        response = {"binding_state": "paired", "binding_epoch": 1, "control_epoch": 1,
+                    "queue_revision": 1, "unlink_pending": True,
+                    "owner_profile": {"display_name": "Owner", "avatar_url": "https://treed.example/a.jpg"}}
+        component._validate_unlink_response(response, 1, confirmed=False)
+        response["owner_profile"]["avatar_url"] = "javascript:alert(1)"
+        with self.assertRaises(ValueError):
+            component._validate_unlink_response(response, 1, confirmed=False)
+
     async def test_disabled_component_registers_only_authorized_local_endpoints(self):
         with patch.object(component, "AutoPrinterStore") as store, \
                 patch.object(component, "AutoPrinterTransport") as transport, \
@@ -72,7 +88,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(instance.enabled)
         self.assertEqual(set(config.server.endpoints), {
             component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT,
-            component.ACCOUNT_UNLINK_ENDPOINT, component.CONTROL_ENDPOINT})
+            component.PAIRING_CANCEL_ENDPOINT, component.ACCOUNT_UNLINK_ENDPOINT, component.CONTROL_ENDPOINT})
         self.assertEqual(config.server.endpoints[component.STATUS_ENDPOINT][0], ["GET"])
         self.assertEqual(config.server.endpoints[component.PAIRING_ENDPOINT][0], ["POST"])
         self.assertTrue(all(item[2].get("wrap_result") is False for item in config.server.endpoints.values()))
@@ -336,11 +352,63 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
             def session(self):
                 return {"binding_state": "unpaired", "unlink_pending": False}
 
+            def pairing(self):
+                return None
+
+            def save_pairing(self, value):
+                self.value = value
+
         instance._store = FakeStore()
         instance._transport = FakeTransport()
         result = await instance._handle_pairing(None)
         self.assertEqual(result, {"code": "ABCD2345", "expires_at": "2030-01-01T00:00:00Z",
                                   "verification_url": "https://app.example/autoprinter/connect#code=ABCD2345"})
+
+    async def test_persistent_pairing_survives_restart_and_cancellation_requires_confirmation(self):
+        pairing = {"code": "ABCD2345", "expires_at": None,
+                   "verification_url": "https://app.example/autoprinter/connect#code=ABCD2345"}
+        class FakeTransport:
+            pairing_calls = 0
+
+            def pairing(self):
+                self.pairing_calls += 1
+                return pairing
+
+            def cancel_pairing(self):
+                return {"cancelled": True}
+
+        class Request:
+            def get_args(self):
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            instance = component.TreeDAutoPrinter(FakeConfig())
+            instance._transport = FakeTransport()
+            instance._store = AutoPrinterStore(Path(directory), "11111111-1111-4111-8111-111111111111", "profile")
+            try:
+                self.assertEqual(pairing, await instance._handle_pairing(None))
+                instance._store.close()
+                instance._store = AutoPrinterStore(Path(directory), "11111111-1111-4111-8111-111111111111", "profile")
+                self.assertEqual(pairing, await instance._handle_pairing(None))
+                self.assertEqual(1, instance._transport.pairing_calls)
+                self.assertEqual(pairing, (await instance._handle_status(None))["pairing"])
+                for failure in (TransportError("network_error"), {"cancelled": False}):
+                    with patch.object(instance._transport, "cancel_pairing",
+                                      side_effect=failure if isinstance(failure, Exception) else None,
+                                      return_value=failure):
+                        with self.assertRaises(RuntimeError):
+                            await instance._handle_pairing_cancel(Request())
+                    self.assertEqual(pairing, instance._store.pairing())
+                self.assertEqual({"cancelled": True}, await instance._handle_pairing_cancel(Request()))
+                self.assertIsNone(instance._store.pairing())
+                await instance._handle_pairing(None)
+                self.assertEqual(2, instance._transport.pairing_calls)
+                instance._store.update_binding(1, 2, "paired", 1)
+                self.assertIsNone(instance._store.pairing())
+                with self.assertRaises(RuntimeError):
+                    await instance._handle_pairing_cancel(Request())
+            finally:
+                await instance.close()
 
     async def test_account_unlink_keeps_durable_pending_when_transport_is_offline(self):
         config = FakeConfig(enabled=True)
@@ -378,7 +446,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["configured"])
         self.assertEqual(1, result["protocol_version"])
         self.assertTrue(result["unlink_pending"])
-        self.assertEqual({"account_linking": True}, result["capabilities"])
+        self.assertEqual({"account_linking": True, "pairing_cancel": True}, result["capabilities"])
 
     async def test_pending_unlink_preserves_old_control_outbox_until_confirm(self):
         printer_id = "11111111-1111-4111-8111-111111111111"
@@ -822,7 +890,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(transport.receipts[1][0], asset_id)
                 self.assertEqual(set(config.server.endpoints), {
                     component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT,
-                    component.ACCOUNT_UNLINK_ENDPOINT, component.CONTROL_ENDPOINT})
+                    component.PAIRING_CANCEL_ENDPOINT, component.ACCOUNT_UNLINK_ENDPOINT, component.CONTROL_ENDPOINT})
                 self.assertTrue(transport.last_payload["snapshot"]["local_pause"])
                 self.assertFalse(transport.last_payload["snapshot"]["ready"])
                 self.assertIsNone(transport.last_payload["snapshot"]["current_run_id"])
@@ -913,7 +981,8 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                         "execution_authority": "printer", "storage_authority": "printer",
                         "configuration_version": 1, "transfers": [], "commands": [],
                         "snapshot": {"printer_id": printer_id, "profile_id": profile_id},
-                        "ack_event_ids": [event_id], "ignored_event_ids": []}
+                        "ack_event_ids": [event_id], "ignored_event_ids": [],
+                        "owner_profile": {"display_name": "Owner", "avatar_url": "https://treed.example/a.jpg"}}
 
         with tempfile.TemporaryDirectory() as directory:
             instance = component.TreeDAutoPrinter(FakeConfig())
@@ -928,6 +997,8 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNotNone(instance._last_sync_at)
                 status = await instance._handle_status(None)
                 self.assertEqual(instance._last_sync_at, status["last_sync_at"])
+                self.assertEqual({"display_name": "Owner", "avatar_url": "https://treed.example/a.jpg"},
+                                 status["owner_profile"])
                 self.assertIn("journal", status)
                 self.assertNotIn("last_sync_at", transport.payload)
                 self.assertNotIn("journal", transport.payload["snapshot"])
@@ -944,6 +1015,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 instance._store.update_binding(2, 1, "revoked", 1)
                 status = await instance._handle_status(None)
                 self.assertIsNone(status["last_sync_at"])
+                self.assertIsNone(status["owner_profile"])
                 self.assertNotIn("journal", status)
             finally:
                 await instance.close()

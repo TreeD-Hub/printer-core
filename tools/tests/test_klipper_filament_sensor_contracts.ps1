@@ -60,6 +60,14 @@ Assert-Contains $sensor '(?ms)^\[gcode_macro _FILAMENT_SENSOR_APPLY_MODE\].*?if 
 Assert-Contains $sensor '(?m)^\s*\{% set motion_enabled = printer\["filament_motion_sensor filament_motion"\]\.enabled\|default\(0\)\|int if ''filament_motion_sensor filament_motion'' in printer else 0 %\}\s*$' "status macro must tolerate a missing motion channel"
 Assert-Contains $sensor '(?m)^\[delayed_gcode _FILAMENT_SENSOR_RESTORE_MODE\]\s*$' "startup restore macro is required"
 Assert-Contains $sensor 'printer\.save_variables\.variables\.filament_sensor_mode' "startup restore must read the persisted mode"
+Assert-Contains $sensor '(?m)^variable_runout_action:\s*"recover"\s*$' "default reaction must keep automatic recovery"
+$actionSetter = [regex]::Match($sensor, '(?ms)^\[gcode_macro FILAMENT_SENSOR_SET_RUNOUT_ACTION\]\s*.*?(?=^\[|\z)').Value
+Assert-Contains $actionSetter 'selected_action not in \["pause", "recover"\].*' "reaction must reject unknown actions"
+Assert-Contains $actionSetter 'print_state in \["printing", "paused"\] or printer\.pause_resume\.is_paused' "reaction must not change during a print or pause"
+Assert-Contains $actionSetter '(?ms)elif ''filament_motion_sensor filament_motion'' not in printer.*?action_raise_error.*?else.*?SET_GCODE_VARIABLE.*?SAVE_VARIABLE VARIABLE=filament_sensor_runout_action' "reaction must require a motion channel and persist the accepted value"
+Assert-Contains $sensor '(?ms)printer\.save_variables\.variables\.filament_sensor_runout_action\|default\("recover"\).*?saved_action if saved_action in \["pause", "recover"\] else "recover".*?SET_GCODE_VARIABLE MACRO=FILAMENT_SENSOR_STATUS VARIABLE=runout_action' "startup must restore the reaction with recovery as the default"
+$runoutGuard = [regex]::Match($sensor, '(?ms)^\[gcode_macro _TREED_FILAMENT_RUNOUT_PAUSE\]\s*.*?(?=^\[|\z)').Value
+Assert-Contains $runoutGuard '(?ms)if can_pause.*?if is_clog and runout_action == "recover".*?_TREED_CLOG_RECOVERY_START.*?elif is_clog.*?PAUSE REASON=clog.*?else.*?PAUSE REASON=filament_runout' "only selected recovery may extrude; pause selection and missing filament must pause"
 Assert-Contains $sensor 'source == "filament_motion".*switch\.filament_detected\|int == 1.*motion_enabled == 1.*motion_detected == 0' "clog recovery must require motion runout with filament present"
 Assert-Contains $sensor '(?m)^variable_extrude_length:\s*25\.0\s*$' "each recovery attempt must extrude 25 mm"
 Assert-Contains $sensor '(?m)^variable_extrude_speed:\s*5\.0\s*$' "recovery extrusion speed must be 5 mm/s"
