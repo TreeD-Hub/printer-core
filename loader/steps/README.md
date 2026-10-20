@@ -61,6 +61,7 @@
 - `ARMBIAN_ENV_FILE` (для `armbian` backend)
 - `EXTLINUX_FILE` (для `extlinux` backend)
 - `TREED_LOADER_MODE` (`apply|check`, default `apply`; `check` не запускает step-скрипты и только сверяет runtime-состояние)
+- `TREED_UPDATE_MANAGED_LOADER` (`0|1`, default `0`; внутренний режим updater; значение `1` требует root, `TREED_UPDATE_MANAGED=1` и UUID `TREED_UPDATE_OPERATION_ID`, после чего запускает ограниченный preserve-контур)
 - `TREED_LOADER_PROGRESS` (`auto|plain|off`, default `auto`; шкала со спиннером в TTY, текстовый прогресс при перенаправлении, `off` отключает индикатор; только `apply`)
 - `TREED_DEPLOY_MODE` (`auto|clean|preserve`, default `auto`)
 - `TREED_DEPLOY_MODE_EFFECTIVE` (`clean|preserve`)
@@ -68,6 +69,11 @@
 - `TREED_STATE_FILE` (default `/run/treed-loader/state.env`)
 - `TREED_MAINTENANCE_MODE` (`1|0`)
 - `TREED_NONINTERACTIVE` (`0|1`, default `1`; apt/dpkg/needrestart без prompt)
+
+Standalone `apply` использует `runtime-scripts/treed-update/treed-loading-screen`
+для best-effort передачи экрана текущего UI теме Plymouth `updates` и обратного
+перехода при выходе. Managed loader не запускает и не останавливает экран:
+обновляющий worker сохраняет его состояние между loader и последующими фазами.
 
 ### Main MCU / CAN / Eddy
 
@@ -127,7 +133,7 @@
 - `TREED_CAM_RESOLUTION` (default `1920x1080`)
 - `TREED_CAM_FPS` (default `30`)
 - `TREED_CAM_STREAM_URL` (default loopback ustreamer URL), `TREED_DETECT_MOONRAKER_URL` (default `http://127.0.0.1:7125`) и `MOONRAKER_API_KEY` (optional local Moonraker auth) — параметры локального camera adapter. `stream_detect.py --react` использует только локальный Moonraker HTTP и `TREED_VISION_SOCKET` (default `${PI_HOME}/treed/vision/run/vision.sock`); удалённый классификатор и `DETECT_API_KEY` не используются. Loader всегда создаёт adapter и vision units; без модели/runtime результат остаётся unavailable. См. [локальный vision](../../runtime-scripts/treed-vision/README.md) и [камера](../../runtime-scripts/treed-cam/README.md#локальная-оценка-кадров).
-- `TREED_VISION_PYTHON` (необязательный абсолютный путь к совместимому окружению; проверяются точные версии torch 2.11.0, torchvision 0.26.0, RF-DETR 1.11.0 и Pillow 12.3.0). Loader сохраняет валидированный путь в `/etc/default/treed-vision` и повторно использует его при обновлении; если путь отсутствует или невалиден, проверяет `${PI_HOME}/treed/vision/venv/bin/python`. `TREED_VISION_WHEELHOUSE` (необязательный локальный wheelhouse; pip использует `--no-index`); `TREED_VISION_SPAGHETTI_ARTIFACT` и `TREED_VISION_BED_ARTIFACT` (необязательные абсолютные пути к локальным весам; проверяются размер и SHA-256 временной копии перед атомарной заменой). Во время установки пакеты и веса не скачиваются. При отсутствии совместимого окружения или модели анализ сообщает unavailable.
+- `TREED_VISION_PYTHON` (необязательный абсолютный путь к совместимому окружению; проверяются точные версии torch 2.11.0, torchvision 0.26.0, RF-DETR 1.11.0 и Pillow 12.3.0). Loader сохраняет валидированный путь в `/etc/default/treed-vision` и повторно использует его при обновлении; managed-режим также проверяет `${PI_HOME}/treed/autoprinter-bed-env/bin/python`. `TREED_VISION_WHEELHOUSE` (необязательный локальный wheelhouse; pip использует `--no-index`); `TREED_VISION_SPAGHETTI_ARTIFACT` и `TREED_VISION_BED_ARTIFACT` (необязательные абсолютные пути к локальным весам; проверяются размер и SHA-256 временной копии перед атомарной заменой). В managed-режиме при отсутствии совместимого окружения зависимости устанавливаются в `${PI_HOME}/treed/vision/venv` с CPU wheel index; ошибка установки блокирует loader. Веса остаются необязательными и локальными, облачный fallback не используется.
 - `TREED_CAM_FORMAT` (default `MJPEG`; передается в ustreamer через `custom_flags`)
 - `TREED_CAM_ENCODER` (default `HW`; использует pre-encoded MJPEG frames камеры, если поддерживается)
 - `TREED_CAM_USTREAMER_CUSTOM_FLAGS` (override всех ustreamer `custom_flags`, default `--format=${TREED_CAM_FORMAT} --encoder=${TREED_CAM_ENCODER}`)
@@ -264,9 +270,9 @@ treed-ui status
 - `runtime-bootstrap.sh` после подготовки `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}` проверяет импорт `numpy` и `matplotlib`: если пакет уже есть, логирует skip; если нет, ставит текущий стабильный релиз через pip.
 - `runtime-bootstrap.sh` заменяет фиксированный cold-boot sleep на `/usr/local/sbin/treed-klipper-preflight.sh`: в default-режиме (`TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=0`) проверяется только состояние `can0`, а `canbus_query.py` не запускается; strict UUID-gate включается через `TREED_KLIPPER_PREFLIGHT_CAN_UUIDS_REQUIRED=1`.
 - `runtime-bootstrap.sh` устанавливает/обновляет Crowsnest best-effort при `TREED_CAMERA_REQUIRED=0`; при `TREED_CAMERA_REQUIRED=1` ошибки Crowsnest становятся блокирующими.
-- `runtime-bootstrap.sh` exact-sync'ит managed repos к manifest SHA, чинит detached/origin/upstream/shallow, блокирует unknown dirty и сохраняет поврежденный checkout в `.treed-backup-*`. Две старые копии `treed_motor_calibration.py.pre-canonical` и `.pre-waypoint` в Klipper исключены из Git-проверки и остаются на месте; остальные неизвестные файлы блокируют sync.
+- `runtime-bootstrap.sh` в полном provisioning exact-sync'ит managed repos к manifest SHA, чинит detached/origin/upstream/shallow, блокирует unknown dirty и сохраняет поврежденный checkout в `.treed-backup-*`. Две старые копии `treed_motor_calibration.py.pre-canonical` и `.pre-waypoint` в Klipper исключены из Git-проверки и остаются на месте; остальные неизвестные файлы блокируют sync. Managed update синхронизирует только Klipper и Moonraker.
 - `klipper-core.sh` раскладывает `printer_data/config` напрямую из staging-дерева `klipper/` (источник правды — репозиторий).
-- `runtime-bootstrap.sh` доставляет `tools/treed_sgt_calibration.py` и `klipper-host/treed_sgt_executor.py` в `klippy/extras`; отсутствие исходника блокирует шаг. Оба модуля исключены из dirty-проверки managed Klipper до и после sync. Доставка не включает эксперимент: [активация и ограничения SGT](../../docs/sgt-calibration.md).
+- `runtime-bootstrap.sh` в полном provisioning доставляет `tools/treed_sgt_calibration.py` и `klipper-host/treed_sgt_executor.py` в `klippy/extras`; отсутствие исходника блокирует шаг. Оба модуля исключены из dirty-проверки managed Klipper до и после sync. Доставка не включает эксперимент: [активация и ограничения SGT](../../docs/sgt-calibration.md).
 - Для `treed_v2_corexy_v1` X/Y homing работает через `tmc5160_stepper_x/y:virtual_endstop`. Штатный `G28` в `macros_homing.cfg` вызывает `G28.1`, делает отход от X-min/Y-max на 10 мм и ждёт не менее 2 секунд перед каждым sensorless-проходом.
 - `runtime-bootstrap.sh` автоматически устанавливает PolicyKit правила Moonraker (по умолчанию включено), чтобы не было предупреждений `org.freedesktop.systemd1.manage-units`/`org.freedesktop.packagekit.*`.
 - `mainsail-web.sh` required: сначала использует проверенный bundled `mainsail.zip`, а GitHub download оставляет только fallback/recovery; затем публикует web-root и nginx reverse-proxy.
@@ -284,4 +290,5 @@ treed-ui status
 Шаги получают окружение от [`loader.sh`](../loader.sh); для установки запускайте
 [оркестратор](../README.md#запуск), а не отдельный шаг без его контекста.
 Режим `TREED_LOADER_MODE=check` не запускает шаги и не применяет изменения.
+В `TREED_UPDATE_MANAGED_LOADER=1` updater уже устанавливает camera/vision runtime-файлы: `treed-cam.sh` не заменяет каталоги `bin` и не меняет владельца их содержимого рекурсивно. Verify сохраняет проверки активности текущих UI/camera services, но пропускает их exact-version pin checks, поскольку managed loader их не обновляет.
 Локальные проверки контрактов описаны в [`tools/tests`](../../tools/tests/README.md).

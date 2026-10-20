@@ -54,6 +54,15 @@ Renderer объединяет stdout/stderr шагов в один послед�
 логи не перемешивались со шкалой. Стандартный ввод и exit status шагов сохраняются.
 `check`-режим не запускает renderer и сохраняет свой read-only вывод.
 
+В standalone `apply` loader до остановки UI пытается показать существующую тему
+Plymouth в режиме `updates`. Экран использует только неопределённую анимацию
+ожидания: он не изображает процент или этапы готовности. Если тема ещё не
+установлена, loader повторяет попытку после `plymouth-theme-install`. Перед
+завершением или при ошибке loader возвращает только те UI-службы, которые были
+активны до provisioning, и исходный VT, если другой UI не занял экран.
+Недоступность Plymouth не блокирует установку. Вызов managed loader не
+переключает экран самостоятельно: его lifecycle принадлежит updater-у.
+
 ## Реестр шагов
 
 | # | Шаг | Тип | Назначение |
@@ -92,6 +101,7 @@ Renderer объединяет stdout/stderr шагов в один послед�
 
 - `TREED_MAIN_MCU_CANBUS_UUID` — Octopus Pro UUID, должен совпадать с активным profile cfg `d372e54bf965`.
 - `TREED_LOADER_MODE` — `apply|check`, default `apply`; `check` только сверяет текущее runtime-состояние и не запускает step-скрипты.
+- `TREED_UPDATE_MANAGED_LOADER=1` — внутренний режим updater; требует root, `TREED_UPDATE_MANAGED=1` и UUID `TREED_UPDATE_OPERATION_ID`. Запускает ограниченный preserve-контур для Klipper/Moonraker и vision runtime/зависимостей; не обновляет boot, printer configs, UI или Crowsnest.
 - `TREED_DEPLOY_MODE` — `auto|clean|preserve`, default `auto`; `auto` использует state snapshot, а не имя ветки.
 - `TREED_DEVICE_STATE` — `fresh|update|recover`; пишется loader в `/run/treed-loader/state.env`.
 - `TREED_STATE_FILE` — default `/run/treed-loader/state.env`.
@@ -156,7 +166,9 @@ Renderer объединяет stdout/stderr шагов в один послед�
 
 ## Запуск
 
-`runtime-bootstrap` приводит Klipper/Moonraker/Crowsnest к точным SHA из `runtime-versions.env`, чинит detached HEAD/origin/upstream/shallow metadata и не использует `reset --hard`. Неизвестный dirty checkout блокирует update; повреждённый checkout сохраняется рядом как `.treed-backup-*`. `printer_data`, `printer.cfg`, `SAVE_CONFIG`, Eddy calibration и пользовательские runtime-данные этим механизмом не затрагиваются.
+В обычном полном provisioning `runtime-bootstrap` приводит Klipper/Moonraker/Crowsnest к точным SHA из `runtime-versions.env`, чинит detached HEAD/origin/upstream/shallow metadata и не использует `reset --hard`. Неизвестный dirty checkout блокирует update; повреждённый checkout сохраняется рядом как `.treed-backup-*`. `printer_data`, `printer.cfg`, `SAVE_CONFIG`, Eddy calibration и пользовательские runtime-данные этим механизмом не затрагиваются.
+
+В режиме `TREED_UPDATE_MANAGED_LOADER=1` updater уже установил runtime-файлы и модули: bootstrap не удаляет старые Klipper-модули, не копирует host-модули, не запускает установщик Crowsnest и не меняет владельца существующих файлов `printer_data` рекурсивно. Существующие venv не пересоздаются.
 
 `runtime-bootstrap` проверяет `numpy` и `matplotlib` в `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}`: если импорт уже работает, установка пропускается; если пакета нет, ставится текущий стабильный релиз через pip в существующий venv Klipper.
 

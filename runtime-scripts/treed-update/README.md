@@ -7,6 +7,7 @@
 - `treed-update-service` — validated submission, queue, execution and recovery.
 - `treed-update-apply` — UI bundle publication, readiness checks and rollback.
 - `treed-core-update` — TreeD runtime package build, inspection, installation and recovery.
+- `treed-loading-screen` — best-effort splash start/stop around a managed update; it does not change persistent display mode.
 - `treed-update.service`, `treed-update.path`, `treed-update-recover.service` — systemd worker, queue activation and boot recovery.
 
 ## Contract
@@ -21,8 +22,9 @@
 - If UI publication was interrupted while its operation-specific rollback directory exists, recovery restores that directory, restarts `treed-shell.service`, checks stable HTTP readiness, and records `rolled_back`. If the rollback directory has already been rotated but the exact target manifest is installed and HTTP-ready, recovery records the update as applied. Otherwise it records an error without claiming rollback.
 - UI publication keeps the current bundle in a temporary rollback directory until the new service passes consecutive HTTP readiness checks. If publication or readiness fails, the prior bundle is restored and checked before the result is called `rolled_back`.
 - Progress is `0` only while queued, `null` for phases without measured progress, and `100` only on success.
-- `printer-core` is a TreeD runtime package, installed by `treed-core-update` under the worker lock. It updates only owned configs, host modules and scripts; it never runs provisioning or updates OS/dependencies/firmware. The legacy shell apply command refuses this target without the managed core worker.
+- `printer-core` is installed by `treed-core-update` under the worker lock. Releases with a provisioning revision also carry `treed-mainshellos-source.zip`; when the revision, pinned upstream refs, or required units differ, the worker validates that exact-tag source against the runtime manifest, installs runtime files, then runs the managed loader with settings preserved and the existing UI retained. Legacy manifests without a provisioning revision remain runtime-only. It never updates the OS or firmware.
 - Core uses GitHub asset SHA-256, a fixed destination allowlist, exact upstream compatibility checks, fsync before-images and a durable journal. The confirmed runtime manifest changes only after stable Klipper/Moonraker readiness; interruptions are recovered through that journal.
+- The source archive is extracted through bounded path checks into the operation journal directory. Source version, pinned upstream refs, provisioning revision, and runtime mapped files must match the verified target package. Provisioning failures remain durably marked for a deliberate retry; recovery never runtime-rolls back after provisioning begins.
 - An AutoPrinter payload must contain all seven `treed_autoprinter*.py` modules. Readiness, recovery and rollback require `treed_autoprinter` when the relevant manifest includes it, and reject required names in `failed_components`. A legacy runtime without AutoPrinter can still be upgraded. Credentials, account files, the local store and external model weights stay outside the payload; ML dependencies are not installed automatically.
 - Local overrides, variables, sensor settings, generated configs and the complete `SAVE_CONFIG` block are preserved. Modified managed files without explicit per-file reset consent and unknown files occupying new destinations reject the update.
 - `treed-core-update inspect` reads the installed baseline and lists all modified managed files, including camera clients, host modules and updater commands, with their current SHA-256. The check API retains `supportsConfigReset` and `configConflicts`; no files are changed by inspection. The UI offers explicit per-file reset during the core update; printer configuration settings can be moved into `local_overrides.cfg` before another check.
@@ -38,6 +40,7 @@ The API exposes `operationId`, `requestId`, `status`, `phase`, `progress`, `resu
 - `/usr/local/sbin/treed-update-service`
 - `/usr/local/sbin/treed-update-apply`
 - `/usr/local/sbin/treed-core-update`
+- `/usr/local/sbin/treed-loading-screen`
 - `/etc/systemd/system/treed-update.service`
 - `/etc/systemd/system/treed-update.path`
 - `/etc/systemd/system/treed-update-recover.service`
@@ -50,8 +53,8 @@ The Moonraker sudoers rule allows only the validated `submit` subcommand. No rea
 
 ## Release and verification
 
-Build: `python3 runtime-scripts/treed-update/treed-core-update build . OUTPUT/treed-core-runtime.zip`.
-The release workflow builds this artifact on pushes to `treed-v2` or manual runs,
+Build the runtime artifact with `python3 runtime-scripts/treed-update/treed-core-update build . OUTPUT/treed-core-runtime.zip`.
+The release workflow also packages the matching source archive from the same tag. It builds these artifacts on pushes to `treed-v2` or manual runs,
 using version `0.<run_number>.<run_attempt>` and tag `v0.<run_number>.<run_attempt>`,
 as in the UI workflow. It stamps the job checkout and source asset `VERSION`
 without committing to the branch; runtime and release manifests share that version.

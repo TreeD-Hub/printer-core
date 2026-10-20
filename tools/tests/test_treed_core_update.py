@@ -9,12 +9,13 @@ import io
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
 import subprocess
 import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,6 +73,87 @@ class CoreUpdateTests(unittest.TestCase):
     def apply(self):
         return core.apply("v0.2.0", OPERATION, self.env)
 
+    def test_managed_loader_receives_fixed_preservation_environment(self):
+        self.manifest.update(requires={"klipper": "a" * 40, "moonraker": "b" * 40},
+                             provisioning={"schema": 1, "revision": "c" * 64})
+        self.stack.enter_context(patch.object(core.subprocess, "check_output", return_value=""))
+        self.stack.enter_context(patch.object(core, "extract_source"))
+        upstream = self.stack.enter_context(patch.object(core, "check_upstream_clean", wraps=core.check_upstream_clean))
+        for name, suffix in (("klipper", Path("klippy/extras")),
+                             ("moonraker", Path("moonraker/components"))):
+            checkout = self.root / f"custom-{name}"
+            location = checkout / suffix
+            location.mkdir(parents=True)
+            self.locations[name] = location
+            self.env[f"TREED_CORE_{name.upper()}_DIR"] = str(checkout)
+            key = f"{name}/treed_{'driver_mode' if name == 'klipper' else 'update'}.py"
+            (location / Path(key).name).write_bytes(self.old[key])
+        loader = self.stack.enter_context(patch.object(core, "run_managed_loader", return_value=0))
+        self.assertEqual("applied", self.apply()["status"])
+        args, kwargs = loader.call_args
+        self.assertEqual(args[0], self.root / "state/core" / OPERATION / "source")
+        self.assertEqual(args[1]["TREED_UPDATE_MANAGED"], "1")
+        self.assertEqual(args[1]["TREED_UPDATE_MANAGED_LOADER"], "1")
+        self.assertEqual(args[1]["TREED_UPDATE_OPERATION_ID"], OPERATION)
+        self.assertEqual(args[1]["TREED_DEPLOY_MODE"], "preserve")
+        self.assertEqual(args[1]["TREED_SHELL_INSTALL"], "0")
+        self.assertEqual(args[1]["TREED_KLIPPER_SRC_DIR"], str(self.env_path("klipper")))
+        self.assertEqual(args[1]["TREED_MOONRAKER_SRC_DIR"], str(self.env_path("moonraker")))
+        journal = core.read_json(core.journal_path(self.env, OPERATION))
+        self.assertEqual(journal["stage"], "committed")
+        self.assertTrue(journal["provisioningStarted"])
+        upstream.assert_called_once_with(self.locations, self.previous)
+        self.assertEqual(self.compatibility.call_args.args[0], self.manifest)
+        self.assertTrue(all("runtimeSha256" in row for row in self.compatibility.call_args.args[2]["files"]))
+
+    def env_path(self, name):
+        return Path(self.env[f"TREED_CORE_{name.upper()}_DIR"])
+
+    def test_managed_loader_failure_keeps_durable_provisioning_failure_without_rollback(self):
+        self.manifest.update(requires={"klipper": "a" * 40, "moonraker": "b" * 40},
+                             provisioning={"schema": 1, "revision": "c" * 64})
+        self.stack.enter_context(patch.object(core.subprocess, "check_output", return_value=""))
+        self.stack.enter_context(patch.object(core, "extract_source"))
+        self.stack.enter_context(patch.object(core, "run_managed_loader", return_value=1))
+        result = self.apply()
+        self.assertEqual("provisioning_failed", result["resultCode"])
+        self.assertEqual("provisioning_failed", core.read_json(core.journal_path(self.env, OPERATION))["stage"])
+        self.assertTrue(core.read_json(core.journal_path(self.env, OPERATION))["provisioningStarted"])
+        self.assertEqual(self.payload["klipper/treed_driver_mode.py"],
+                         core.destination("klipper/treed_driver_mode.py", self.locations).read_bytes())
+        self.services.assert_called_once_with("stop")
+
+    def test_committed_journal_write_error_does_not_runtime_rollback_provisioning(self):
+        self.manifest.update(requires={"klipper": "a" * 40, "moonraker": "b" * 40},
+                             provisioning={"schema": 1, "revision": "c" * 64})
+        self.stack.enter_context(patch.object(core.subprocess, "check_output", return_value=""))
+        self.stack.enter_context(patch.object(core, "extract_source"))
+        self.stack.enter_context(patch.object(core, "run_managed_loader", return_value=0))
+        original_write = core.write_json
+        journal = core.journal_path(self.env, OPERATION)
+
+        def fail_after_committed_write(path, value):
+            original_write(path, value)
+            if Path(path) == journal and value.get("stage") == "committed":
+                raise OSError("simulated fsync failure after durable rename")
+
+        self.stack.enter_context(patch.object(core, "write_json", side_effect=fail_after_committed_write))
+        result = self.apply()
+        self.assertEqual("provisioning_failed", result["resultCode"])
+        self.assertTrue(core.read_json(journal)["provisioningStarted"])
+        self.assertEqual(self.payload["klipper/treed_driver_mode.py"],
+                         core.destination("klipper/treed_driver_mode.py", self.locations).read_bytes())
+        self.assertEqual("0.2.0", core.read_json(core.manifest_path(self.env))["version"])
+        self.services.assert_called_once_with("stop")
+
+    def test_dirty_upstream_rejects_before_source_download_or_runtime_mutation(self):
+        self.manifest.update(requires={"klipper": "a" * 40, "moonraker": "b" * 40},
+                             provisioning={"schema": 1, "revision": "c" * 64})
+        self.stack.enter_context(patch.object(core.subprocess, "check_output", return_value=" M klippy.py"))
+        with self.assertRaisesRegex(ValueError, "Изменены исходники"):
+            self.apply()
+        self.services.assert_not_called()
+
     def assert_restored(self):
         for key, data in self.old.items():
             self.assertEqual(core.destination(key, self.locations).read_bytes(), data, key)
@@ -122,6 +204,47 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertTrue(any(row["path"] == "moonraker/treed_vision_client.py"
                             for row in self.wait.call_args_list[0].args[0]["files"]))
         self.assertEqual(self.previous, self.wait.call_args_list[1].args[0])
+
+    def test_provisioning_interruption_never_runtime_rolls_back(self):
+        journal = core.journal_path(self.env, OPERATION)
+        journal.parent.mkdir(parents=True)
+        core.write_json(journal, {"schema": 1, "stage": "provisioning_failed", "entries": []})
+        result = core.recover(self.env, OPERATION)
+        self.assertEqual(result["resultCode"], "provisioning_interrupted")
+        self.assertEqual(core.read_json(journal)["stage"], "provisioning_failed")
+        self.assertEqual((self.locations["config"] / "printer.cfg").read_bytes(),
+                         self.old["config/printer.cfg"])
+
+    def test_committed_managed_provisioning_recovers_only_when_ready(self):
+        journal = core.journal_path(self.env, OPERATION)
+        journal.parent.mkdir(parents=True)
+        expected = dict(self.manifest, files=[])
+        core.write_json(core.manifest_path(self.env), expected)
+        core.write_json(journal.parent / "manifest.new.json", expected)
+        core.write_json(journal, {"schema": 1, "stage": "committed", "provisioningStarted": True,
+                                  "entries": []})
+        with patch.object(core, "wait_ready", return_value=False), \
+             patch.object(core, "rollback") as rollback:
+            failed = core.recover(self.env, OPERATION)
+        self.assertEqual(failed["resultCode"], "provisioning_interrupted")
+        rollback.assert_not_called()
+        with patch.object(core, "wait_ready", return_value=True), \
+             patch.object(core, "rollback") as rollback:
+            ready = core.recover(self.env, OPERATION)
+        self.assertEqual(ready["status"], "applied")
+        rollback.assert_not_called()
+
+    def test_committed_legacy_recovery_keeps_runtime_rollback(self):
+        journal = core.journal_path(self.env, OPERATION)
+        journal.parent.mkdir(parents=True)
+        core.write_json(core.manifest_path(self.env), self.previous)
+        core.write_json(journal.parent / "manifest.new.json", self.manifest)
+        core.write_json(journal, {"schema": 1, "stage": "committed", "entries": []})
+        with patch.object(core, "rollback", return_value={"status": "rolled_back"}) as rollback:
+            result = core.recover(self.env, OPERATION)
+        self.assertEqual(result["status"], "rolled_back")
+        rollback.assert_called_once()
+
 
     def seed_pid_calibration(self, extruder_already_saved=False):
         extruder = b"[extruder]\ncontrol: pid\npid_Kp: 11.818\npid_Ki: 0.435\npid_Kd: 80.218\n"
@@ -497,6 +620,46 @@ class CoreUpdateTests(unittest.TestCase):
         self.services.assert_not_called()
 
 
+class ManagedLoaderProcessTests(unittest.TestCase):
+    def test_timeout_terminates_process_group_and_keeps_durable_log(self):
+        class Process:
+            pid = 4123
+            returncode = -9
+
+            def __init__(self):
+                self.waits = 0
+
+            def wait(self, timeout=None):
+                self.waits += 1
+                if self.waits == 1:
+                    raise subprocess.TimeoutExpired("loader", timeout)
+                return self.returncode
+
+        process = Process()
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / "loader.log"
+
+            def spawn(*_args, **kwargs):
+                kwargs["stdout"].write(b"loader started\n")
+                return process
+
+            with patch.object(core.subprocess, "Popen", side_effect=spawn) as popen, \
+                 patch.object(core.os, "killpg", create=True) as killpg, \
+                 patch.object(core.signal, "SIGKILL", 9, create=True), \
+                 patch.object(core, "process_group_exists", side_effect=[True, True]), \
+                 patch.object(core.time, "monotonic", side_effect=[0, 6]), \
+                 patch.object(core.time, "sleep"):
+                self.assertEqual(124, core.run_managed_loader(Path(temp), {}, log, timeout=1))
+            self.assertEqual(b"loader started\n", log.read_bytes())
+            if os.name != "nt":
+                self.assertEqual(0o600, log.stat().st_mode & 0o777)
+            popen.assert_called_once()
+            self.assertTrue(popen.call_args.kwargs["start_new_session"])
+            self.assertEqual([call(4123, core.signal.SIGTERM), call(4123, getattr(core.signal, "SIGKILL", 9))],
+                             killpg.call_args_list)
+            self.assertEqual(2, process.waits)
+
+
 class PackageTests(unittest.TestCase):
     # Блок 4: Реальный release artifact; пути и checksum проверяются без extractall.
     def test_incomplete_autoprinter_archive_is_rejected_but_legacy_is_supported(self):
@@ -564,6 +727,9 @@ print("DELIVERED_IMPORT_OK")
             manifest, payload = core.load_package(archive, "v" + (ROOT / "VERSION").read_text().strip())
         self.assertEqual(manifest["kind"], core.KIND)
         self.assertIn("sbin/treed-core-update", payload)
+        self.assertIn("sbin/treed-loading-screen", payload)
+        self.assertEqual(payload["sbin/treed-loading-screen"],
+                         core.sources(ROOT)["sbin/treed-loading-screen"].read_bytes())
         self.assertIn("klipper/treed_driver_mode.py", payload)
         self.assertTrue({"vision/service.py", "vision/models.json", "camera/stream_detect.py",
                          "moonraker/treed_vision_client.py"} <= payload.keys())
@@ -571,6 +737,73 @@ print("DELIVERED_IMPORT_OK")
         self.assertFalse(any(key.startswith("vision/") and key.endswith(".pth") for key in payload))
         self.assertFalse(any("local_overrides.cfg" in key for key in payload))
         self.assertFalse(any(key.startswith("loader/") for key in payload))
+        self.assertEqual(manifest["provisioning"]["revision"], core.provisioning_revision(ROOT))
+
+    def test_source_asset_matches_target_and_rejects_traversal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            archive = temp / core.SOURCE_ASSET
+            core.build_source(ROOT, archive)
+            with zipfile.ZipFile(archive) as bundle:
+                files = {name: bundle.read(name) for name in bundle.namelist()}
+            directories = set()
+            for name in files:
+                parent = PurePosixPath(name).parent
+                while parent.as_posix() != ".":
+                    directories.add(parent.as_posix() + "/")
+                    parent = parent.parent
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+                for name in sorted(directories):
+                    bundle.writestr(name, b"")
+                for name, data in files.items():
+                    bundle.writestr(name, data)
+            target_archive = temp / core.ASSET
+            core.build(ROOT, target_archive)
+            manifest, payload = core.load_package(target_archive, "v" + (ROOT / "VERSION").read_text().strip())
+            with zipfile.ZipFile(archive) as bundle:
+                self.assertTrue(any(row.is_dir() for row in bundle.infolist()))
+            core.extract_source(archive, temp / "source", manifest, payload)
+            with zipfile.ZipFile(archive, "a") as bundle:
+                bundle.writestr("../escape", b"bad")
+            with self.assertRaises(ValueError):
+                core.extract_source(archive, temp / "bad-source", manifest, payload)
+
+    def test_source_asset_runtime_mapping_must_match_verified_payload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            archive, runtime = temp / core.SOURCE_ASSET, temp / core.ASSET
+            core.build_source(ROOT, archive); core.build(ROOT, runtime)
+            manifest, payload = core.load_package(runtime, "v" + (ROOT / "VERSION").read_text().strip())
+            with zipfile.ZipFile(archive) as bundle:
+                files = {name: bundle.read(name) for name in bundle.namelist()}
+            files["klipper-host/treed_driver_mode.py"] += b"# mismatch\n"
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+                for name, data in files.items():
+                    bundle.writestr(name, data)
+            with self.assertRaisesRegex(ValueError, "не совпадает с target payload"):
+                core.extract_source(archive, temp / "source", manifest, payload)
+
+    def test_provisioning_route_uses_revision_upstream_refs_and_required_units(self):
+        target = {"requires": {"klipper": "a" * 40, "moonraker": "b" * 40},
+                  "provisioning": {"schema": 1, "revision": "c" * 64}}
+        installed = {"kind": core.KIND, "schema": 1, "provisioning": target["provisioning"]}
+        roots = {"klipper": Path("/home/pi/klipper/klippy/extras"),
+                 "moonraker": Path("/home/pi/moonraker/moonraker/components")}
+        with patch.object(core, "roots", return_value=roots), \
+             patch.object(core, "vision_units_installed", return_value=True), \
+             patch.object(core, "git_head", side_effect=["a" * 40, "b" * 40]):
+            self.assertFalse(core.needs_provisioning(target, installed, {}))
+        for mutate in (lambda target, baseline: baseline.update(provisioning={"schema": 1, "revision": "d" * 64}),
+                       lambda target, baseline: target["requires"].update(klipper="e" * 40)):
+            candidate, baseline = dict(target, requires=dict(target["requires"])), dict(installed)
+            mutate(candidate, baseline)
+            with patch.object(core, "roots", return_value=roots), \
+                 patch.object(core, "vision_units_installed", return_value=True), \
+                 patch.object(core, "git_head", side_effect=["a" * 40, "b" * 40]):
+                self.assertTrue(core.needs_provisioning(candidate, baseline, {}))
+        with patch.object(core, "roots", return_value=roots), \
+             patch.object(core, "vision_units_installed", return_value=False):
+            self.assertTrue(core.needs_provisioning(target, installed, {}))
 
     def test_archive_corruption_extra_entries_and_duplicates_are_rejected(self):
         for kind in ("corruption", "extra", "duplicate", "system-bundle"):
@@ -661,6 +894,51 @@ print("DELIVERED_IMPORT_OK")
 
 # Блок 5: Реальный Git с checkout другого владельца, без глобального доверия.
 class CoreGitOwnershipTests(unittest.TestCase):
+    def test_only_hash_matching_manifest_managed_untracked_upstream_modules_are_allowed(self):
+        with tempfile.TemporaryDirectory(prefix="treed managed upstream ") as temp, \
+             patch.dict(os.environ, {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}):
+            home = Path(temp)
+            env = {"TREED_UPDATE_PI_HOME": str(home)}
+            locations, requirements, previous_rows, target_rows = {}, {}, [], []
+            for name, suffix in (("klipper", Path("klippy/extras")),
+                                 ("moonraker", Path("moonraker/components"))):
+                repo = home / name
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=10)
+                (repo / "tracked.txt").write_text("original\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True, timeout=10)
+                subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c",
+                                "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                                "commit", "-qm", "Initial"], check=True, timeout=10)
+                requirements[name] = core.git_head(repo)
+                locations[name] = repo / suffix
+                locations[name].mkdir(parents=True)
+                key = f"{name}/treed_calibration.py"
+                data = f"# managed {name}\n".encode()
+                (locations[name] / "treed_calibration.py").write_bytes(data)
+                previous_rows.append({"path": key, "runtimeSha256": core.content_hash(key, data)})
+                target_rows.append({"path": key, "sha256": core.sha(data)})
+
+            previous = {"files": previous_rows}
+            target = {"requires": requirements, "files": target_rows}
+            with patch.object(core, "roots", return_value=locations):
+                core.check_upstream_clean(locations, previous)
+                core.check_compatibility(target, env, previous)
+                unknown = locations["klipper"] / "locally_created.py"
+                unknown.write_text("# not managed\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Изменены исходники установленного klipper"):
+                    core.check_upstream_clean(locations, previous)
+                unknown.unlink()
+                managed = locations["moonraker"] / "treed_calibration.py"
+                managed.write_text("# locally modified\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Изменены исходники установленного moonraker"):
+                    core.check_compatibility(target, env, previous)
+                managed.write_text("# managed moonraker\n", encoding="utf-8")
+                tracked = home / "klipper/tracked.txt"
+                tracked.write_text("local edit\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Изменены исходники установленного klipper"):
+                    core.check_upstream_clean(locations, previous)
+
     def test_cross_owner_read_preserves_version_and_dirty_checks(self):
         with tempfile.TemporaryDirectory(prefix="treed git ownership ") as temp, \
              patch.dict(os.environ, {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}):

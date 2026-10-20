@@ -33,6 +33,8 @@ class LoaderProgressTests(unittest.TestCase):
             "set -euo pipefail\n"
             f"REPO_DIR={shlex.quote(str(self.root))}\n"
             'PI_USER=""\n. "${REPO_DIR}/loader/lib/common.sh"\n'
+            # Экран проверяется отдельно; этот fixture запускает только цикл и renderer.
+            'TREED_UPDATE_MANAGED_LOADER=1\n'
             'STEPS=(first crowsnest-webcam last)\nOPTIONAL_STEPS=(crowsnest-webcam)\n'
             'write_device_state_snapshot() { printf "STATE_SNAPSHOT\\n"; }\n'
             + ERROR_TRAP + "\n# Блок 17:" + HELPERS + "\n" + LOOP

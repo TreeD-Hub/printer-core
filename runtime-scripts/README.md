@@ -6,7 +6,7 @@
 
 - `runtime-scripts/treed-cam/*` — runtime-команды камеры TreeD.
 - `runtime-scripts/treed-ui/*` — операторские команды переключения экранного UI.
-- `runtime-scripts/treed-update/*` — root-side очередь, persistent operation state, UI bundle и пакет компонентов core с journal/rollback.
+- `runtime-scripts/treed-update/*` — root-side очередь, persistent operation state, UI bundle, пакет компонентов core с journal/rollback и временный Plymouth экран loader.
 - `runtime-scripts/treed-ab/*` — fail-closed boundary для будущего A/B system updater.
 
 ## Модель деплоя
@@ -28,6 +28,7 @@
 - команды на устройстве: `/usr/local/sbin/treed-update-service`, `/usr/local/sbin/treed-update-apply`, `/usr/local/sbin/treed-core-update`
 - persistent operation state/history: `/var/lib/treed-update/state.json`
 - core version/ownership: `/var/lib/treed-update/core-manifest.json`, после успешного loader verify или runtime update
+- `treed-loading-screen` — root-only lifecycle-команда, которая временно показывает уже установленную тему Plymouth `updates` и возвращает исходно активный UI; standalone loader запускает исходник напрямую, updater устанавливает команду в `/usr/local/sbin/treed-loading-screen`.
 - отдельный системный A/B контур: `runtime-scripts/treed-ab/README.md`
 
 ## Контракт runtime-скриптов

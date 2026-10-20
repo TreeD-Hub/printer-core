@@ -99,6 +99,7 @@ if [[ ! -d "${SRC_DIR}" ]]; then
 fi
 
 # Блок 6: Атомарная синхронизация runtime-скриптов после quiescence сервисов.
+if [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]]; then
 log_info "Синхронизация runtime-скриптов: ${SRC_DIR} -> ${DST_BIN}"
 camera_stage="$(mktemp -d "${DST_ROOT}/.bin.next.XXXXXX")"
 vision_stage="$(mktemp -d "${VISION_ROOT}/.bin.next.XXXXXX")"
@@ -123,10 +124,16 @@ if ! mv "${vision_stage}" "${VISION_ROOT}/bin"; then
   exit 1
 fi
 rm -rf "${camera_old}" "${vision_old}"
+fi
 
 # Блок 7: Исполняемость shell-скриптов и права владельца.
-
-chown -R "${PI_USER}:${grp}" "${DST_ROOT}" || true
+if [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]]; then
+  for runtime_dir in "${DST_ROOT}" "${DST_BIN}" "${DST_DATA}" "${DST_ROOT}/config"; do
+    [[ ! -d "${runtime_dir}" ]] || chown "${PI_USER}:${grp}" "${runtime_dir}" || true
+  done
+else
+  chown -R "${PI_USER}:${grp}" "${DST_ROOT}" || true
+fi
 
 # Блок 8: Офлайн-модели принимаются только из явно заданных локальных артефактов.
 install_model() {
@@ -152,6 +159,9 @@ try: os.fsync(descriptor)
 finally: os.close(descriptor)
 PY
   mv -f -- "$temporary" "$destination"
+  if [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]]; then
+    chown "${PI_USER}:${grp}" "$destination" || true
+  fi
   python3 - "${VISION_ROOT}/models" <<'PY'
 import os, sys
 descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_DIRECTORY)
@@ -164,8 +174,16 @@ install_model "${TREED_VISION_SPAGHETTI_ARTIFACT:-}" "${VISION_ROOT}/models/spag
 install_model "${TREED_VISION_BED_ARTIFACT:-}" "${VISION_ROOT}/models/fdm-detail-e0-20261016-8de7e8aa22e2.pth" \
   127479855 8de7e8aa22e20893a563c0c04d28f0019dcad9ef8d805818df6fd2ec8b10866e
 
-# Блок 9: Используется явно заданный проверенный venv или офлайн wheelhouse.
-if [[ -n "${TREED_VISION_WHEELHOUSE:-}" && -d "${TREED_VISION_WHEELHOUSE}" ]]; then
+vision_python_valid() {
+  local candidate="$1"
+  [[ "${candidate}" = /* && -x "${candidate}" && "${candidate}" != *[[:space:]]* ]] &&
+    "${candidate}" -c 'import importlib.metadata as m; assert m.version("torch").split("+")[0] == "2.11.0" and m.version("torchvision").split("+")[0] == "0.26.0" and m.version("rfdetr") == "1.11.0" and m.version("Pillow") == "12.3.0"' >/dev/null 2>&1
+}
+
+# Блок 9: Используется проверенный локальный runtime или ставятся закрепленные CPU-зависимости.
+if [[ -n "${TREED_VISION_WHEELHOUSE:-}" && -d "${TREED_VISION_WHEELHOUSE}" ]] &&
+  ! vision_python_valid "${VISION_ENV}/bin/python" &&
+  { [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]] || ! vision_python_valid "${PI_HOME}/treed/autoprinter-bed-env/bin/python"; }; then
   if { [[ -x "${VISION_ENV}/bin/python" ]] || python3 -m venv "${VISION_ENV}"; } && \
     "${VISION_ENV}/bin/pip" install --no-index --find-links "${TREED_VISION_WHEELHOUSE}" \
       'torch==2.11.0' 'torchvision==0.26.0' 'rfdetr==1.11.0' 'Pillow==12.3.0'; then
@@ -174,11 +192,6 @@ if [[ -n "${TREED_VISION_WHEELHOUSE:-}" && -d "${TREED_VISION_WHEELHOUSE}" ]]; t
     log_warn "Локальный wheelhouse неполон; AI-анализ останется недоступен"
   fi
 fi
-vision_python_valid() {
-  local candidate="$1"
-  [[ "${candidate}" = /* && -x "${candidate}" && "${candidate}" != *[[:space:]]* ]] &&
-    "${candidate}" -c 'import importlib.metadata as m; assert m.version("torch").split("+")[0] == "2.11.0" and m.version("torchvision").split("+")[0] == "0.26.0" and m.version("rfdetr") == "1.11.0" and m.version("Pillow") == "12.3.0"' >/dev/null 2>&1
-}
 VISION_PYTHON=""
 if [[ -n "${TREED_VISION_PYTHON:-}" ]]; then
   VISION_PYTHON="${TREED_VISION_PYTHON}"
@@ -188,8 +201,25 @@ elif [[ -f /etc/systemd/system/treed-vision.service ]]; then
   VISION_PYTHON="$(sed -n 's/^ExecStart=\([^ ]*\) -u .*$/\1/p' /etc/systemd/system/treed-vision.service | head -n 1)"
 fi
 if ! vision_python_valid "${VISION_PYTHON}"; then
+  if [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]] && vision_python_valid "${PI_HOME}/treed/autoprinter-bed-env/bin/python"; then
+    VISION_PYTHON="${PI_HOME}/treed/autoprinter-bed-env/bin/python"
+  fi
+fi
+if ! vision_python_valid "${VISION_PYTHON}"; then
   if vision_python_valid "${VISION_ENV}/bin/python"; then
     VISION_PYTHON="${VISION_ENV}/bin/python"
+  elif [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]]; then
+    python3 -m venv "${VISION_ENV}"
+    if [[ -n "${TREED_VISION_WHEELHOUSE:-}" && -d "${TREED_VISION_WHEELHOUSE}" ]]; then
+      "${VISION_ENV}/bin/pip" install --no-index --find-links "${TREED_VISION_WHEELHOUSE}" \
+        'torch==2.11.0' 'torchvision==0.26.0' 'rfdetr==1.11.0' 'Pillow==12.3.0'
+    else
+      "${VISION_ENV}/bin/pip" install --index-url https://download.pytorch.org/whl/cpu \
+        'torch==2.11.0' 'torchvision==0.26.0'
+      "${VISION_ENV}/bin/pip" install 'rfdetr==1.11.0' 'Pillow==12.3.0'
+    fi
+    VISION_PYTHON="${VISION_ENV}/bin/python"
+    vision_python_valid "${VISION_PYTHON}" || { log_error "Pinned CPU vision runtime installation failed validation"; exit 1; }
   else
     VISION_PYTHON="/usr/bin/python3"
     log_warn "Локальный Python vision с нужными версиями недоступен; AI ответит unavailable"
@@ -199,7 +229,13 @@ printf 'VISION_PYTHON=%s\n' "${VISION_PYTHON}" > "${VISION_ENV_FILE}.tmp"
 chmod 0644 "${VISION_ENV_FILE}.tmp"
 mv -f "${VISION_ENV_FILE}.tmp" "${VISION_ENV_FILE}"
 install -d -m 0700 "${VISION_ROOT}/run"
-chown -R "${PI_USER}:${grp}" "${VISION_ROOT}"
+if [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]]; then
+  for runtime_dir in "${VISION_ROOT}" "${VISION_ROOT}/bin" "${VISION_ROOT}/models" "${VISION_ROOT}/run"; do
+    [[ ! -d "${runtime_dir}" ]] || chown "${PI_USER}:${grp}" "${runtime_dir}" || true
+  done
+else
+  chown -R "${PI_USER}:${grp}" "${VISION_ROOT}"
+fi
 
 # Блок 10: Сервис ограничен локальным Unix socket и ресурсами systemd.
 unit_tmp="$(mktemp /etc/systemd/system/treed-vision.service.XXXXXX)"
