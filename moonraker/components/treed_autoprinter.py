@@ -23,11 +23,12 @@ from typing import Any, Callable
 from .treed_autoprinter_device import MoonrakerDevice
 from .treed_autoprinter_bed import E0BedChecker
 from .treed_autoprinter_execution import AutoPrinterExecutor
-from .treed_autoprinter_store import AutoPrinterStore, StoreError, DEFAULT_MAX_JOURNAL_BYTES
+from .treed_autoprinter_store import AutoPrinterStore, StoreError, DEFAULT_MAX_JOURNAL_BYTES, valid_owner_profile
 from .treed_autoprinter_transport import AutoPrinterTransport, TransportError
 
 STATUS_ENDPOINT = "/server/treed/autoprinter/status"
 PAIRING_ENDPOINT = "/server/treed/autoprinter/pairing"
+PAIRING_CANCEL_ENDPOINT = "/server/treed/autoprinter/pairing/cancel"
 ACCOUNT_UNLINK_ENDPOINT = "/server/treed/autoprinter/account/unlink"
 CONTROL_ENDPOINT = "/server/treed/autoprinter/control"
 MAX_CREDENTIAL_BYTES = 8192
@@ -62,6 +63,7 @@ class TreeDAutoPrinter:
         self._recovery_required = False
         self.server.register_endpoint(STATUS_ENDPOINT, ["GET"], self._handle_status, wrap_result=False)
         self.server.register_endpoint(PAIRING_ENDPOINT, ["POST"], self._handle_pairing, wrap_result=False)
+        self.server.register_endpoint(PAIRING_CANCEL_ENDPOINT, ["POST"], self._handle_pairing_cancel, wrap_result=False)
         self.server.register_endpoint(ACCOUNT_UNLINK_ENDPOINT, ["POST"], self._handle_account_unlink, wrap_result=False)
         self.server.register_endpoint(CONTROL_ENDPOINT, ["POST"], self._handle_control, wrap_result=False)
         self.server.register_event_handler("server:shutdown", self.close)
@@ -186,7 +188,7 @@ class TreeDAutoPrinter:
                        "physical_execution_enabled": False,
                        "queue_recovery_required": self._recovery_required,
                        **execution,
-                         "capabilities": {"account_linking": True, **execution.get("capabilities", {})},
+                         "capabilities": {"account_linking": True, "pairing_cancel": True, **execution.get("capabilities", {})},
                        "blocked_reason": ("queue_recovery_required" if self._recovery_required
                                           else execution.get("blocked_reason"))})
         return status
@@ -226,16 +228,44 @@ class TreeDAutoPrinter:
             session = await self._run_blocking(self._store.session)
             if session["binding_state"] != "unpaired" or session["unlink_pending"]:
                 raise self.server.error("AutoPrinter pairing is unavailable", 409)
+            cached = await self._run_blocking(self._store.pairing)
+            if cached is not None:
+                return cached
             try:
                 result = await self._run_blocking(self._transport.pairing)
             except TransportError as error:
                 raise self.server.error("AutoPrinter pairing is unavailable", 503) from None
             code, expires_at, verification_url = (result.get("code"), result.get("expires_at"),
                                                    result.get("verification_url"))
-            if (not isinstance(code, str) or len(code) not in {8, 20} or not _future_time(expires_at)
+            if (not isinstance(code, str) or len(code) not in {8, 20}
+                    or "expires_at" not in result
+                    or (expires_at is not None and not _future_time(expires_at))
                     or not isinstance(verification_url, str)):
                 raise self.server.error("AutoPrinter pairing response is invalid", 502)
-            return {"code": code, "expires_at": expires_at, "verification_url": verification_url}
+            pairing = {"code": code, "expires_at": expires_at, "verification_url": verification_url}
+            await self._run_blocking(self._store.save_pairing, pairing)
+            return pairing
+
+    async def _handle_pairing_cancel(self, web_request) -> dict[str, bool]:
+        # Отмена подтверждается backend; потеря связи не уничтожает локальный код.
+        if self._closed or self._store is None or self._transport is None:
+            raise self.server.error("AutoPrinter is unavailable", 503)
+        if web_request.get_args():
+            raise self.server.error("Invalid pairing cancellation payload", 400)
+        async with self._lock:
+            if self._closed:
+                raise self.server.error("AutoPrinter is unavailable", 503)
+            session = await self._run_blocking(self._store.session)
+            if session["binding_state"] != "unpaired":
+                raise self.server.error("AutoPrinter pairing is unavailable", 409)
+            try:
+                result = await self._run_blocking(self._transport.cancel_pairing)
+            except TransportError:
+                raise self.server.error("AutoPrinter pairing cancellation is unavailable", 503) from None
+            if not isinstance(result, dict) or result.get("cancelled") is not True:
+                raise self.server.error("AutoPrinter pairing cancellation response is invalid", 502)
+            await self._run_blocking(self._store.save_pairing, None)
+            return {"cancelled": True}
 
     async def _handle_account_unlink(self, web_request) -> dict[str, Any]:
         if self._closed or self._store is None or self._transport is None:
@@ -556,11 +586,7 @@ def _validate_unlink_response(value: object, expected_epoch: int, *, confirmed: 
             or any(type(value[key]) is not int or value[key] < 1
                    for key in ("binding_epoch", "control_epoch", "queue_revision"))
             or type(value["unlink_pending"]) is not bool
-            or value["owner_profile"] is not None and (
-                not isinstance(value["owner_profile"], dict)
-                or set(value["owner_profile"]) != {"display_name"}
-                or not isinstance(value["owner_profile"]["display_name"], str)
-                or len(value["owner_profile"]["display_name"]) > 100)
+            or not valid_owner_profile(value["owner_profile"])
             or "display_name" in value and (not isinstance(value["display_name"], str)
                                              or len(value["display_name"]) > 100)):
         raise ValueError("invalid_unlink_response")
@@ -596,11 +622,7 @@ def _validate_response(value: object, printer_id: str, profile_id: str) -> None:
             or not isinstance(value["ack_event_ids"], list) or len(value["ack_event_ids"]) > 100
             or not isinstance(value["ignored_event_ids"], list) or len(value["ignored_event_ids"]) > 100):
         raise ValueError("invalid_sync_response")
-    if ("owner_profile" in value and value["owner_profile"] is not None
-            and (not isinstance(value["owner_profile"], dict)
-                 or set(value["owner_profile"]) != {"display_name"}
-                 or not isinstance(value["owner_profile"]["display_name"], str)
-                 or len(value["owner_profile"]["display_name"]) > 100)
+    if (not valid_owner_profile(value.get("owner_profile"))
             or "display_name" in value and (not isinstance(value["display_name"], str)
                                              or len(value["display_name"]) > 100)
             or "unlink_pending" in value and type(value["unlink_pending"]) is not bool):

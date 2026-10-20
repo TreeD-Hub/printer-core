@@ -95,6 +95,8 @@ class AutoPrinterTransport:
         request = Request(self._origin + "/" + path, data=body, method=method, headers={
             "Authorization": f"Bearer {self._secret}",
             "Accept": "application/json",
+            "X-TreeD-Owner-Profile": "avatar-v1",
+            "X-TreeD-Pairing": "persistent-v1",
             "Content-Type": "application/json",
         })
         try:
@@ -131,11 +133,14 @@ class AutoPrinterTransport:
     def pairing(self) -> dict[str, Any]:
         result = self._json("api/autoprinter/device/pairing", "POST")
         code, verification_url = result.get("code"), result.get("verification_url")
-        if (not _valid_pairing_code(code) or not isinstance(verification_url, str)
+        if ("expires_at" not in result or not _valid_pairing_code(code) or not isinstance(verification_url, str)
                 or not self._valid_verification_url(verification_url, code)):
             raise TransportError("invalid_pairing_response")
         return {"code": code, "expires_at": result.get("expires_at"),
                 "verification_url": verification_url}
+
+    def cancel_pairing(self) -> dict[str, Any]:
+        return self._json("api/autoprinter/device/pairing/cancel", "POST")
 
     def _valid_verification_url(self, value: str, code: str) -> bool:
         parsed = urlsplit(value)
