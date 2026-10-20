@@ -76,7 +76,10 @@ source-only release не предлагает применимое обновл�
 
 Worker вызывает `treed-core-update apply <tag> <operationId>` под общим lock.
 Updater проверяет SHA-256 GitHub Release asset, ZIP, manifest, разрешённые
-назначения и текущие upstream SHA/отсутствие tracked изменений. Перед остановкой
+назначения и текущие upstream SHA/отсутствие tracked изменений.
+Untracked-модули TreeD сверяются с ownership manifest и его хешами:
+совпадающие управляемые файлы не считаются изменением upstream. Неизвестный
+untracked-файл или правка tracked-файла блокирует обновление. Перед остановкой
 служб требуются Klipper `ready` и отсутствие активной печати/паузы по `print_stats.state`.
 Завершённое или отменённое задание и остаточные флаги макросов не блокируют update.
 При активной паузе UI предлагает отменить печать и обновиться. Только после

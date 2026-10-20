@@ -543,26 +543,71 @@ def package_manifest_for_source(repo, target_manifest):
             "requires": requirements}
 
 
-def check_compatibility(manifest, env):
+def _managed_upstream_untracked(repo, name, locations, manifests):
+    expected = {}
+    prefix = name + "/"
+    for manifest in manifests:
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), list):
+            continue
+        for row in manifest["files"]:
+            if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+                continue
+            key = row["path"]
+            if not key.startswith(prefix):
+                continue
+            try:
+                group, relative = allowed(key)
+            except ValueError:
+                continue
+            digest = row.get("runtimeSha256", row.get("sha256"))
+            if group != name or len(relative.parts) != 1 or not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
+                continue
+            path = locations[name] / relative
+            try:
+                git_path = path.relative_to(repo).as_posix()
+            except ValueError:
+                continue
+            expected.setdefault(git_path, []).append((key, digest))
+    return expected
+
+
+def _upstream_dirty(repo, name, locations, manifests):
+    dirty = subprocess.check_output(["git", "-c", f"safe.directory={repo.resolve().as_posix()}",
+                                    "-C", str(repo), "status", "--porcelain", "--untracked-files=all"],
+                                    text=True, timeout=10)
+    expected = _managed_upstream_untracked(repo, name, locations, manifests)
+    for row in dirty.splitlines():
+        if not row.startswith("?? "):
+            return True
+        relative = row[3:]
+        for key, digest in expected.get(relative, []):
+            path = repo / relative
+            if path.is_file() and not path.is_symlink():
+                try:
+                    if content_hash(key, path.read_bytes()) == digest:
+                        break
+                except OSError:
+                    pass
+        else:
+            return True
+    return False
+
+
+def check_compatibility(manifest, env, installed=None):
     locations = roots(env)
+    managed = (installed,) if installed is not None else ()
     for name, repo in (("klipper", locations["klipper"].parents[1]),
                        ("moonraker", locations["moonraker"].parents[1])):
         if git_head(repo) != manifest["requires"].get(name):
             raise ValueError(f"Пакет требует другую версию {name}; обновление зависимостей выполняется отдельно")
-        dirty = subprocess.check_output(["git", "-c", f"safe.directory={repo.resolve().as_posix()}",
-                                        "-C", str(repo), "status", "--porcelain"],
-                                        text=True, timeout=10).strip()
-        if dirty:
+        if _upstream_dirty(repo, name, locations, managed):
             raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
 
 
-def check_upstream_clean(locations):
+def check_upstream_clean(locations, installed=None):
     for name, repo in (("klipper", locations["klipper"].parents[1]),
                        ("moonraker", locations["moonraker"].parents[1])):
-        dirty = subprocess.check_output(["git", "-c", f"safe.directory={repo.resolve().as_posix()}",
-                                        "-C", str(repo), "status", "--porcelain"],
-                                        text=True, timeout=10).strip()
-        if dirty:
+        if _upstream_dirty(repo, name, locations, (installed,)):
             raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
 
 
@@ -728,9 +773,13 @@ def run_managed_loader(source, child_env, log_path, timeout=1500):
 
 def baseline(repo, env):
     manifest = package_manifest(repo)
-    check_compatibility(manifest, env)
+    runtime_sources = sources(repo)
+    managed = {"files": [{"path": key, "runtimeSha256": content_hash(key, source.read_bytes())}
+                         for key, source in runtime_sources.items()
+                         if key.startswith(("klipper/", "moonraker/"))]}
+    check_compatibility(manifest, env, managed)
     locations = roots(env)
-    for key, source in sorted(sources(repo).items()):
+    for key, source in sorted(runtime_sources.items()):
         data, _info = read_file(destination(key, locations))
         if data is None:
             raise ValueError(f"Baseline: runtime-файл отсутствует: {key}")
@@ -902,7 +951,7 @@ def apply(tag, operation, env, reset_configs=None):
         previous = read_json(manifest_path(env))
         provision = "provisioning" in manifest
         if provision:
-            check_upstream_clean(roots(env))
+            check_upstream_clean(roots(env), previous)
             provision = needs_provisioning(manifest, previous, env)
             if provision:
                 source_archive = journal.parent / SOURCE_ASSET
@@ -910,9 +959,9 @@ def apply(tag, operation, env, reset_configs=None):
                 download(tag, source_archive, env, SOURCE_ASSET)
                 extract_source(source_archive, journal.parent / "source", manifest, payload)
             else:
-                check_compatibility(manifest, env)
+                check_compatibility(manifest, env, previous)
         else:
-            check_compatibility(manifest, env)
+            check_compatibility(manifest, env, previous)
         uid, gid = owner(env)
         if not provision and not vision_units_installed():
             raise ValueError("Локальный vision runtime ещё не установлен; сначала запустите loader")
@@ -963,7 +1012,7 @@ def apply(tag, operation, env, reset_configs=None):
                         "message": "Loader не завершил provisioning; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
             transaction["stage"] = "provisioned"
             write_json(journal, transaction)
-            check_compatibility(manifest, env)
+            check_compatibility(manifest, env, current)
             if not vision_units_installed():
                 raise RuntimeError("Loader завершился без обязательных runtime units")
             for row in current["files"]:

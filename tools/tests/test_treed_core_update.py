@@ -78,6 +78,7 @@ class CoreUpdateTests(unittest.TestCase):
                              provisioning={"schema": 1, "revision": "c" * 64})
         self.stack.enter_context(patch.object(core.subprocess, "check_output", return_value=""))
         self.stack.enter_context(patch.object(core, "extract_source"))
+        upstream = self.stack.enter_context(patch.object(core, "check_upstream_clean", wraps=core.check_upstream_clean))
         for name, suffix in (("klipper", Path("klippy/extras")),
                              ("moonraker", Path("moonraker/components"))):
             checkout = self.root / f"custom-{name}"
@@ -101,6 +102,9 @@ class CoreUpdateTests(unittest.TestCase):
         journal = core.read_json(core.journal_path(self.env, OPERATION))
         self.assertEqual(journal["stage"], "committed")
         self.assertTrue(journal["provisioningStarted"])
+        upstream.assert_called_once_with(self.locations, self.previous)
+        self.assertEqual(self.compatibility.call_args.args[0], self.manifest)
+        self.assertTrue(all("runtimeSha256" in row for row in self.compatibility.call_args.args[2]["files"]))
 
     def env_path(self, name):
         return Path(self.env[f"TREED_CORE_{name.upper()}_DIR"])
@@ -890,6 +894,51 @@ print("DELIVERED_IMPORT_OK")
 
 # Блок 5: Реальный Git с checkout другого владельца, без глобального доверия.
 class CoreGitOwnershipTests(unittest.TestCase):
+    def test_only_hash_matching_manifest_managed_untracked_upstream_modules_are_allowed(self):
+        with tempfile.TemporaryDirectory(prefix="treed managed upstream ") as temp, \
+             patch.dict(os.environ, {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}):
+            home = Path(temp)
+            env = {"TREED_UPDATE_PI_HOME": str(home)}
+            locations, requirements, previous_rows, target_rows = {}, {}, [], []
+            for name, suffix in (("klipper", Path("klippy/extras")),
+                                 ("moonraker", Path("moonraker/components"))):
+                repo = home / name
+                repo.mkdir()
+                subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=10)
+                (repo / "tracked.txt").write_text("original\n", encoding="utf-8")
+                subprocess.run(["git", "-C", str(repo), "add", "tracked.txt"], check=True, timeout=10)
+                subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c",
+                                "user.email=test@example.invalid", "-c", "commit.gpgsign=false",
+                                "commit", "-qm", "Initial"], check=True, timeout=10)
+                requirements[name] = core.git_head(repo)
+                locations[name] = repo / suffix
+                locations[name].mkdir(parents=True)
+                key = f"{name}/treed_calibration.py"
+                data = f"# managed {name}\n".encode()
+                (locations[name] / "treed_calibration.py").write_bytes(data)
+                previous_rows.append({"path": key, "runtimeSha256": core.content_hash(key, data)})
+                target_rows.append({"path": key, "sha256": core.sha(data)})
+
+            previous = {"files": previous_rows}
+            target = {"requires": requirements, "files": target_rows}
+            with patch.object(core, "roots", return_value=locations):
+                core.check_upstream_clean(locations, previous)
+                core.check_compatibility(target, env, previous)
+                unknown = locations["klipper"] / "locally_created.py"
+                unknown.write_text("# not managed\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Изменены исходники установленного klipper"):
+                    core.check_upstream_clean(locations, previous)
+                unknown.unlink()
+                managed = locations["moonraker"] / "treed_calibration.py"
+                managed.write_text("# locally modified\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Изменены исходники установленного moonraker"):
+                    core.check_compatibility(target, env, previous)
+                managed.write_text("# managed moonraker\n", encoding="utf-8")
+                tracked = home / "klipper/tracked.txt"
+                tracked.write_text("local edit\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Изменены исходники установленного klipper"):
+                    core.check_upstream_clean(locations, previous)
+
     def test_cross_owner_read_preserves_version_and_dirty_checks(self):
         with tempfile.TemporaryDirectory(prefix="treed git ownership ") as temp, \
              patch.dict(os.environ, {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}):
