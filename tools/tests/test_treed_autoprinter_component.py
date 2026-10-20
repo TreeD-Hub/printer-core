@@ -1102,7 +1102,8 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
             try:
                 await instance._sync_once()
 
-                self.assertEqual([event], transport.payload["events"])
+                self.assertEqual([], transport.payload["events"])
+                self.assertEqual([], transport.payload["acknowledged_event_ids"])
                 self.assertFalse(executor.acknowledged)
                 self.assertNotEqual(old_boot, executor.rotated_to)
                 self.assertEqual(executor.rotated_to, store._get("execution_boot_id"))

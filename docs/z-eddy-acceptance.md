@@ -1,7 +1,7 @@
 # Приёмка Z-bottom и Eddy
 
 `OFFLINE PASS` подтверждает программные проверки. `HARDWARE ACCEPTED` требует
-пакетов с принтера и ручного закрытия G2–G7 в [GATES.md](../GATES.md).
+пакетов с принтера и ручного закрытия G2–G7 в рабочем `GATES.md` задачи.
 Сейчас аппаратная приёмка не выполнена; recovery включён штатно без `enabled`.
 Границы профиля: `position_min: -5`, `position_max: 203`,
 `bottom_position: 203`, `max_seek: 210`. Отход от фактического DIAG — 5 мм;

@@ -480,6 +480,7 @@ class AutoPrinterStoreTest(unittest.TestCase):
         try:
             for name in ("store.lock", "store.sqlite3"):
                 candidate = self.root / name
+                candidate.unlink(missing_ok=True)
                 candidate.symlink_to(target)
                 try:
                     with self.assertRaises(StoreError) as raised:
@@ -487,7 +488,7 @@ class AutoPrinterStoreTest(unittest.TestCase):
                     self.assertEqual("unsafe_storage_path", raised.exception.code)
                 finally:
                     candidate.unlink()
-        except (OSError, NotImplementedError):
+        except (PermissionError, NotImplementedError):
             self.skipTest("symlinks are unavailable in this Windows environment")
         finally:
             target.unlink()

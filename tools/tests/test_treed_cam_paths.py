@@ -40,6 +40,8 @@ class CameraPathsTest(unittest.TestCase):
         session = Path(self.marker.read_text().strip())
         self.assertEqual(session.parent, self.home / "treed/cam/prints")
         self.assertEqual(len(list(session.glob("*.jpg"))), 1)
+        self.assertFalse((session.parent / ".latest_session").exists())
+        self.assertTrue(Path(str(self.marker) + ".feedback-unavailable").exists())
         self.run_script("snapshot.sh")
         self.assertEqual(len(list(session.glob("*.jpg"))), 2)
 
@@ -51,15 +53,16 @@ class CameraPathsTest(unittest.TestCase):
 
     def test_repeat_sessions_and_stop_preserve_full_filename(self):
         filename = "folder with spaces/part test.gcode"
-        self.run_script("session_start.sh", filename)
+        self.run_script("session_start.sh", "101:" + filename)
         first = Path(self.marker.read_text().strip())
-        self.run_script("session_stop.sh")
+        self.run_script("session_stop.sh", "101")
         first_metadata = json.loads((first / "session.json").read_text(encoding="utf-8"))
         self.assertEqual(first_metadata["filename"], filename)
+        self.assertEqual(first_metadata["sessionToken"], 101)
         self.assertTrue(first_metadata["closed"])
-        self.run_script("session_stop.sh")
+        self.run_script("session_stop.sh", "101")
         self.assertEqual(json.loads((first / "session.json").read_text(encoding="utf-8")), first_metadata)
-        self.run_script("session_start.sh", filename)
+        self.run_script("session_start.sh", "202:" + filename)
         second = Path(self.marker.read_text().strip())
         self.assertNotEqual(first, second)
         latest = json.loads((second.parent / ".latest_session").read_text())
@@ -80,10 +83,10 @@ class CameraPathsTest(unittest.TestCase):
         self.assertTrue(json.loads((second / "session.json").read_text())["closed"])
 
     def test_failed_metadata_invalidates_prior_same_filename(self):
-        self.run_script("session_start.sh", "part.gcode")
-        self.run_script("session_stop.sh")
+        self.run_script("session_start.sh", "101:part.gcode")
+        self.run_script("session_stop.sh", "101")
         (self.bin / "session_metadata.py").write_text("raise SystemExit(1)\n")
-        self.run_script("session_start.sh", "part.gcode")
+        self.run_script("session_start.sh", "202:part.gcode")
         session = Path(self.marker.read_text().strip())
         self.assertFalse((session.parent / ".latest_session").exists())
         self.assertTrue(Path(str(self.marker) + ".feedback-unavailable").exists())
