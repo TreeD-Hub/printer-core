@@ -19,12 +19,18 @@ jobs:
   release:
     name: Release printer-core
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Resolve release version
         shell: bash
@@ -64,28 +70,30 @@ jobs:
           set -euo pipefail
           python3 -m py_compile moonraker/components/*.py
 
-      - name: Runtime updater checks
+      - name: Prepare pinned Moonraker runtime
+        shell: bash
         run: |
-          python3 -B tools/tests/test_treed_core_update.py
-          python3 -B tools/tests/test_treed_update_service.py
-          python3 -B tools/tests/test_treed_update_component.py
+          set -euo pipefail
+          source runtime-versions.env
+          git init "${RUNNER_TEMP}/moonraker"
+          git -C "${RUNNER_TEMP}/moonraker" fetch --depth=1 "${TREED_MOONRAKER_REPO}" "${TREED_MOONRAKER_REF}"
+          git -C "${RUNNER_TEMP}/moonraker" checkout --detach FETCH_HEAD
+          python3 -m pip install -r "${RUNNER_TEMP}/moonraker/scripts/moonraker-requirements.txt"
 
-      - name: Run contract checks
-        shell: pwsh
+      - name: Full offline regression
         run: |
-          $ErrorActionPreference = "Stop"
-          Get-ChildItem -LiteralPath "tools/tests" -Filter "test_*.ps1" |
-            Sort-Object Name |
-            ForEach-Object {
-              & $_.FullName
-            }
+          python3 -B tools/tests/run_offline.py
+
+      - name: Start deployed runtime
+        run: |
+          python3 runtime-scripts/treed-update/treed-core-update build . dist/treed-core-runtime.zip
+          python3 -B tools/tests/check_moonraker_startup.py --moonraker-source "${RUNNER_TEMP}/moonraker" --archive dist/treed-core-runtime.zip
 
       - name: Pack release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          python3 runtime-scripts/treed-update/treed-core-update build . dist/treed-core-runtime.zip
           git archive --format=zip --output="dist/treed-mainshellos-source.zip" HEAD
           python3 - <<'PY'
           import json
