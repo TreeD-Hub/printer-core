@@ -77,7 +77,7 @@ Loader создаёт `treed-vision.service` и `treed-detection.service`. Visio
 [`treed_detection`](../../moonraker/components/README.md#назначение-treed_detectionpy).
 Он проверяет связанные со сессией JPEG и worker provenance и сам запрашивает
 штатный `PAUSE` при подтверждённой серии. Скрипты сессии сохраняют снимки;
-`stream_detect.py --react` передаёт свежие видеокадры и метаданные локального worker-а.
+`stream_detect.py --react` передаёт свежие видеокадры и метаданные локального worker-а, включая оценку `score` и порог `threshold` для шкалы спагетти в «Камере AI».
 
 ## Деплой
 

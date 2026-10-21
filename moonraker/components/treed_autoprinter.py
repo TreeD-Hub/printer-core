@@ -1,6 +1,6 @@
 """Локальная очередь AutoPrinter, синхронизация и исполнение при защитных условиях.
 
-Контур: required для учёта очереди; запуск требует execution_enabled и свежего live-доказательства пустого стола.
+Контур: required для учёта очереди; запуск требует доступного устройства и свежего live-доказательства пустого стола.
 """
 
 from __future__ import annotations
@@ -37,11 +37,8 @@ LOGGER = logging.getLogger(__name__)
 
 class TreeDAutoPrinter:
     def __init__(self, config) -> None:
-        # Блок 2: выключенный компонент не открывает storage, task или сеть.
+        # Блок 2: регистрация компонента; storage, задачи и сеть открываются после проверки конфигурации.
         self.server = config.get_server()
-        self.enabled = config.getboolean("enabled", True)
-        self.execution_enabled = config.getboolean("execution_enabled", False)
-        self.bed_check_enabled = config.getboolean("bed_check_enabled", True)
         self._lock = asyncio.Lock()
         self._store = None
         self._transport = None
@@ -59,7 +56,7 @@ class TreeDAutoPrinter:
         self._config = config
         self._boot_id = str(uuid.uuid4())
         self._snapshot_seq = 0
-        self._connection = "disabled" if not self.enabled else "unconfigured"
+        self._connection = "unconfigured"
         self._recovery_required = False
         self.server.register_endpoint(STATUS_ENDPOINT, ["GET"], self._handle_status, wrap_result=False)
         self.server.register_endpoint(PAIRING_ENDPOINT, ["POST"], self._handle_pairing, wrap_result=False)
@@ -69,7 +66,7 @@ class TreeDAutoPrinter:
         self.server.register_event_handler("server:shutdown", self.close)
 
     async def component_init(self) -> None:
-        if not self.enabled or self._closed:
+        if self._closed:
             return
         try:
             self._store, self._transport = await self._run_blocking(self._create_configured)
@@ -86,31 +83,29 @@ class TreeDAutoPrinter:
             self._store = None
             return
         bed_checker = None
-        if self.bed_check_enabled:
-            try:
-                bed_checker = E0BedChecker(
-                    self._config.get("printer_id"),
-                    self._config.get("bed_check_model_path", ""),
-                    self._config.get("bed_check_python", ""),
-                    self._config.get("bed_check_snapshot_url", "http://127.0.0.1:8080/?action=snapshot"),
-                    socket_path=self._config.get("bed_check_socket"),
-                )
-            except (OSError, ValueError, TypeError):
-                self._bed_check_status = {
-                    "model_version": "fdm-detail-e0-20261016-8de7e8aa22e2",
-                    "allowed_model_versions": ["fdm-detail-e0-20261016-8de7e8aa22e2"],
-                    "live_qualified": False,
-                    "last_check": {"state": "unavailable", "reason": "configuration_invalid",
-                                   "checked_at": None},
-                }
-        if self.execution_enabled:
-            try:
-                self._device = MoonrakerDevice(self.server)
-            except Exception:
-                self._device_unavailable = True
+        try:
+            bed_checker = E0BedChecker(
+                self._config.get("printer_id"),
+                self._config.get("bed_check_model_path", ""),
+                self._config.get("bed_check_python", ""),
+                self._config.get("bed_check_snapshot_url", "http://127.0.0.1:8080/?action=snapshot"),
+                socket_path=self._config.get("bed_check_socket"),
+            )
+        except (OSError, ValueError, TypeError):
+            self._bed_check_status = {
+                "model_version": "fdm-detail-e0-20261016-8de7e8aa22e2",
+                "allowed_model_versions": ["fdm-detail-e0-20261016-8de7e8aa22e2"],
+                "live_qualified": False,
+                "last_check": {"state": "unavailable", "reason": "configuration_invalid",
+                               "checked_at": None},
+            }
+        try:
+            self._device = MoonrakerDevice(self.server)
+        except Exception:
+            self._device_unavailable = True
         self._executor = AutoPrinterExecutor(
             self._store, self._device, self._boot_id,
-            enabled=self.execution_enabled and self._device is not None,
+            enabled=self._device is not None,
             bed_checker=bed_checker,
         )
         self._connection = "offline"
@@ -151,7 +146,7 @@ class TreeDAutoPrinter:
     async def _handle_status(self, web_request) -> dict[str, Any]:
         # Блок 4: endpoint использует стандартную авторизацию Moonraker.
         if self._store is None or self._closed:
-            return {"enabled": self.enabled, "configured": False, "connection": self._connection,
+            return {"enabled": True, "configured": False, "connection": self._connection,
                     "protocol_version": 1, "configuration_version": 1, "last_sync_at": None,
                     "binding_state": "unpaired", "physical_execution_enabled": False,
                     "execution_enabled": False, "queue_recovery_required": False,
@@ -161,7 +156,7 @@ class TreeDAutoPrinter:
                     "blocked_reason": "device_unavailable" if self._device_unavailable else self._configuration_error}
         async with self._lock:
             if self._closed or self._store is None:
-                return {"enabled": self.enabled, "configured": False, "connection": self._connection,
+                return {"enabled": True, "configured": False, "connection": self._connection,
                         "protocol_version": 1, "configuration_version": 1, "last_sync_at": None,
                         "binding_state": "unpaired", "physical_execution_enabled": False,
                         "execution_enabled": False, "queue_recovery_required": self._recovery_required,

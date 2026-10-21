@@ -15,8 +15,9 @@ from unittest.mock import AsyncMock, patch
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location(
-    "treed_detection", ROOT / "moonraker/components/treed_detection.py")
+    "moonraker.components.treed_detection", ROOT / "moonraker/components/treed_detection.py")
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
@@ -95,8 +96,10 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         for index in (1, 2):
             state = await self.result(index)
             self.assertEqual(state["counter"], index)
+            self.assertEqual(state["recent_frame"]["consecutive_count"], index)
             self.api.run_gcode.assert_not_awaited()
         state = await self.result(3)
+        self.assertEqual(state["recent_frame"]["consecutive_count"], 3)
         self.assertEqual(state["pause_state"], "confirmed")
         status = await self.component._handle_status(None)
         self.assertEqual(status["pause_state"], "confirmed")
@@ -146,7 +149,7 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                             "captured_at": captured_at},
                 "captured_at": captured_at,
                 "worker_generation": "00000000-0000-4000-8000-000000000001",
-                "model_version": "spaghetti-v1", "verdict": verdict, "score": 0.99,
+                "model_version": "spaghetti-v1", "verdict": verdict, "score": 0.99, "threshold": 0.6,
             }
             return await asyncio.to_thread(reaction.publish, result, frame)
 
@@ -260,6 +263,85 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 await self.result(1, **overrides)
         self.api.run_gcode.assert_not_awaited()
+
+    async def test_preview_reuses_print_frame_without_switching_model(self):
+        state = await self.result(1, verdict="normal", score=0.27, threshold=0.6)
+        payload = {**state["recent_frame"], "jpeg_base64": "/9j/2Q=="}
+        self.component._preview_vision.infer = AsyncMock()
+        with patch.object(self.component, "_handle_frame", AsyncMock(return_value=payload)):
+            preview = await self.component._handle_preview(None)
+        self.assertEqual("spaghetti", preview["task"])
+        self.assertEqual((0.27, 0.6, []), (preview["score"], preview["threshold"], preview["boxes"]))
+        self.assertEqual(preview["consecutive_count"], 0)
+        self.component._preview_vision.infer.assert_not_awaited()
+        self.api.run_gcode.assert_not_awaited()
+
+    async def test_idle_preview_pairs_real_boxes_with_same_camera_frame(self):
+        self.objects["print_stats"]["state"] = "standby"
+        self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "idle"
+        jpeg = b"\xff\xd8preview\xff\xd9"
+        self.component._preview_vision.infer = AsyncMock(return_value={
+            "verdict": "occupied", "score": 0.87, "threshold": 0.52,
+            "boxes": [[10, 20, 40, 60]], "model_version": "e0", "reason": None})
+        with patch.object(module, "_capture_cancellable", AsyncMock(return_value=jpeg)):
+            preview = await self.component._handle_preview(None)
+        self.assertEqual(jpeg, base64.b64decode(preview["jpeg_base64"]))
+        self.assertEqual([[10, 20, 40, 60]], preview["boxes"])
+        self.assertEqual("bed", preview["task"])
+        self.assertEqual(jpeg, self.component._preview_vision.infer.call_args.args[2])
+        self.assertEqual(preview["captured_at"], self.component._preview_vision.infer.call_args.args[1]["captured_at"])
+        self.assertIsNone(self.component._recent_frame)
+        self.api.run_gcode.assert_not_awaited()
+
+    async def test_preview_disabled_ai_and_start_during_capture_never_infer(self):
+        self.objects["print_stats"]["state"] = "standby"
+        self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "idle"
+        self.component._preview_vision.infer = AsyncMock()
+        self.component._enabled = False
+        with patch.object(module, "_capture_cancellable", AsyncMock(return_value=b"\xff\xd8\xff\xd9")):
+            preview = await self.component._handle_preview(None)
+        self.assertEqual("ai_disabled", preview["reason"])
+        self.component._enabled = True
+
+        async def capture(_parts):
+            self.objects["print_stats"]["state"] = "printing"
+            self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "printing"
+            return b"\xff\xd8\xff\xd9"
+
+        with patch.object(module, "_capture_cancellable", capture):
+            preview = await self.component._handle_preview(None)
+        self.assertEqual("awaiting_detection", preview["reason"])
+        self.component._preview_vision.infer.assert_not_awaited()
+
+    async def test_preview_rejects_invalid_boxes_and_surfaces_camera_failure(self):
+        self.objects["print_stats"]["state"] = "standby"
+        self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "idle"
+        self.component._preview_vision.infer = AsyncMock(return_value={
+            "verdict": "occupied", "score": 0.9, "threshold": 0.5,
+            "boxes": [[0, 0, float("nan"), 10]], "model_version": "e0", "reason": None})
+        with patch.object(module, "_capture_cancellable", AsyncMock(return_value=b"\xff\xd8\xff\xd9")):
+            preview = await self.component._handle_preview(None)
+        self.assertEqual("vision_unavailable", preview["reason"])
+        self.assertEqual([], preview["boxes"])
+        with patch.object(module, "_capture_cancellable", AsyncMock(side_effect=OSError("camera"))):
+            with self.assertRaisesRegex(ValueError, "Camera snapshot is unavailable"):
+                await self.component._handle_preview(None)
+
+    async def test_preview_discards_inference_after_ai_switches_off(self):
+        self.objects["print_stats"]["state"] = "standby"
+        self.objects["gcode_macro _TREED_OPERATION_STATE"]["phase"] = "idle"
+
+        async def infer(*_args):
+            await self.component._handle_settings(Request(action="POST", enabled=False))
+            return {"verdict": "occupied", "boxes": [[10, 20, 40, 60]],
+                    "score": 0.9, "threshold": 0.5, "model_version": "e0", "reason": None}
+
+        self.component._preview_vision.infer = infer
+        with patch.object(module, "_capture_cancellable", AsyncMock(return_value=b"\xff\xd8\xff\xd9")):
+            preview = await self.component._handle_preview(None)
+        self.assertEqual("ai_disabled", preview["reason"])
+        self.assertEqual([], preview["boxes"])
+        self.assertIsNone(preview["score"])
 
     async def test_frame_endpoint_returns_only_bounded_recent_frame(self):
         status = await self.result(1)

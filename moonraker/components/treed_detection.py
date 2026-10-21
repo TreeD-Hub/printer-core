@@ -10,6 +10,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime, timezone
@@ -17,6 +18,9 @@ import os
 import stat
 import time
 import uuid
+
+from .treed_autoprinter_bed import _capture_cancellable, _parse_snapshot_url
+from .treed_vision_client import TreeDVisionClient
 
 LOGGER = logging.getLogger(__name__)
 MAX_FRAME_AGE_SECONDS = 6
@@ -79,6 +83,9 @@ class TreeDDetection:
         self._enabled = settings["enabled"]
         self._settings_generation = 0
         self._lock = asyncio.Lock()
+        self._preview_lock = asyncio.Lock()
+        self._preview_camera = _parse_snapshot_url(config.get("snapshot_url", "http://127.0.0.1:8080/?action=snapshot"))
+        self._preview_vision = TreeDVisionClient(socket_path=config.get("vision_socket"))
         self._session_id = None
         self._session_dir = None
         self._generation = 0
@@ -124,6 +131,10 @@ class TreeDDetection:
         )
         self.server.register_endpoint(
             "/server/treed/detection/reset", ["POST"], self._handle_reset,
+            wrap_result=False,
+        )
+        self.server.register_endpoint(
+            "/server/treed/detection/preview", ["GET"], self._handle_preview,
             wrap_result=False,
         )
 
@@ -236,6 +247,7 @@ class TreeDDetection:
             model_version = web_request.get("model_version")
             verdict = web_request.get("verdict")
             score = web_request.get("score")
+            threshold = web_request.get("threshold")
             try:
                 source_time = datetime.fromisoformat(captured_at.replace("Z", "+00:00")).timestamp()
             except (AttributeError, TypeError, ValueError):
@@ -249,6 +261,8 @@ class TreeDDetection:
                     or verdict not in {"spaghetti", "normal", "unknown", "unavailable"}
                     or (score is not None and (isinstance(score, bool)
                         or not isinstance(score, (int, float)) or not 0 <= score <= 1))
+                    or (threshold is not None and (type(threshold) not in {int, float}
+                        or not math.isfinite(threshold) or not 0 <= threshold <= 1))
                     or abs(source_time - metadata.st_mtime) > 3
                     or abs(time.time() - source_time) > MAX_FRAME_AGE_SECONDS):
                 self._last_order = order
@@ -270,10 +284,12 @@ class TreeDDetection:
             self._analysis_available = verdict not in {"unavailable", "unknown"}
             self._recent_frame = {"session_id": self._session_id, "frame_id": frame_id,
                                   "captured_at": captured_at, "verdict": verdict,
-                                  "model_version": model_version, "worker_generation": worker_generation}
+                                  "model_version": model_version, "worker_generation": worker_generation,
+                                  "score": score, "threshold": threshold}
             self._recent_frame_dir = self._session_dir
             confirmed = self._decision.update(
                 positive, source_time, worker_generation, model_version, frame_id)
+            self._recent_frame["consecutive_count"] = self._decision.count
             LOGGER.info("treed_detection: counter=%s, pause_state=%s",
                         self._decision.count, self._pause_state)
             if confirmed and self._pause_state == "idle":
@@ -283,6 +299,77 @@ class TreeDDetection:
                 await self._request_pause(context)
                 await self._sync_session()
             return self._status()
+
+    async def _handle_preview(self, _web_request) -> dict:
+        # Просмотр использует штатные результаты печати и не переключает её модель на bed.
+        if self._preview_lock.locked():
+            raise self.server.error("Camera preview is busy", 503)
+        async with self._preview_lock:
+            async with self._lock:
+                await self._sync_session()
+                enabled = self._enabled
+                recent = dict(self._recent_frame) if self._recent_frame else None
+            objects = await self.klippy_apis.query_objects(RUNTIME_OBJECTS, default={})
+            idle = (objects.get("gcode_macro _TREED_OPERATION_STATE", {}).get("phase") == "idle"
+                    and objects.get("print_stats", {}).get("state") in {"standby", "complete", "cancelled", "error"})
+            if enabled and not idle and recent:
+                age = time.time() - datetime.fromisoformat(recent["captured_at"].replace("Z", "+00:00")).timestamp()
+                if -1 <= age <= MAX_FRAME_AGE_SECONDS:
+                    class FrameRequest:
+                        def get_str(self, key):
+                            return recent[key]
+                    try:
+                        frame = await self._handle_frame(FrameRequest())
+                    except Exception:
+                        pass
+                    else:
+                        return {**frame, "task": "spaghetti", "boxes": [], "reason": None}
+            try:
+                jpeg = await _capture_cancellable(self._preview_camera)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise self.server.error("Camera snapshot is unavailable", 503) from None
+            captured_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            preview = {"jpeg_base64": base64.b64encode(jpeg).decode("ascii"),
+                       "captured_at": captured_at, "task": None, "verdict": "unavailable",
+                       "score": None, "threshold": None, "boxes": [], "model_version": None,
+                       "reason": "ai_disabled" if not enabled else "awaiting_detection"}
+            if not enabled or not idle:
+                return preview
+            # После захвата повторно проверяем простой перед диагностическим анализом.
+            objects = await self.klippy_apis.query_objects(RUNTIME_OBJECTS, default={})
+            if (not self._enabled or objects.get("gcode_macro _TREED_OPERATION_STATE", {}).get("phase") != "idle"
+                    or objects.get("print_stats", {}).get("state") not in {"standby", "complete", "cancelled", "error"}):
+                preview["reason"] = "ai_disabled" if not self._enabled else "awaiting_detection"
+                return preview
+            preview["task"] = "bed"
+            settings_generation = self._settings_generation
+            try:
+                result = await self._preview_vision.infer("bed", {"captured_at": captured_at}, jpeg)
+                objects = await self.klippy_apis.query_objects(RUNTIME_OBJECTS, default={})
+                if (settings_generation != self._settings_generation or not self._enabled
+                        or objects.get("gcode_macro _TREED_OPERATION_STATE", {}).get("phase") != "idle"
+                        or objects.get("print_stats", {}).get("state") not in {"standby", "complete", "cancelled", "error"}):
+                    preview["task"] = None
+                    preview["reason"] = "ai_disabled" if not self._enabled else "awaiting_detection"
+                    return preview
+                boxes = result["boxes"]
+                if (result["verdict"] not in {"occupied", "unknown", "unavailable"}
+                        or any(not isinstance(box, list) or len(box) != 4
+                               or any(type(value) not in {int, float} or not math.isfinite(value) for value in box)
+                               or not (0 <= box[0] < box[2] <= 8192 and 0 <= box[1] < box[3] <= 8192)
+                               for box in boxes)
+                        or (result["verdict"] == "occupied") != bool(boxes)):
+                    raise ValueError("invalid_preview")
+                # Полный ответ ограничен IPC; для экрана достаточно первых ста рамок.
+                preview.update({key: result[key] for key in ("verdict", "score", "threshold", "model_version", "reason")})
+                preview["boxes"] = boxes[:100]
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                preview["reason"] = "vision_unavailable"
+            return preview
 
     async def _handle_frame(self, web_request) -> dict:
         async with self._lock:

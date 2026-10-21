@@ -42,15 +42,12 @@ class FakeServer:
 
 
 class FakeConfig:
-    def __init__(self, enabled=False, **values):
+    def __init__(self, **values):
         self.server = FakeServer()
-        self.values = {"enabled": enabled, **values}
+        self.values = values
 
     def get_server(self):
         return self.server
-
-    def getboolean(self, key, default=False):
-        return self.values.get(key, default)
 
     def get(self, key, default=None):
         return self.values.get(key, default)
@@ -74,7 +71,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             component._validate_unlink_response(response, 1, confirmed=False)
 
-    async def test_disabled_component_registers_only_authorized_local_endpoints(self):
+    async def test_unconfigured_component_registers_only_authorized_local_endpoints(self):
         with patch.object(component, "AutoPrinterStore") as store, \
                 patch.object(component, "AutoPrinterTransport") as transport, \
                 patch.object(component, "MoonrakerDevice") as device, \
@@ -85,7 +82,6 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         transport.assert_not_called()
         device.assert_not_called()
         bed_checker.assert_not_called()
-        self.assertFalse(instance.enabled)
         self.assertEqual(set(config.server.endpoints), {
             component.STATUS_ENDPOINT, component.PAIRING_ENDPOINT,
             component.PAIRING_CANCEL_ENDPOINT, component.ACCOUNT_UNLINK_ENDPOINT, component.CONTROL_ENDPOINT})
@@ -95,6 +91,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         status = await instance._handle_status(None)
         self.assertEqual(status["protocol_version"], 1)
         self.assertEqual(status["configuration_version"], 1)
+        self.assertTrue(status["enabled"])
         self.assertIsNone(status["last_sync_at"])
         self.assertFalse(status["physical_execution_enabled"])
         self.assertTrue(status["capabilities"]["account_linking"])
@@ -107,7 +104,6 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_defaults_enable_features_but_missing_credentials_do_not_start_workers(self):
         config = FakeConfig()
-        config.values.pop("enabled")
         with patch.object(component, "AutoPrinterStore") as store, \
                 patch.object(component, "AutoPrinterTransport") as transport, \
                 patch.object(component, "MoonrakerDevice") as device, \
@@ -116,9 +112,6 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
             try:
                 await instance.component_init()
                 status = await instance._handle_status(None)
-                self.assertTrue(instance.enabled)
-                self.assertFalse(instance.execution_enabled)
-                self.assertTrue(instance.bed_check_enabled)
                 self.assertTrue(status["enabled"])
                 self.assertFalse(status["configured"])
                 self.assertFalse(status["execution_enabled"])
@@ -152,7 +145,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 "action_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}))
 
     async def test_journal_configuration_error_is_safe_and_does_not_start_workers(self):
-        instance = component.TreeDAutoPrinter(FakeConfig(enabled=True))
+        instance = component.TreeDAutoPrinter(FakeConfig())
         with patch.object(instance, "_create_configured", side_effect=component.StoreError("journal_limit_exceeded")), \
                 patch.object(component, "MoonrakerDevice") as device:
             await instance.component_init()
@@ -164,7 +157,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
         device.assert_not_called()
         await instance.close()
 
-    async def test_execution_disabled_does_not_construct_live_device(self):
+    async def test_configured_component_initializes_all_features_without_flags(self):
         printer_id = "11111111-1111-4111-8111-111111111111"
         profile_id = "treed_v2_corexy_v1"
         with tempfile.TemporaryDirectory() as directory:
@@ -174,22 +167,26 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 {"printer_id": printer_id, "secret": "s" * 32}), encoding="utf-8")
             if os.name != "nt":
                 credentials.chmod(0o600)
-            config = FakeConfig(enabled=True, execution_enabled=False, printer_id=printer_id,
+            config = FakeConfig(printer_id=printer_id,
                                 profile_id=profile_id, credentials_path=str(credentials),
                                 api_origin="https://example.test", storage_path=str(root / "store"))
             instance = component.TreeDAutoPrinter(config)
             instance._sync_loop = AsyncMock()
+            instance._execution_loop = AsyncMock()
             with patch.object(component, "AutoPrinterTransport", return_value=object()), \
-                    patch.object(component, "MoonrakerDevice") as device:
+                    patch.object(component, "MoonrakerDevice") as device, \
+                    patch.object(component, "E0BedChecker") as bed_checker:
                 try:
                     await instance.component_init()
-                    self.assertIsNone(instance._device)
-                    self.assertFalse(instance._executor.enabled)
-                    device.assert_not_called()
+                    self.assertIs(instance._device, device.return_value)
+                    self.assertTrue(instance._executor.enabled)
+                    self.assertIs(instance._executor.bed_checker, bed_checker.return_value)
+                    device.assert_called_once_with(config.server)
+                    bed_checker.assert_called_once()
                 finally:
                     await instance.close()
 
-    async def test_bed_check_can_be_enabled_without_execution_and_recheck_while_paired(self):
+    async def test_bed_recheck_while_paired_without_live_device(self):
         printer_id = "11111111-1111-4111-8111-111111111111"
         profile_id = "treed_v2_corexy_v1"
 
@@ -222,8 +219,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
             if os.name != "nt":
                 credentials.chmod(0o600)
             checker = CandidateChecker()
-            config = FakeConfig(enabled=True, execution_enabled=False, bed_check_enabled=True,
-                                printer_id=printer_id, profile_id=profile_id,
+            config = FakeConfig(printer_id=printer_id, profile_id=profile_id,
                                 credentials_path=str(credentials), api_origin="https://example.test",
                                 storage_path=str(root / "store"), bed_check_model_path=str(root / "model.pth"),
                                 bed_check_python=str(root / "python"))
@@ -233,12 +229,12 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
             try:
                 with patch.object(component, "AutoPrinterTransport", return_value=object()), \
                         patch.object(component, "E0BedChecker", return_value=checker) as make_checker, \
-                        patch.object(component, "MoonrakerDevice") as device:
+                        patch.object(component, "MoonrakerDevice", side_effect=RuntimeError("unavailable")) as device:
                     await instance.component_init()
                     make_checker.assert_called_once_with(
                         printer_id, str(root / "model.pth"), str(root / "python"),
                         "http://127.0.0.1:8080/?action=snapshot", socket_path=None)
-                    device.assert_not_called()
+                    device.assert_called_once_with(config.server)
                     self.assertFalse(instance._executor.enabled)
                     self.assertIs(checker, instance._executor.bed_checker)
                 await instance._executor.initialize()
@@ -251,6 +247,8 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                                                        "ack_event_ids": [], "ignored_event_ids": []}, submitted)
                 status = await instance._handle_status(None)
                 self.assertEqual(checker.status(), status["bed_check"])
+                self.assertEqual("device_unavailable", status["blocked_reason"])
+                self.assertFalse(status["execution_enabled"])
                 self.assertFalse(status["capabilities"]["bed_check"])
                 self.assertTrue(status["capabilities"]["bed_check_diagnostic"])
                 self.assertTrue(status["capabilities"]["queue"])
@@ -273,8 +271,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 {"printer_id": printer_id, "secret": "s" * 32}), encoding="utf-8")
             if os.name != "nt":
                 credentials.chmod(0o600)
-            config = FakeConfig(enabled=True, execution_enabled=False, bed_check_enabled=True,
-                                printer_id=printer_id, profile_id="treed_v2_corexy_v1",
+            config = FakeConfig(printer_id=printer_id, profile_id="treed_v2_corexy_v1",
                                 credentials_path=str(credentials), api_origin="https://example.test",
                                 storage_path=str(root / "store"), bed_check_model_path="relative/model.pth",
                                 bed_check_python="relative/python")
@@ -339,7 +336,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 {"printer_id": printer_id, "secret": "s" * 32}), encoding="utf-8")
             if os.name != "nt":
                 credentials.chmod(0o600)
-            config = FakeConfig(enabled=True, execution_enabled=False, printer_id=printer_id,
+            config = FakeConfig(printer_id=printer_id,
                                 profile_id=profile_id, credentials_path=str(credentials),
                                 api_origin="https://example.test", storage_path=str(root / "store"))
             instance = component.TreeDAutoPrinter(config)
@@ -438,7 +435,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 await instance.close()
 
     async def test_account_unlink_keeps_durable_pending_when_transport_is_offline(self):
-        config = FakeConfig(enabled=True)
+        config = FakeConfig()
         instance = component.TreeDAutoPrinter(config)
 
         class FakeStore:
@@ -692,7 +689,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 {"printer_id": printer_id, "secret": "s" * 32}), encoding="utf-8")
             if os.name != "nt":
                 credentials.chmod(0o600)
-            config = FakeConfig(enabled=True, printer_id=printer_id, profile_id=profile_id,
+            config = FakeConfig(printer_id=printer_id, profile_id=profile_id,
                                 credentials_path=str(credentials), api_origin="https://example.test",
                                 storage_path=str(root / "store"))
             with patch.object(component, "AutoPrinterTransport", return_value=FakeTransport()):
