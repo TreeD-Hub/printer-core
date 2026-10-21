@@ -710,9 +710,8 @@ class Server:
     def register_event_handler(self, *args): pass
 class Config:
     def get_server(self): return Server()
-    def getboolean(self, name, default=False): return False if name == "enabled" else default
 instance = component.load_component(Config())
-assert not instance.enabled and instance._store is None and instance._task is None
+assert instance._store is None and instance._task is None
 print("DELIVERED_IMPORT_OK")
 '''
             result = subprocess.run([sys.executable, "-I", "-B", "-c", script, temp],

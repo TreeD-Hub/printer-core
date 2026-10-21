@@ -305,6 +305,7 @@ class Reaction:
             "worker_generation": result["worker_generation"],
             "model_version": result["model_version"], "verdict": result["verdict"],
             "score": result["score"],
+            "threshold": result["threshold"],
         })
         confirmed = (isinstance(result, dict) and result.get("pause_state") == "confirmed"
                      and isinstance(result.get("context"), dict)
