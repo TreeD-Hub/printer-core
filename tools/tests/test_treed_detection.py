@@ -73,9 +73,32 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
                     register_endpoint=lambda path, methods, handler, **kwargs:
                     self.endpoints.update({path: (methods, handler)}))
         values = {"frames_root": str(self.frames), "session_file": str(self.marker)}
-        self.config = NS(get_server=lambda: server, get=lambda key, default=None: values.get(key, default))
+        missing = object()
+        def get(key, default=missing):
+            if key in values:
+                return values[key]
+            if default is missing:
+                raise ValueError(f"No option '{key}' in section: 'treed_detection'")
+            return default
+        self.config = NS(get_server=lambda: server, get=get)
         self.component = module.TreeDDetection(self.config)
         self.session_id = f"1:0:{self.session.name}"
+
+    async def test_legacy_config_uses_default_vision_socket(self):
+        self.assertEqual(module.TreeDVisionClient().socket_path,
+                         self.component._preview_vision.socket_path)
+
+    async def test_configured_vision_socket_is_used_and_relative_path_rejected(self):
+        original_get = self.config.get
+        for value in (str(self.root / "custom.sock"), "relative.sock"):
+            with self.subTest(socket=value):
+                self.config.get = lambda key, *args: value if key == "vision_socket" else original_get(key, *args)
+                if value == "relative.sock":
+                    with self.assertRaisesRegex(ValueError, "invalid_socket_path"):
+                        module.TreeDDetection(self.config)
+                else:
+                    component = module.TreeDDetection(self.config)
+                    self.assertEqual(value, component._preview_vision.socket_path)
 
     async def result(self, index, verdict="spaghetti", **overrides):
         frame_id = f"img_{index}.jpg"

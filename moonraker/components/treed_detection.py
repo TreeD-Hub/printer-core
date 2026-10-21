@@ -85,7 +85,7 @@ class TreeDDetection:
         self._lock = asyncio.Lock()
         self._preview_lock = asyncio.Lock()
         self._preview_camera = _parse_snapshot_url(config.get("snapshot_url", "http://127.0.0.1:8080/?action=snapshot"))
-        self._preview_vision = TreeDVisionClient(socket_path=config.get("vision_socket"))
+        self._preview_vision = TreeDVisionClient(socket_path=config.get("vision_socket", None))
         self._session_id = None
         self._session_dir = None
         self._generation = 0

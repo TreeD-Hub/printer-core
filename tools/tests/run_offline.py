@@ -23,6 +23,8 @@ def main():
         git_bash = Path(git).parent.parent / 'bin/bash.exe' if git else None
         bash = str(git_bash) if git_bash and git_bash.is_file() else None
     runners = {'.py': [sys.executable, '-B'], '.ps1': [pwsh, '-NoProfile', '-File'], '.sh': [bash]}
+    env = dict(os.environ)
+    env['PYTHONPATH'] = os.pathsep.join(filter(None, (str(root), env.get('PYTHONPATH'))))
     failed, count = [], 0
     for path in sorted(tests.glob('test_*')):
         if path.suffix not in runners:
@@ -36,7 +38,7 @@ def main():
         if os.name == 'nt' and path.suffix == '.sh':
             script = '/' + path.drive[0].lower() + path.as_posix()[2:]
         try:
-            result = subprocess.run(command+[script], cwd=root, capture_output=True,
+            result = subprocess.run(command+[script], cwd=root, env=env, capture_output=True,
                                     encoding='utf-8', errors='replace', timeout=180)
             if result.returncode:
                 failed.append(path.name)

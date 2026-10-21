@@ -59,7 +59,10 @@ $EddyProfileUuid = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/probe_eddy_
 $EddyProfileIface = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg" "canbus_interface"
 
 Assert-Contains ".github/workflows/contracts.yml" "tools/tests/\*\*" "GitHub Actions watches contract tests"
-Assert-Contains ".github/workflows/contracts.yml" "PowerShell contract tests" "GitHub Actions runs PowerShell contract tests"
+foreach ($workflow in @("contracts.yml", "release.yml")) {
+  Assert-Contains ".github/workflows/$workflow" 'python3 -B tools/tests/run_offline\.py' "CI runs all offline Python, PowerShell and shell checks"
+  Assert-Contains ".github/workflows/$workflow" 'check_moonraker_startup\.py.*--archive dist/treed-core-runtime\.zip' "CI starts the delivered runtime before publication"
+}
 Assert-Contains "VERSION" '^\d+\.\d+\.\d+\s*$' "printer-core has a semver VERSION file"
 Assert-Contains ".github/workflows/release.yml" '"name": "printer-core"' "release workflow writes the canonical printer-core manifest name"
 Assert-Contains ".github/workflows/release.yml" 'tags:\s*\r?\n\s+- "v\*\.\*\.\*"' "release workflow runs from semver tags"
