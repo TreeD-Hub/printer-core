@@ -95,9 +95,24 @@ fi
 
 ensure_dir "${CONFIG_DIR}"
 
-# Блок 4: Preserve-режим — временно сохраняем локальные runtime-overrides.
+# Блок 4: Preserve-режим — сохраняем локальные данные до успешного восстановления.
 TMP_KEEP=""
 if [ "${DEPLOY_MODE}" = "preserve" ]; then
+  TMP_KEEP="$(dirname "${CONFIG_DIR}")/.treed-config-preserve"
+  if [ -L "${TMP_KEEP}" ] || { [ -e "${TMP_KEEP}" ] && [ ! -d "${TMP_KEEP}" ]; }; then
+    log_error "klipper-core: invalid recovery directory ${TMP_KEEP}"
+    exit 1
+  fi
+  if [ -f "${TMP_KEEP}/.complete" ] && [ ! -L "${TMP_KEEP}/.complete" ]; then
+    for preserve_name in treed_variables.cfg local_overrides.cfg filament_motion_runtime.cfg printer_save_config.block; do
+      preserve_path="${TMP_KEEP}/${preserve_name}"
+      if [ -L "${preserve_path}" ] || { [ -e "${preserve_path}" ] && [ ! -f "${preserve_path}" ]; }; then
+        log_error "klipper-core: invalid preserved file ${preserve_path}"
+        exit 1
+      fi
+    done
+    log_info "klipper-core: resuming preserved settings from ${TMP_KEEP}"
+  else
   for preserve_name in treed_variables.cfg local_overrides.cfg filament_motion_runtime.cfg printer.cfg; do
     preserve_path="${CONFIG_DIR}/${preserve_name}"
     if [ -e "${preserve_path}" ] || [ -L "${preserve_path}" ]; then
@@ -108,7 +123,9 @@ if [ "${DEPLOY_MODE}" = "preserve" ]; then
     fi
   done
 
-  TMP_KEEP="$(mktemp -d)"
+  # Неполный снимок не разрешал очистку runtime; его можно собрать заново.
+  rm -rf "${TMP_KEEP}"
+  mkdir -m 700 "${TMP_KEEP}"
 
   # Настройки режимов и калибровки принадлежат принтеру, а не staging.
   if [ -e "${CONFIG_DIR}/treed_variables.cfg" ]; then
@@ -161,8 +178,14 @@ if [ "${DEPLOY_MODE}" = "preserve" ]; then
   if [ ! -e "${TMP_KEEP}/local_overrides.cfg" ] && [ ! -e "${TMP_KEEP}/filament_motion_runtime.cfg" ] && [ ! -e "${TMP_KEEP}/printer_save_config.block" ] && [ ! -e "${TMP_KEEP}/treed_variables.cfg" ]; then
     log_info "klipper-core: preserve mode, no local runtime overrides found"
   fi
+  sync -f "${TMP_KEEP}"
+  touch "${TMP_KEEP}/.complete"
+  sync -f "${TMP_KEEP}"
+  fi
 else
   log_info "klipper-core: deploy mode ${DEPLOY_MODE}, runtime config will be rebuilt from staging"
+  # Явный clean отменяет сохранение предыдущей незавершённой установки.
+  rm -rf "$(dirname "${CONFIG_DIR}")/.treed-config-preserve"
 fi
 
 # Блок 5: Полная раскладка runtime-конфига из staging.
@@ -251,7 +274,9 @@ if [ -n "${TMP_KEEP}" ] && [ -d "${TMP_KEEP}" ]; then
     log_info "klipper-core: restored printer.cfg SAVE_CONFIG segment"
   fi
 
+  sync -f "${CONFIG_DIR}"
   rm -rf "${TMP_KEEP}"
+  sync -f "$(dirname "${CONFIG_DIR}")"
 fi
 
 # Блок 8: Гарантии пост-деплоя и финальная ownership-нормализация.

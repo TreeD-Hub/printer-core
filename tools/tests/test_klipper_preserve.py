@@ -55,7 +55,7 @@ class KlipperPreserveTests(unittest.TestCase):
     def new_fixture(self, root: Path) -> tuple[Path, Path, dict[str, str]]:
         config = root / "config"
         config.mkdir()
-        keep = root / "keep"
+        keep = root / ".treed-config-preserve"
         env = {
             "TEST_CONFIG_DIR": str(config).replace("\\", "/"),
             "TEST_TMP_KEEP": str(keep).replace("\\", "/"),
@@ -95,6 +95,18 @@ class KlipperPreserveTests(unittest.TestCase):
             printer = (config / "printer.cfg").read_text(encoding="utf-8")
             self.assertIn("#pid_kp: 1", printer)
             self.assertIn("#*# pid_kp = 42", printer)
+            self.assertFalse(keep.exists())
+
+    def test_repeated_preserve_after_interruption_uses_original_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory(dir=self.temp_parent) as directory:
+            config, keep, env = self.new_fixture(Path(directory))
+            (config / "treed_variables.cfg").write_text("saved setting\n", encoding="utf-8")
+            script = self.common_setup() + SANITIZE_FUNCTION + '\nDEPLOY_MODE="preserve"\n' + PRESERVE_BLOCK
+            self.assertEqual(0, self.run_shell(script, env).returncode)
+            (config / "treed_variables.cfg").write_text("new defaults\n", encoding="utf-8")
+            result = self.run_shell(script + RESTORE_BLOCK, env)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("saved setting\n", (config / "treed_variables.cfg").read_text())
             self.assertFalse(keep.exists())
 
     def test_snapshot_copy_failure_stops_before_runtime_cleanup(self) -> None:

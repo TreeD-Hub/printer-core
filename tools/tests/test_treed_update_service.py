@@ -38,6 +38,8 @@ class UpdateServiceTests(unittest.TestCase):
         klipper = (ROOT / "loader/steps/klipper-core.sh").read_text(encoding="utf-8")
         rebuild = klipper.split("# Блок 5:", 1)[1].split("# Блок 6:", 1)[0].split("\n", 1)[1]
         moonraker = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
+        merge_start = moonraker.index("merge_preserved_autoprinter_section() {")
+        merge = moonraker[merge_start:moonraker.index("\n}\n", merge_start) + len("\n}")]
         deploy = "deploy_base_fragments() {" + moonraker.split("deploy_base_fragments() {", 1)[1].split("\nprune_treed_generated_fragments()", 1)[0]
         old = "[treed_autoprinter]\nprinter_id: permanent-device\napi_origin: https://device.example\n"
         defaults = "[treed_autoprinter]\nprinter_id:\napi_origin:\nbed_check_socket: /private/vision.sock\n"
@@ -63,7 +65,13 @@ class UpdateServiceTests(unittest.TestCase):
                            'log_info() { :; }\nchown() { :; }\n')
                 prelude += f'python3() {{ "{Path(sys.executable).as_posix()}" "$@"; }}\n'
                 # Обе настоящие функции выполняются в порядке loader, системные операции изолированы.
-                script = prelude + f"DEPLOY_MODE={mode}\n" + rebuild + "\n" + deploy + "\ndeploy_base_fragments\n"
+                script = prelude + f"DEPLOY_MODE={mode}\n" + rebuild + "\n" + merge + "\n" + deploy + "\ndeploy_base_fragments\n"
+                if mode == "preserve":
+                    interrupted = script.replace("\ndeploy_base_fragments\n",
+                        '\ncp(){ if [ "$2" = "./source/." ]; then return 1; fi; command cp "$@"; }\ndeploy_base_fragments\n')
+                    failed = subprocess.run([bash, "-c", interrupted], cwd=temp, capture_output=True, timeout=30)
+                    self.assertNotEqual(0, failed.returncode)
+                    self.assertEqual(old, (config / "moonraker/base.preserve-core.conf").read_text())
                 result = subprocess.run([bash, "-c", script], cwd=temp, capture_output=True, timeout=30)
                 self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
                 final = (config / "moonraker/base/00-core.conf").read_text(encoding="utf-8")
@@ -184,6 +192,39 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertEqual(persisted["requestId"], command[0])
         self.assertEqual(persisted["operationId"], first["operationId"])
         start_service.assert_called_once()
+
+    def test_retry_resumes_same_core_operation_after_service_start_failure(self):
+        operation = {"operationId": "11111111-1111-4111-8111-111111111111",
+                     "requestId": "22222222-2222-4222-8222-222222222222",
+                     "targetId": "printer-core", "targetTag": "v0.2.0", "status": "error",
+                     "resultCode": "provisioning_failed", "pendingUiTag": "ui-main-123-1",
+                     "resetConfigs": [{"path": "config/printer.cfg", "sha256": "a" * 64}], "busy": False}
+        service.write_state(operation)
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+                patch.object(service, "acquire", return_value=FakeLock()), \
+                patch.object(service.subprocess, "run", side_effect=[OSError("systemd unavailable"), None]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            service.submit("33333333-3333-4333-8333-333333333333", "printer-core", "v0.2.0")
+            service.submit("44444444-4444-4444-8444-444444444444", "printer-core", "v0.2.0")
+        saved = service.read_state()
+        for key in ("operationId", "resetConfigs", "pendingUiTag"):
+            self.assertEqual(operation[key], saved[key])
+        with patch.object(service, "run_core", return_value=0) as recover, \
+                patch.object(service, "printer_is_idle") as idle:
+            self.assertEqual(0, service.run_current())
+        recover.assert_called_once_with(saved, recovery=True)
+        idle.assert_not_called()
+
+    def test_validation_error_without_journal_does_not_require_recovery(self):
+        operation = {"operationId": "11111111-1111-4111-8111-111111111111",
+                     "targetId": "printer-core", "targetTag": "v0.2.0", "status": "installing", "busy": True}
+        service.write_state(operation)
+        result = subprocess.CompletedProcess([], 1, stdout=json.dumps({
+            "status": "error", "resultCode": "core_update_failed", "message": "invalid package"}))
+        with patch.object(service.subprocess, "run", return_value=result), \
+                patch.dict(service.os.environ, {"TREED_CORE_STATE_DIR": str(self.root / "core")}):
+            self.assertEqual(1, service.run_core(operation))
+        self.assertEqual("core_validation_failed", service.read_state()["resultCode"])
 
     def test_lock_contention_returns_existing_operation_without_rewrite(self):
         existing = {
@@ -326,12 +367,36 @@ class UpdateServiceTests(unittest.TestCase):
              patch.object(service, "shell_runtime_dir", return_value=runtime), \
              patch.object(service, "wait_shell_ready", return_value=True), \
              patch.object(service.subprocess, "run"):
+            original_copy = shutil.copytree
+            def interrupted_copy(*args, **kwargs):
+                original_copy(*args, **kwargs)
+                raise KeyboardInterrupt("power loss after restoring files")
+            with patch.object(service.shutil, "copytree", side_effect=interrupted_copy), \
+                    self.assertRaises(KeyboardInterrupt):
+                service.recover()
+            self.assertTrue(rollback.is_dir())
             self.assertEqual(service.recover(), 0)
         state = json.loads(service.STATE.read_text(encoding="utf-8"))
         self.assertEqual((current / "version.txt").read_text(encoding="utf-8"), "previous")
-        self.assertFalse(rollback.exists())
+        self.assertEqual((rollback / "version.txt").read_text(encoding="utf-8"), "previous")
         self.assertEqual(state["status"], "rolled_back")
         self.assertEqual(state["resultCode"], "rollback_succeeded")
+
+    def test_ui_apply_error_recovers_before_finishing_the_operation(self):
+        operation_id = "11111111-1111-4111-8111-111111111111"
+        runtime = self.root / "runtime"
+        rollback = runtime / f"ui.rollback.{operation_id}"
+        rollback.mkdir(parents=True)
+        (rollback / "index.html").write_text("previous UI", encoding="utf-8")
+        service.write_state({"operationId": operation_id, "targetId": "printer-ui",
+                             "targetTag": "ui-main-123-1", "status": "queued", "busy": True})
+        with patch.object(service, "printer_is_idle", return_value=True), \
+                patch.object(service, "shell_runtime_dir", return_value=runtime), \
+                patch.object(service, "wait_shell_ready", return_value=True), \
+                patch.object(service.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)):
+            self.assertEqual(1, service.run_current())
+        self.assertEqual("rolled_back", service.read_state()["status"])
+        self.assertEqual("previous UI", (runtime / "ui/index.html").read_text())
 
     def test_recovery_confirms_a_fully_published_and_ready_ui_without_rollback_directory(self):
         operation_id = "33333333-3333-4333-8333-333333333333"

@@ -196,16 +196,27 @@ class ManagedLoaderTests(unittest.TestCase):
             self.assertTrue(symlink.is_symlink())
             self.assertEqual(target.read_text(encoding="utf-8"), "keep target\n")
 
+    def test_update_command_install_failure_keeps_previous_executable(self) -> None:
+        source = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
+        start = source.index("install_update_file() {")
+        function = source[start:source.index("\n}\n", start) + len("\n}")]
+        with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
+            root = Path(directory)
+            old, new = root / "updater", root / "source"
+            old.write_text("old complete executable", encoding="utf-8")
+            new.write_text("new complete executable", encoding="utf-8")
+            command = f'install_update_file 0755 "{new.as_posix()}" "{old.as_posix()}"\n'
+            failure = ('set -e\n' + function + '\ninstall(){ printf partial > "$4"; return 1; }\n' + command)
+            self.assertNotEqual(0, self.run_shell(failure, {}).returncode)
+            self.assertEqual("old complete executable", old.read_text())
+            retry = self.run_shell('set -e\n' + function + '\n' + command, {})
+            self.assertEqual(0, retry.returncode, retry.stderr)
+            self.assertEqual("new complete executable", old.read_text())
+
     def test_managed_moonraker_route_preserves_unknown_config(self) -> None:
         source = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
-        merge_start = source.index("merge_preserved_autoprinter_section() {")
-        merge_end = source.index("\n}\n", merge_start) + len("\n}")
-        migration_start = source.index("remove_legacy_autoprinter_options() {")
-        migration_end = source.index("\n}\n", migration_start) + len("\n}")
         branch_start = source.index('if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then', source.index("# Блок 4:"))
         branch_end = source.index("\nfi\n\nvalidate_repo_moonraker_layout", branch_start) + len("\nfi")
-        merge_function = source[merge_start:merge_end]
-        migration_function = source[migration_start:migration_end]
         branch = source[branch_start:branch_end]
         with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
             config = Path(directory) / "moonraker.conf"
@@ -228,7 +239,6 @@ class ManagedLoaderTests(unittest.TestCase):
             calls = Path(directory) / "calls"
             script = (
                 'python3(){ python "$@"; };\n'
-                f"{merge_function}\n{migration_function}\n"
                 'backup_file_once(){ if [ ! -f "$1.bak" ]; then cp -p "$1" "$1.bak"; fi; }; '
                 "log_error(){ printf '%s\\n' \"$*\" >&2; }; log_info(){ :; }; "
                 "ensure_moonraker_allowed_service(){ printf 'allowed:%s ' \"$1\" >> \"$CALL_LOG\"; }; "
@@ -243,17 +253,10 @@ class ManagedLoaderTests(unittest.TestCase):
             }
             result = self.run_shell(script, env)
             self.assertEqual(result.returncode, 0, result.stderr)
-            expected_core = (
-                "[other]\nENABLED = leave-this\n\n"
-                "[treed_autoprinter]\n# keep credentials and comments\n"
-                "# enabled: comment remains\n"
-                "credentials_path: /private/credentials.json\n"
-                "unknown_option: preserve-this\n\n"
-                "[update_manager mainsail]\npath: /var/www/mainsail\n"
-            )
+            expected_core = original_core
             self.assertEqual(core.read_text(encoding="utf-8"), expected_core)
             backup = Path(f"{core}.bak")
-            self.assertEqual(backup.read_text(encoding="utf-8"), original_core)
+            self.assertFalse(backup.exists())
             migrated_stat = core.stat()
             self.assertEqual(migrated_stat.st_mode & 0o777, original_stat.st_mode & 0o777)
             self.assertEqual((migrated_stat.st_uid, migrated_stat.st_gid), (original_stat.st_uid, original_stat.st_gid))
@@ -263,7 +266,7 @@ class ManagedLoaderTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(core.read_text(encoding="utf-8"), expected_core)
             self.assertEqual(core.stat().st_mtime_ns, migrated_mtime)
-            self.assertEqual(backup.read_text(encoding="utf-8"), original_core)
+            self.assertFalse(backup.exists())
             self.assertEqual(calls.read_text(encoding="utf-8"), "allowed:treed-shell updater restart " * 2)
             self.assertEqual(config.read_text(encoding="utf-8"), "# user-owned setting\n")
 
@@ -274,7 +277,7 @@ class ManagedLoaderTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(core.read_text(encoding="utf-8"), without_final_newline)
             self.assertEqual(core.stat().st_mtime_ns, clean_mtime)
-            self.assertEqual(backup.read_text(encoding="utf-8"), original_core)
+            self.assertFalse(backup.exists())
 
     def test_full_moonraker_merge_removes_only_legacy_autoprinter_options(self) -> None:
         source = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
@@ -310,114 +313,6 @@ class ManagedLoaderTests(unittest.TestCase):
                 "\nprinter_id: default\n[other]\nenabled = keep-this\n",
             )
 
-    def test_managed_moonraker_migration_rejects_nonregular_config(self) -> None:
-        source = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
-        start = source.index("remove_legacy_autoprinter_options() {")
-        end = source.index("\n}\n", start) + len("\n}")
-        function = source[start:end]
-        with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
-            core = Path(directory) / "00-core.conf"
-            core.mkdir()
-            sentinel = core / "preserve"
-            sentinel.write_text("keep\n", encoding="utf-8")
-            result = self.run_shell(
-                f'log_error(){{ :; }}; backup_file_once(){{ :; }};\n'
-                f'{function}\nremove_legacy_autoprinter_options "$CORE"',
-                {"CORE": str(core).replace("\\", "/")},
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(core.is_dir())
-            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
-
-    def test_managed_moonraker_migration_rejects_symlink(self) -> None:
-        source = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
-        start = source.index("remove_legacy_autoprinter_options() {")
-        end = source.index("\n}\n", start) + len("\n}")
-        function = source[start:end]
-        with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
-            core = Path(directory) / "00-core.conf"
-            target = Path(directory) / "target.conf"
-            target.write_text("[treed_autoprinter]\nenabled: true\n", encoding="utf-8")
-            try:
-                os.symlink(target, core)
-            except (OSError, NotImplementedError) as error:
-                self.skipTest(f"Windows symlink creation is unavailable: {error}")
-            result = self.run_shell(
-                f'log_error(){{ :; }}; backup_file_once(){{ :; }};\n'
-                f'{function}\nremove_legacy_autoprinter_options "$CORE"',
-                {"CORE": str(core).replace("\\", "/")},
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertTrue(core.is_symlink())
-            self.assertEqual(target.read_text(encoding="utf-8"), "[treed_autoprinter]\nenabled: true\n")
-
-    def test_managed_moonraker_migration_stops_when_backup_copy_fails(self) -> None:
-        source = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
-        merge_start = source.index("merge_preserved_autoprinter_section() {")
-        merge_end = source.index("\n}\n", merge_start) + len("\n}")
-        migration_start = source.index("remove_legacy_autoprinter_options() {")
-        migration_end = source.index("\n}\n", migration_start) + len("\n}")
-        functions = "\n".join(
-            (
-                source[merge_start:merge_end],
-                source[migration_start:migration_end],
-            )
-        )
-        original = "[treed_autoprinter]\nenabled = true\ncredentials_path: keep\n"
-        with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
-            core = Path(directory) / "00-core.conf"
-            core.write_text(original, encoding="utf-8")
-            result = self.run_shell(
-                'python3(){ python "$@"; }; '
-                'cp(){ local destination="${@: -1}"; if [[ "$destination" == *.bak ]]; then : > "$destination"; return 1; fi; command cp "$@"; }; '
-                'log_error(){ :; };\n'
-                f'{functions}\nremove_legacy_autoprinter_options "$CORE"',
-                {"CORE": str(core).replace("\\", "/")},
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(core.read_text(encoding="utf-8"), original)
-            self.assertFalse(Path(f"{core}.bak").exists())
-            self.assertEqual(list(core.parent.glob("00-core.conf.*")), [])
-
-            recovered = self.run_shell(
-                'python3(){ python "$@"; }; cp(){ command cp -p "$@"; }; '
-                'log_error(){ :; };\n'
-                f'{functions}\nremove_legacy_autoprinter_options "$CORE"',
-                {"CORE": str(core).replace("\\", "/")},
-            )
-            self.assertEqual(recovered.returncode, 0, recovered.stderr)
-            self.assertEqual(
-                core.read_text(encoding="utf-8"),
-                "[treed_autoprinter]\ncredentials_path: keep\n",
-            )
-            self.assertEqual(Path(f"{core}.bak").read_text(encoding="utf-8"), original)
-
-    def test_managed_moonraker_migration_keeps_existing_backup(self) -> None:
-        source = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
-        merge_start = source.index("merge_preserved_autoprinter_section() {")
-        merge_end = source.index("\n}\n", merge_start) + len("\n}")
-        migration_start = source.index("remove_legacy_autoprinter_options() {")
-        migration_end = source.index("\n}\n", migration_start) + len("\n}")
-        functions = (
-            f'{source[merge_start:merge_end]}\n{source[migration_start:migration_end]}'
-        )
-        original = "[treed_autoprinter]\nenabled: true\ncredentials_path: keep\n"
-        old_backup = "older user backup\n"
-        with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
-            core = Path(directory) / "00-core.conf"
-            core.write_text(original, encoding="utf-8")
-            Path(f"{core}.bak").write_text(old_backup, encoding="utf-8")
-            result = self.run_shell(
-                'python3(){ python "$@"; }; log_error(){ :; };\n'
-                f'{functions}\nremove_legacy_autoprinter_options "$CORE"',
-                {"CORE": str(core).replace("\\", "/")},
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                core.read_text(encoding="utf-8"),
-                "[treed_autoprinter]\ncredentials_path: keep\n",
-            )
-            self.assertEqual(Path(f"{core}.bak").read_text(encoding="utf-8"), old_backup)
 
     def test_managed_camera_sync_preserves_unknown_runtime_files(self) -> None:
         source = (ROOT / "loader/steps/treed-cam.sh").read_text(encoding="utf-8")

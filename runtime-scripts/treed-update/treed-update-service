@@ -165,6 +165,18 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
             operation["pendingUiTag"] = ui_target_tag
         if reset_configs:
             operation["resetConfigs"] = reset_configs
+        if (state.get("targetId") == "printer-core" and state.get("status") == "error"
+                and (state.get("resumeCore") or state.get("resultCode") in {
+                    "provisioning_failed", "provisioning_interrupted", "core_update_failed"})):
+            if target_id != "printer-core" or target_tag != state.get("targetTag"):
+                raise ValueError("Сначала повторите прерванное обновление core до сохранённого выпуска")
+            if reset_configs and reset_configs != state.get("resetConfigs", []):
+                raise ValueError("При восстановлении нельзя менять согласованный список сброса конфигов")
+            operation.update(operationId=state["operationId"], resumeCore=True)
+            if state.get("resetConfigs"):
+                operation["resetConfigs"] = state["resetConfigs"]
+            if state.get("pendingUiTag"):
+                operation["pendingUiTag"] = state["pendingUiTag"]
         write_state(operation)
         try:
             subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
@@ -225,6 +237,8 @@ def printer_is_idle() -> bool:
 
 def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -> None:
     stamp = now()
+    if status != "error" or result_code not in {"provisioning_failed", "provisioning_interrupted", "core_update_failed"}:
+        state.pop("resumeCore", None)
     # Блок 3: Второй шаг сохраняется под тем же lock до публикации terminal state.
     # Перезапуск Moonraker/UI не теряет очередь; после ошибки core UI не запускается.
     if status == "applied" and state.get("targetId") == "printer-core" and state.get("pendingUiTag"):
@@ -245,7 +259,7 @@ def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -
 
 
 def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
-    # Блок 3.1: Отдельный пакет TreeD; provisioning и A/B adapter не вызываются.
+    # Блок 3.1: Core сам выбирает runtime/provisioning; A/B adapter не вызывается.
     command = [CORE_APPLY, "recover", state["operationId"]] if recovery else [
         CORE_APPLY, "apply", state["targetTag"], state["operationId"]]
     try:
@@ -253,8 +267,9 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
         with LOG.open("a", encoding="utf-8") as log:
             log.write(f"{now()} core {'recovery' if recovery else 'apply'} {state['operationId']}\n")
             log.flush()
+            # Внешний systemd timeout останавливает всю cgroup, включая дочерний loader.
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=log, text=True,
-                                    check=False, timeout=1800)
+                                    check=False)
             log.write(result.stdout + "\n")
         payload = json.loads(result.stdout)
         if not isinstance(payload, dict):
@@ -265,6 +280,9 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
     except (OSError, ValueError, subprocess.SubprocessError):
         payload = {"status": "error", "resultCode": "core_update_failed",
                    "message": "Не удалось подтвердить результат core updater; проверьте журнал службы."}
+    journal = Path(os.environ.get("TREED_CORE_STATE_DIR", "/var/lib/treed-update/core")) / state["operationId"] / "journal.json"
+    if payload.get("resultCode") == "core_update_failed" and not journal.exists():
+        payload["resultCode"] = "core_validation_failed"
     finish(read_state(), payload["status"], str(payload.get("resultCode", "core_update_failed")),
            str(payload.get("message", "Обновление TreeD Core завершено.")))
     return 0 if payload["status"] == "applied" or recovery and payload["status"] == "rolled_back" else 1
@@ -292,7 +310,7 @@ def run_current() -> int:
     state = read_state()
     if state.get("status") not in ACTIVE or state.get("busy") is not True:
         return 0
-    if state.get("targetId") == "printer-core" and state.get("status") != "queued":
+    if state.get("targetId") == "printer-core" and (state.get("status") != "queued" or state.get("resumeCore")):
         return run_core(state, recovery=True)
     state.update(status="validating", phase="validating", message="Проверяем состояние принтера.", updatedAt=now())
     write_state(state)
@@ -311,6 +329,8 @@ def run_current() -> int:
     if process.returncode == 0:
         finish(state, "applied", "ui_updated", "Обновление TreeD UI завершено.")
         return 0
+    if not state.get("rollbackSucceeded") and recover_ui(state):
+        return process.returncode
     result_code = (
         "rollback_succeeded" if state.get("rollbackSucceeded")
         else "rollback_failed" if state.get("rollbackFailed")
@@ -449,15 +469,17 @@ def recover_ui(state: Dict[str, Any]) -> bool:
     try:
         if current.exists():
             shutil.rmtree(current)
-        os.replace(rollback, current)
+        # Копия остаётся пригодной для повтора при отключении питания во время отката.
+        shutil.copytree(rollback, current, symlinks=True)
     except OSError:
         finish(state, "error", "rollback_failed", "Не удалось вернуть файлы предыдущей версии TreeD UI.")
         return True
     service_name = os.environ.get("TREED_SHELL_SERVICE", "treed-shell.service")
     try:
+        subprocess.run(["sync", "-f", str(runtime)], check=True, timeout=30)
         subprocess.run(["systemctl", "restart", service_name], check=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
-        finish(state, "error", "rollback_failed", "Файлы восстановлены, но служба TreeD UI не перезапустилась.")
+        finish(state, "error", "rollback_failed", "Не удалось завершить возврат файлов или перезапустить TreeD UI.")
         return True
     if not wait_shell_ready(runtime):
         finish(state, "error", "rollback_failed", "Предыдущие файлы возвращены, но проверка TreeD UI не прошла.")

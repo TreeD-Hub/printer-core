@@ -15,6 +15,11 @@ def main() -> None:
     if match is None:
         fail("loader/loader.sh does not contain the expected STEPS array")
     steps_block = match.group(1)
+    ui_match = re.search(r"^  UI_STEPS=\(\n(.*?)^  \)", loader, re.MULTILINE | re.DOTALL)
+    if ui_match is None:
+        fail("loader/loader.sh does not contain the expected UI_STEPS array")
+    # Документирован полный порядок с выбранным KlipperScreen.
+    steps_block = steps_block.replace('"${UI_STEPS[@]}"', ui_match.group(1))
     runtime_steps = re.findall(r'^\s*"([^"]+)"', steps_block, re.MULTILINE)
 
     ownership = (ROOT / "docs/config-ownership.md").read_text(encoding="utf-8")

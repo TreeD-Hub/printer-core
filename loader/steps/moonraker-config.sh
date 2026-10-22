@@ -193,6 +193,15 @@ PY
   log_info "moonraker-config: all required TreeD components loaded"
 }
 
+install_update_file() {
+  local mode="$1" source="$2" target="$3" temporary=""
+  temporary="$(mktemp "${target}.XXXXXX")"
+  install -m "${mode}" "${source}" "${temporary}"
+  sync -f "${temporary}"
+  mv -f "${temporary}" "${target}"
+  sync -f "$(dirname "${target}")"
+}
+
 deploy_treed_update_command() {
   local apply_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
   local service_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-service"
@@ -213,14 +222,17 @@ deploy_treed_update_command() {
       exit 1
     fi
   done
-  install -m 0755 "${apply_src}" /usr/local/sbin/treed-update-apply
-  install -m 0755 "${service_src}" /usr/local/sbin/treed-update-service
-  install -m 0755 "${core_src}" /usr/local/sbin/treed-core-update
-  install -m 0755 "${loading_src}" /usr/local/sbin/treed-loading-screen
-  install -m 0755 "${ab_src}" /usr/local/sbin/treed-ab
-  install -m 0644 "${worker_unit_src}" /etc/systemd/system/treed-update.service
-  install -m 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
-  install -m 0644 "${recover_unit_src}" /etc/systemd/system/treed-update-recover.service
+  # В managed-режиме эти команды уже атомарно доставлены core-транзакцией.
+  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
+    install_update_file 0755 "${apply_src}" /usr/local/sbin/treed-update-apply
+    install_update_file 0755 "${service_src}" /usr/local/sbin/treed-update-service
+    install_update_file 0755 "${core_src}" /usr/local/sbin/treed-core-update
+    install_update_file 0755 "${loading_src}" /usr/local/sbin/treed-loading-screen
+  fi
+  install_update_file 0755 "${ab_src}" /usr/local/sbin/treed-ab
+  install_update_file 0644 "${worker_unit_src}" /etc/systemd/system/treed-update.service
+  install_update_file 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
+  install_update_file 0644 "${recover_unit_src}" /etc/systemd/system/treed-update-recover.service
   install -d -m 0755 -o root -g root /var/lib/treed-update /var/log/treed-update
 
   # Блок 3.2: Устраняем только пустой каталог от прежнего MakeDirectory=yes.
@@ -537,59 +549,32 @@ if old_header and new_header:
 PY
 }
 
-remove_legacy_autoprinter_options() {
-  local core_cfg="$1"
-  local temp_cfg=""
-  local backup_cfg="${core_cfg}.bak"
-  local had_backup=0
-
-  if [ ! -e "${core_cfg}" ] && [ ! -L "${core_cfg}" ]; then
-    return 0
-  fi
-  if [ -L "${core_cfg}" ] || [ ! -f "${core_cfg}" ]; then
-    log_error "moonraker-config: refusing non-regular AutoPrinter config ${core_cfg}"
-    return 1
-  fi
-
-  temp_cfg="$(mktemp "${core_cfg}.XXXXXX")" || {
-    log_error "moonraker-config: cannot allocate AutoPrinter config migration file"
-    return 1
-  }
-  if ! cp -p "${core_cfg}" "${temp_cfg}" || ! merge_preserved_autoprinter_section "${core_cfg}" "${temp_cfg}"; then
-    rm -f "${temp_cfg}"
-    log_error "moonraker-config: cannot prepare AutoPrinter config migration for ${core_cfg}"
-    return 1
-  fi
-  if cmp -s "${core_cfg}" "${temp_cfg}"; then
-    rm -f "${temp_cfg}"
-    return 0
-  fi
-  if [ -f "${backup_cfg}" ]; then
-    had_backup=1
-  elif [ -e "${backup_cfg}" ] || [ -L "${backup_cfg}" ]; then
-    rm -f "${temp_cfg}"
-    log_error "moonraker-config: refusing non-regular AutoPrinter config backup ${backup_cfg}"
-    return 1
-  fi
-  if [ "${had_backup}" -eq 0 ]; then
-    if ! cp -p "${core_cfg}" "${backup_cfg}" || ! cmp -s "${core_cfg}" "${backup_cfg}"; then
-      rm -f "${temp_cfg}" "${backup_cfg}"
-      log_error "moonraker-config: cannot create AutoPrinter config backup for ${core_cfg}"
-      return 1
-    fi
-  fi
-  if ! mv -f "${temp_cfg}" "${core_cfg}"; then
-    rm -f "${temp_cfg}"
-    log_error "moonraker-config: cannot publish AutoPrinter config migration for ${core_cfg}"
-    return 1
-  fi
-}
 
 deploy_base_fragments() {
   local preserved_core=""
-  if [ "${DEPLOY_MODE}" = "preserve" ] && [ -f "${DST_BASE_DIR}/00-core.conf" ]; then
-    preserved_core="$(mktemp)"
-    cp -f "${DST_BASE_DIR}/00-core.conf" "${preserved_core}"
+  local recovery_core="${DST_BASE_DIR}.preserve-core.conf"
+  if [ "${DEPLOY_MODE}" = "clean" ]; then
+    rm -f "${recovery_core}"
+  fi
+  if [ "${DEPLOY_MODE}" = "preserve" ]; then
+    if [ -L "${recovery_core}" ] || { [ -e "${recovery_core}" ] && [ ! -f "${recovery_core}" ]; }; then
+      log_error "moonraker-config: invalid recovery file ${recovery_core}"
+      return 1
+    fi
+    if [ -f "${recovery_core}" ]; then
+      preserved_core="${recovery_core}"
+    elif [ -e "${DST_BASE_DIR}/00-core.conf" ] || [ -L "${DST_BASE_DIR}/00-core.conf" ]; then
+      if [ -L "${DST_BASE_DIR}/00-core.conf" ] || [ ! -f "${DST_BASE_DIR}/00-core.conf" ]; then
+        log_error "moonraker-config: refusing non-regular core config"
+        return 1
+      fi
+      preserved_core="$(mktemp "${recovery_core}.XXXXXX")"
+      cp -p "${DST_BASE_DIR}/00-core.conf" "${preserved_core}"
+      sync -f "${preserved_core}"
+      mv "${preserved_core}" "${recovery_core}"
+      preserved_core="${recovery_core}"
+      sync -f "$(dirname "${recovery_core}")"
+    fi
   fi
   rm -rf "${DST_BASE_DIR}"
   ensure_dir "${DST_BASE_DIR}"
@@ -597,7 +582,9 @@ deploy_base_fragments() {
   render_base_fragment_templates
   if [ -n "${preserved_core}" ]; then
     merge_preserved_autoprinter_section "${preserved_core}" "${DST_BASE_DIR}/00-core.conf"
+    sync -f "${DST_BASE_DIR}"
     rm -f "${preserved_core}"
+    sync -f "$(dirname "${preserved_core}")"
   fi
   configure_mainsail_updater_section
   configure_crowsnest_updater_section
@@ -637,7 +624,7 @@ EOF
 
 # Блок 4: Основной сценарий деплоя moonraker-конфига и компонентов.
 if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
-  remove_legacy_autoprinter_options "${DST_BASE_DIR}/00-core.conf"
+  # Файлы и контрольные суммы уже подготовил вызывающий updater, в том числе старой версии.
   ensure_moonraker_allowed_service "treed-shell"
   deploy_treed_update_command
   restart_and_verify_moonraker_components
