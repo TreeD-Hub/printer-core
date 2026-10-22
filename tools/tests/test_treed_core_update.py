@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "runtime-scripts/treed-update/treed-core-update"
 core = types.ModuleType("treed_core_update")
 exec(compile(PATH.read_text(encoding="utf-8"), str(PATH), "exec"), core.__dict__)
+core_update_admission = core.update_admission
+core_services_inactive = core.services_inactive
 OPERATION = "11111111-1111-4111-8111-111111111111"
 
 
@@ -64,6 +66,8 @@ class CoreUpdateTests(unittest.TestCase):
         self.compatibility = self.stack.enter_context(patch.object(core, "check_compatibility"))
         self.phase = self.stack.enter_context(patch.object(core, "phase"))
         self.services = self.stack.enter_context(patch.object(core, "services"))
+        self.services_inactive = self.stack.enter_context(patch.object(core, "services_inactive", return_value=True))
+        self.admission = self.stack.enter_context(patch.object(core, "update_admission"))
         self.stack.enter_context(patch.object(core, "idle", return_value=True))
         self.stop_heating = self.stack.enter_context(patch.object(core, "stop_heating"))
         self.wait = self.stack.enter_context(patch.object(core, "wait_ready", return_value=True))
@@ -335,8 +339,119 @@ class CoreUpdateTests(unittest.TestCase):
         self.stop_heating.side_effect = ValueError("heater still active")
         with self.assertRaisesRegex(ValueError, "heater still active"):
             self.apply()
+        self.assertEqual(self.admission.call_args_list, [call("BEGIN"), call("END")])
         self.services.assert_not_called()
         self.assert_restored()
+
+    def test_update_gate_precedes_heater_shutdown_and_service_stop(self):
+        events = []
+        self.admission.side_effect = lambda action: events.append(action)
+        self.stop_heating.side_effect = lambda: events.append("heaters")
+        self.services.side_effect = lambda action: events.append(action)
+
+        self.assertEqual(self.apply()["status"], "applied")
+        self.assertEqual(events[:3], ["BEGIN", "heaters", "stop"])
+        self.assertEqual(events[-1], "start")
+
+    def test_admission_sends_the_private_begin_and_end_gcode(self):
+        with patch.object(core, "request_json") as request:
+            request.side_effect = [None,
+                {"status": {"gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": 1}}},
+                None,
+                {"status": {"gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": 0}}},
+            ]
+            core_update_admission("BEGIN")
+            core_update_admission("END")
+        self.assertEqual(request.call_args_list, [
+            call("/printer/gcode/script", {"script": "_TREED_UPDATE_GATE ACTION=BEGIN"}),
+            call("/printer/objects/query?gcode_macro%20_TREED_UPDATE_ADMISSION_STATE"),
+            call("/printer/gcode/script", {"script": "_TREED_UPDATE_GATE ACTION=END"}),
+            call("/printer/objects/query?gcode_macro%20_TREED_UPDATE_ADMISSION_STATE"),
+        ])
+
+    def test_unknown_command_ack_without_gate_status_fails_closed(self):
+        with patch.object(core, "request_json", side_effect=[
+                "ok", {"status": {}}]) as request:
+            with self.assertRaisesRegex(RuntimeError, "не подтвердил состояние admission gate"):
+                core_update_admission("BEGIN")
+        self.assertEqual(request.call_count, 2)
+
+    def test_admission_rejects_a_status_value_that_does_not_match_the_action(self):
+        cases = [("BEGIN", 0), ("END", 1), ("BEGIN", "1")]
+        for action, active in cases:
+            with self.subTest(action=action, active=active), \
+                 patch.object(core, "request_json", side_effect=[None, {
+                     "status": {"gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": active}}
+                 }]):
+                with self.assertRaisesRegex(RuntimeError, "не подтвердил состояние admission gate"):
+                    core_update_admission(action)
+
+    def test_missing_update_gate_fails_before_heaters_or_service_stop(self):
+        self.admission.side_effect = RuntimeError("unknown command _TREED_UPDATE_GATE")
+        with self.assertRaisesRegex(RuntimeError, "unknown command"):
+            self.apply()
+        self.stop_heating.assert_not_called()
+        self.services.assert_not_called()
+
+    def test_validated_recovery_releases_gate_after_services_are_ready(self):
+        events = []
+        self.admission.side_effect = lambda action: events.append(action)
+        self.phase.side_effect = lambda name, _message: (_ for _ in ()).throw(RuntimeError("phase failed")) \
+            if name == "installing" else None
+        result = self.apply()
+        self.assertEqual(result["resultCode"], "core_not_installed")
+        self.assertEqual(events, ["BEGIN", "END"])
+        self.services.assert_called_once_with("start")
+
+    def test_validated_recovery_does_not_report_completion_when_gate_release_fails(self):
+        self.phase.side_effect = lambda name, _message: (_ for _ in ()).throw(RuntimeError("phase failed")) \
+            if name == "installing" else None
+        self.admission.side_effect = [None, RuntimeError("Klipper response lost")]
+        with self.assertRaisesRegex(RuntimeError, "не смогла снять admission gate"):
+            self.apply()
+        self.services.assert_called_once_with("start")
+        self.assertEqual(core.read_json(core.journal_path(self.env, OPERATION))["stage"], "validated")
+
+    def prepared_install_transaction(self):
+        journal = core.journal_path(self.env, OPERATION)
+        core.prepare(self.manifest, self.payload, self.env, journal)
+        transaction = core.read_json(journal)
+        transaction["stage"] = "installing"
+        core.write_json(journal, transaction)
+        for key, data in self.payload.items():
+            core.destination(key, self.locations).write_bytes(data)
+        return journal, transaction
+
+    def test_rollback_refuses_to_stop_running_services_without_gate(self):
+        journal, transaction = self.prepared_install_transaction()
+        self.admission.side_effect = RuntimeError("Klipper unavailable")
+        self.services_inactive.return_value = False
+        with self.assertRaisesRegex(RuntimeError, "не подтверждены как остановленные"):
+            core.rollback(self.env, journal, transaction)
+        self.services.assert_not_called()
+        self.assertEqual(core.destination("klipper/treed_driver_mode.py", self.locations).read_bytes(),
+                         self.payload["klipper/treed_driver_mode.py"])
+
+    def test_rollback_can_recover_offline_when_systemd_confirms_both_services_stopped(self):
+        journal, transaction = self.prepared_install_transaction()
+        self.admission.side_effect = RuntimeError("Klipper unavailable")
+        self.assertEqual(core.rollback(self.env, journal, transaction)["status"], "rolled_back")
+        self.services.assert_has_calls([call("stop"), call("start")])
+        self.assert_restored()
+
+    def test_rollback_does_not_restore_files_if_service_stop_is_unconfirmed(self):
+        journal, transaction = self.prepared_install_transaction()
+        self.services_inactive.side_effect = [False]
+        with self.assertRaisesRegex(RuntimeError, "не подтвердил остановку"):
+            core.rollback(self.env, journal, transaction)
+        self.services.assert_called_once_with("stop")
+        self.assertEqual(core.destination("klipper/treed_driver_mode.py", self.locations).read_bytes(),
+                         self.payload["klipper/treed_driver_mode.py"])
+
+    def test_systemd_unknown_state_is_not_treated_as_offline(self):
+        unknown = subprocess.CompletedProcess([], 0, stdout="deactivating\n", stderr="")
+        with patch.object(core.subprocess, "run", return_value=unknown):
+            self.assertFalse(core_services_inactive())
 
     # Блок 2: Успех и сохранность принадлежащего принтеру состояния.
     def test_selected_config_reset_uses_package_and_retains_manual_backup(self):
@@ -710,6 +825,7 @@ class Server:
     def register_event_handler(self, *args): pass
 class Config:
     def get_server(self): return Server()
+    def get(self, key, default=None): return default
 instance = component.load_component(Config())
 assert instance._store is None and instance._task is None
 print("DELIVERED_IMPORT_OK")

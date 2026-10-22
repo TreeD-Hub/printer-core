@@ -59,6 +59,7 @@ class TreedDriverMode:
                                else 'quiet' if threshold == 0 else None)
         return dict(contract_version='1.0', mode=self.mode, state=self.state,
                     available_modes=['normal', 'quiet'], effective_modes=effective,
+                    service_velocity_limit=50. if self.mode == 'quiet' else 350.,
                     needs_restart=self.needs_restart, message=self.message)
 
     # Блок 2: Повторный допуск после ожидания очереди, включая ручной сервис.
@@ -103,7 +104,6 @@ class TreedDriverMode:
             # None сохраняет текущий лимит; более низкие значения не повышаем.
             velocity = min(self.toolhead.max_velocity if velocity is None else velocity, 350.)
             accel = min(self.toolhead.max_accel if accel is None else accel, 15000.)
-            scv = min(self.toolhead.square_corner_velocity if scv is None else scv, 350.)
         return self.set_max_velocities(velocity, accel, scv, cruise_ratio)
 
     # Блок 4: Групповая запись с откатом драйверов и лимитов движения.

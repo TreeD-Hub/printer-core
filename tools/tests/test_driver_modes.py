@@ -228,10 +228,11 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(self.driver.motion_limits(), (350., 15000., 8., .4))
         # SET_VELOCITY_LIMIT / сервис задают все поля, M204 — только ACCEL.
         toolhead.set_max_velocities(900., 40000., 500., None)
-        self.assertEqual(self.driver.motion_limits(), (350., 15000., 350., .4))
+        self.assertEqual(self.driver.motion_limits(), (350., 15000., 500., .4))
         toolhead.set_max_velocities(None, 30000., None, None)
         self.assertEqual(toolhead.max_accel, 15000.)
         self.driver.cmd_set(Command())
+        self.assertEqual(self.driver.motion_limits(), (350., 15000., 500., .4))
         self.driver.cmd_set(Command('normal'))
         self.assertEqual(self.driver.motion_limits(), (550., 22000., 8., .4))
         toolhead.set_max_velocities(600., 25000., None, None)
@@ -243,6 +244,35 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(self.driver.motion_limits(), (200., 4000., 5., .5))
         self.driver.toolhead.set_max_velocities(100., 2000., None, None)
         self.assertEqual(self.driver.motion_limits(), (100., 2000., 5., .5))
+        self.driver.cmd_set(Command('normal'))
+        self.assertEqual(self.driver.motion_limits(), (200., 4000., 5., .5))
+
+    def test_temporary_homing_limits_do_not_replace_normal_snapshot(self):
+        guard = load('treed_motor_guard').load_config(Config(self.printer))
+        self.printer.objects['gcode_move'] = NS(absolute_coord=True)
+        params = {'ACTION': 'HOME_XY', 'X': '1', 'ACCEL': '700'}
+        cmd = NS(get=params.__getitem__, get_command_parameters=lambda: params,
+                 get_float=lambda key, **kwargs: float(params[key]), error=ValueError)
+        gcode = self.printer.objects['gcode']
+        for fails in (False, True):
+            with self.subTest(fails=fails):
+                self.driver.cmd_set(Command())
+                def homing(script):
+                    self.assertEqual(self.driver.motion_limits(), (350., 700., 9., .5))
+                    if fails:
+                        raise RuntimeError('homing failed')
+                gcode.run_script_from_command = homing
+                try:
+                    if fails:
+                        with self.assertRaisesRegex(RuntimeError, 'homing failed'):
+                            guard.cmd_run(cmd)
+                    else:
+                        guard.cmd_run(cmd)
+                finally:
+                    gcode.run_script_from_command = self.printer.save
+                self.assertEqual(self.driver.motion_limits(), (350., 15000., 9., .5))
+                self.driver.cmd_set(Command('normal'))
+                self.assertEqual(self.driver.motion_limits(), (600., 25000., 9., .5))
 
     def test_saved_quiet_on_startup_caps_motion(self):
         printer = Printer()
@@ -252,8 +282,10 @@ class DriverModesTest(unittest.TestCase):
         driver.handle_ready()
         printer.run_callbacks()
         self.assertEqual(driver.motion_limits(), (350., 15000., 9., .5))
+        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 50.)
         driver.cmd_set(Command('normal'))
         self.assertEqual(driver.motion_limits(), (600., 25000., 9., .5))
+        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 350.)
 
     def test_save_failure_restores_limits_in_both_directions(self):
         self.printer.save_fails = True

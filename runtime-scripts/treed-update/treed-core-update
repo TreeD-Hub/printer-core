@@ -676,6 +676,33 @@ def idle():
         return False
 
 
+def update_admission(action):
+    if action not in {"BEGIN", "END"}:
+        raise ValueError("Недопустимое действие admission gate")
+    request_json("/printer/gcode/script", {"script": f"_TREED_UPDATE_GATE ACTION={action}"})
+    state = request_json("/printer/objects/query?gcode_macro%20_TREED_UPDATE_ADMISSION_STATE")
+    status = state.get("status") if isinstance(state, dict) else None
+    gate = status.get("gcode_macro _TREED_UPDATE_ADMISSION_STATE") if isinstance(status, dict) else None
+    expected = 1 if action == "BEGIN" else 0
+    if not isinstance(gate, dict) or type(gate.get("active")) is not int or gate["active"] != expected:
+        raise RuntimeError(f"Klipper не подтвердил состояние admission gate после {action}")
+
+
+def services_inactive():
+    # Recovery may proceed without Klipper admission only when printing is
+    # impossible because both services are confirmed stopped by systemd.
+    for unit in ("klipper.service", "moonraker.service"):
+        try:
+            result = subprocess.run(["systemctl", "show", "--property=ActiveState", "--value", unit],
+                                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError, UnicodeError):
+            return False
+        if not isinstance(result.stdout, str) or result.stdout.strip() not in {"inactive", "failed"}:
+            return False
+    return True
+
+
 def services(action):
     vision_units = tuple(unit for unit in ("treed-vision.service", "treed-detection.service")
                          if subprocess.run(["systemctl", "cat", unit], stdout=subprocess.DEVNULL,
@@ -867,6 +894,10 @@ def rollback(env, journal, transaction):
         services("start")
         if not wait_ready(read_json(manifest_path(env))):
             raise RuntimeError("Обновление не началось, но сервисы не прошли readiness")
+        try:
+            update_admission("END")
+        except Exception as release_error:
+            raise RuntimeError(f"Recovery не смогла снять admission gate после readiness: {release_error}") from release_error
         transaction["stage"] = "aborted"
         write_json(journal, transaction)
         return {"status": "error", "resultCode": "core_not_installed",
@@ -876,7 +907,16 @@ def rollback(env, journal, transaction):
     except (OSError, subprocess.SubprocessError):
         # Сбой нового service entrypoint не должен мешать возврату его старой копии.
         print("Core rollback: phase notification failed", file=sys.stderr)
+    try:
+        # BEGIN идемпотентен: после падения worker активный gate удерживает
+        # запрет, а новый процесс повторно подтверждает, что печать не началась.
+        update_admission("BEGIN")
+    except Exception:
+        if not services_inactive():
+            raise RuntimeError("Recovery остановлена: admission gate недоступен, а Klipper/Moonraker не подтверждены как остановленные")
     services("stop")
+    if not services_inactive():
+        raise RuntimeError("Recovery остановлена: systemd не подтвердил остановку Klipper и Moonraker")
     locations = roots(env)
     for row in transaction["entries"]:
         path = destination(row["path"], locations)
@@ -968,12 +1008,23 @@ def apply(tag, operation, env, reset_configs=None):
         if not idle():
             raise ValueError("Core update требует готового принтера без активной печати или паузы")
         prepare(manifest, payload, env, journal, reset_configs)
-    if not idle():
-        raise ValueError("Принтер начал печать во время подготовки обновления")
-    stop_heating()
+    # BEGIN выполняется в последовательной очереди Klipper: проверка состояния
+    # и закрытие поддерживаемых входов печати происходят одной командой.
+    update_admission("BEGIN")
+    try:
+        stop_heating()
+    except Exception as heater_error:
+        try:
+            update_admission("END")
+        except Exception as release_error:
+            print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+            raise RuntimeError(f"{heater_error}; admission gate may remain active: {release_error}") from heater_error
+        raise
     try:
         phase("installing", "Устанавливаем компоненты TreeD; локальные настройки сохраняются.")
         services("stop")
+        if not services_inactive():
+            raise RuntimeError("Core update остановлена: systemd не подтвердил остановку Klipper и Moonraker")
         # После остановки Klipper SAVE_CONFIG уже не может изменяться.
         # Переподготовка также подхватывает последнее сохранение до остановки.
         current = prepare(manifest, payload, env, journal, reset_configs)
@@ -1008,8 +1059,15 @@ def apply(tag, operation, env, reset_configs=None):
             if result:
                 transaction["stage"] = "provisioning_failed"
                 write_json(journal, transaction)
+                release_failed = False
+                try:
+                    update_admission("END")
+                except Exception as release_error:
+                    print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+                    release_failed = True
                 return {"status": "error", "resultCode": "provisioning_failed",
-                        "message": "Loader не завершил provisioning; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
+                        "message": "Loader не завершил provisioning; runtime rollback не выполнялся. Нужен новый осознанный запуск."
+                                   + (" Admission gate может оставаться активным; после остановки worker перезапустите Klipper." if release_failed else "")}
             transaction["stage"] = "provisioned"
             write_json(journal, transaction)
             check_compatibility(manifest, env, current)
@@ -1036,8 +1094,15 @@ def apply(tag, operation, env, reset_configs=None):
                 "provisioning", "provisioning_failed", "provisioned"}):
             transaction["stage"] = "provisioning_failed"
             write_json(journal, transaction)
+            release_failed = False
+            try:
+                update_admission("END")
+            except Exception as release_error:
+                print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+                release_failed = True
             return {"status": "error", "resultCode": "provisioning_failed",
-                    "message": "Provisioning не подтверждён; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
+                    "message": "Provisioning не подтверждён; runtime rollback не выполнялся. Нужен новый осознанный запуск."
+                               + (" Admission gate может оставаться активным; после остановки worker перезапустите Klipper." if release_failed else "")}
         return rollback(env, journal, transaction)
 
 

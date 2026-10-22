@@ -13,7 +13,7 @@ from jinja2 import Environment, StrictUndefined
 PROFILE = Path(__file__).resolve().parents[2] / "klipper/profiles/treed_v2_corexy_v1"
 CFG = configparser.ConfigParser(interpolation=None, strict=False)
 for filename in ["macros_start_purge.cfg", "macros_pause_resume.cfg", "macros_core.cfg",
-                 "macros_ui_tune.cfg", "probe_eddy_duo.cfg", "macros_print_flow.cfg", "macros_utils.cfg", "geometry.cfg", "steppers.cfg", "ebb42_can.cfg"]:
+                 "macros_ui_tune.cfg", "macros_ui_motion.cfg", "probe_eddy_duo.cfg", "macros_print_flow.cfg", "macros_utils.cfg", "geometry.cfg", "steppers.cfg", "ebb42_can.cfg"]:
     CFG.read(PROFILE / filename, encoding="utf-8")
 ENV = Environment(variable_start_string="{", variable_end_string="}", undefined=StrictUndefined)
 ZERO_REF = [float(value) for value in CFG.get("bed_mesh", "zero_reference_position").split(",")]
@@ -59,14 +59,23 @@ class Harness:
             "toolhead": {"homed_axes": "xyz", "position": position, "max_velocity": 600, "max_accel": 25000,
                          "axis_minimum": {axis: CFG.getfloat("stepper_" + axis, "position_min") for axis in "xyz"},
                          "axis_maximum": {axis: CFG.getfloat("stepper_" + axis, "position_max") for axis in "xyz"}},
+            "treed_driver_mode": {"mode": "normal", "service_velocity_limit": 350.0},
             "gcode_move": {"gcode_position": position, "speed_factor": 0.73,
                            "extrude_factor": 1.15, "absolute_coordinates": False, "absolute_extrude": True,
                            "homing_origin": {"x": 0.0, "y": 0.0, "z": 0.0}},
+            "pause_resume": {"is_paused": False},
             "extruder": {"pressure_advance": pa, "can_extrude": True, "temperature": 175},
             "print_stats": {"info": {"total_layer": 0}},
             "configfile": {"settings": {"extruder": {
                 "filament_diameter": 1.75, "max_extrude_cross_section": 5, "pressure_advance": 0.08},
+                "stepper_x": {"position_min": CFG.getfloat("stepper_x", "position_min"),
+                              "position_max": CFG.getfloat("stepper_x", "position_max")},
+                "stepper_y": {"position_min": CFG.getfloat("stepper_y", "position_min"),
+                              "position_max": CFG.getfloat("stepper_y", "position_max")},
+                "stepper_z": {"position_min": CFG.getfloat("stepper_z", "position_min"),
+                              "position_max": CFG.getfloat("stepper_z", "position_max")},
                 "treed_hotend_limit": {"max_target": CFG.getfloat("treed_hotend_limit", "max_target")},
+                "pause_resume": {"recover_velocity": 150.0},
                 "bed_mesh": {"speed": 120, "mesh_pps": [2, 2],
                              "zero_reference_position": ZERO_REF.copy()},
                 "probe_eddy_current btt_eddy": {"x_offset": 0.0, "y_offset": -30.0}}},
@@ -74,6 +83,7 @@ class Harness:
         }
         self.commands = []
         self.moves = []
+        self.move_speed_factors = []
         self.move_accels = []
         self.wait_positions = []
         self.saved = {}
@@ -138,6 +148,7 @@ class Harness:
                     if axis in axes:
                         gm["gcode_position"][axis.lower()] = axes[axis]
                 self.moves.append((axes, deepcopy(gm["gcode_position"]), self.printer["extruder"]["pressure_advance"]))
+                self.move_speed_factors.append(gm["speed_factor"])
                 self.move_accels.append(self.printer["toolhead"]["max_accel"])
             if line == stop_after:
                 return True
@@ -145,6 +156,62 @@ class Harness:
 
 # Блок 2: Одна линия, безопасные переезды и восстановление после отмены.
 class PurgeTests(unittest.TestCase):
+    def test_quiet_resume_caps_configured_recovery_velocity(self):
+        for recover_velocity, expected in [(150.0, 50.0), (30.0, 30.0)]:
+            with self.subTest(recover_velocity=recover_velocity):
+                h = Harness()
+                h.printer["treed_driver_mode"].update(mode="quiet", service_velocity_limit=50.0)
+                h.printer["configfile"]["settings"]["pause_resume"]["recover_velocity"] = recover_velocity
+                h.run("RESUME", stop_after=f"RESUME_BASE VELOCITY={expected}")
+                self.assertIn(f"RESUME_BASE VELOCITY={expected}", h.commands)
+
+        h = Harness()
+        h.run("RESUME", stop_after="RESUME_BASE")
+        self.assertIn("RESUME_BASE", h.commands)
+
+    def test_quiet_service_moves_cap_xy_and_preserve_lower_manual_feed(self):
+        for mode, factor, expected in [("quiet", 2.0, 1500.0), ("normal", 2.0, 6000.0)]:
+            with self.subTest(mode=mode):
+                h = Harness()
+                h.printer["treed_driver_mode"].update(
+                    mode=mode, service_velocity_limit=50.0 if mode == "quiet" else 350.0)
+                h.printer["gcode_move"]["speed_factor"] = factor
+                h.run("_TREED_SMART_PARK")
+                park = next(axes for axes, _, _ in h.moves if "X" in axes and "Y" in axes)
+                self.assertEqual(park["F"], expected)
+                self.assertLessEqual(park["F"] * factor / 60.0, 50.0 if mode == "quiet" else 200.0)
+
+        h = Harness()
+        h.printer["treed_driver_mode"].update(mode="quiet", service_velocity_limit=50.0)
+        h.printer["gcode_move"]["speed_factor"] = 2.0
+        h.run("TREED_UI_MOVE_AXIS", params={"AXIS": "X", "DISTANCE": "10", "FEEDRATE": "1200"})
+        self.assertEqual(h.moves[-1][0]["F"], 1200.0)
+        h.run("TREED_UI_MOVE_AXIS", params={"AXIS": "X", "DISTANCE": "10", "FEEDRATE": "4000"})
+        self.assertEqual(h.moves[-1][0]["F"], 1500.0)
+        h.run("TREED_UI_MOVE_AXIS", params={"AXIS": "Z", "DISTANCE": "1", "FEEDRATE": "600"})
+        self.assertEqual(h.moves[-1][0]["F"], 600.0)
+
+    def test_quiet_start_nozzle_wipe_caps_actual_xy_speed(self):
+        for macro in ["_TREED_LINE_PURGE", "_TREED_START_NOZZLE_WIPE"]:
+            for factor in [0.5, 2.0]:
+                with self.subTest(macro=macro, factor=factor):
+                    h = Harness()
+                    h.printer["treed_driver_mode"].update(mode="quiet", service_velocity_limit=50.0)
+                    h.printer["gcode_move"]["speed_factor"] = factor
+                    if macro == "_TREED_LINE_PURGE":
+                        h.printer["gcode_move"]["gcode_position"].update(x=80.0, y=100.0)
+                    h.run(macro)
+                    service_moves = [(axes, speed_factor)
+                                     for (axes, _, _), speed_factor
+                                     in zip(h.moves, h.move_speed_factors)
+                                     if "X" in axes and "Y" in axes]
+                    self.assertTrue(service_moves)
+                    self.assertTrue(all(axes["F"] * speed_factor / 60.0 <= 50.0
+                                        for axes, speed_factor in service_moves))
+                    if macro == "_TREED_START_NOZZLE_WIPE":
+                        strokes = [axes for axes, _, _ in h.moves if "X" in axes and "Z" in axes]
+                        self.assertEqual([move["F"] for move in strokes], [3000.0] * 10)
+
     def test_wipe_parks_before_heat_and_uses_half_runtime_limits(self):
         for velocity, accel in [(200, 8000), (600, 25000)]:
             with self.subTest(velocity=velocity, accel=accel):

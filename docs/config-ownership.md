@@ -74,6 +74,10 @@ Runtime:
 - `${PI_HOME}/printer_data/config/treed_variables.cfg` — штатный `save_variables`,
   включая режимы XYZ и обдува. `klipper-core.sh` сохраняет его в `preserve`
   с явной ошибкой при сбое копирования; `clean` сбрасывает настройки.
+- В `preserve` `klipper-core.sh` также сохраняет `filament_motion_runtime.cfg` и
+  SAVE_CONFIG-сегмент `printer.cfg`; сбой чтения, снимка или возврата останавливает
+  раскладку либо сообщает об ошибке и оставляет recovery-копию во временном каталоге.
+  Сохраняемые файлы должны быть обычными файлами, не symlink.
 - В `preserve` шаг `moonraker-config` переносит локальные опции `[treed_autoprinter]`
   из действующего `moonraker/base/00-core.conf` поверх новых defaults; отсутствующие
   в старой версии параметры добавляются из исходника. В `clean` используются только

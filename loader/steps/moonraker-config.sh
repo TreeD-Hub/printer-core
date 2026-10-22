@@ -478,25 +478,17 @@ render_base_fragment_templates() {
   done < <(find "${DST_BASE_DIR}" -maxdepth 1 -type f -name '*.conf' -print0 2>/dev/null)
 }
 
-deploy_base_fragments() {
-  local preserved_core=""
-  if [ "${DEPLOY_MODE}" = "preserve" ] && [ -f "${DST_BASE_DIR}/00-core.conf" ]; then
-    preserved_core="$(mktemp)"
-    cp -f "${DST_BASE_DIR}/00-core.conf" "${preserved_core}"
-  fi
-  rm -rf "${DST_BASE_DIR}"
-  ensure_dir "${DST_BASE_DIR}"
-  cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
-  render_base_fragment_templates
-  if [ -n "${preserved_core}" ]; then
-    python3 - "${preserved_core}" "${DST_BASE_DIR}/00-core.conf" <<'PY'
+merge_preserved_autoprinter_section() {
+  python3 - "$1" "$2" <<'PY'
 import re, sys
 from pathlib import Path
 
 old_path, new_path = map(Path, sys.argv[1:])
-old, new = old_path.read_text(encoding="utf-8").splitlines(), new_path.read_text(encoding="utf-8").splitlines()
+old_text, new_text = old_path.read_text(encoding="utf-8"), new_path.read_text(encoding="utf-8")
+old, new = old_text.splitlines(), new_text.splitlines()
 section = re.compile(r"^\s*\[treed_autoprinter\]\s*$", re.I)
 header = re.compile(r"^\s*\[[^]]+\]\s*$")
+legacy_keys = {"enabled", "execution_enabled", "bed_check_enabled"}
 
 def body(lines):
     for start, line in enumerate(lines):
@@ -507,17 +499,31 @@ def body(lines):
             return lines[start], lines[start + 1:end]
     return None, []
 
+def without_legacy_keys(lines):
+    result = []
+    for line in lines:
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
+        if match and match.group(1).lower() in legacy_keys:
+            continue
+        result.append(line)
+    return result
+
 old_header, old_body = body(old)
 new_header, new_body = body(new)
+original_old_body = old_body
+old_body = without_legacy_keys(old_body)
+new_body = without_legacy_keys(new_body)
+if old_text == new_text and old_body == original_old_body:
+    raise SystemExit(0)
 if old_header and new_header:
     keys = set()
     for line in old_body:
-        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
         if match:
             keys.add(match.group(1).lower())
     additions = []
     for line in new_body:
-        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
         if match and match.group(1).lower() not in keys:
             additions.append(line)
             keys.add(match.group(1).lower())
@@ -529,6 +535,68 @@ if old_header and new_header:
     new[start:end] = [new_header, *merged]
     new_path.write_text("\n".join(new) + "\n", encoding="utf-8")
 PY
+}
+
+remove_legacy_autoprinter_options() {
+  local core_cfg="$1"
+  local temp_cfg=""
+  local backup_cfg="${core_cfg}.bak"
+  local had_backup=0
+
+  if [ ! -e "${core_cfg}" ] && [ ! -L "${core_cfg}" ]; then
+    return 0
+  fi
+  if [ -L "${core_cfg}" ] || [ ! -f "${core_cfg}" ]; then
+    log_error "moonraker-config: refusing non-regular AutoPrinter config ${core_cfg}"
+    return 1
+  fi
+
+  temp_cfg="$(mktemp "${core_cfg}.XXXXXX")" || {
+    log_error "moonraker-config: cannot allocate AutoPrinter config migration file"
+    return 1
+  }
+  if ! cp -p "${core_cfg}" "${temp_cfg}" || ! merge_preserved_autoprinter_section "${core_cfg}" "${temp_cfg}"; then
+    rm -f "${temp_cfg}"
+    log_error "moonraker-config: cannot prepare AutoPrinter config migration for ${core_cfg}"
+    return 1
+  fi
+  if cmp -s "${core_cfg}" "${temp_cfg}"; then
+    rm -f "${temp_cfg}"
+    return 0
+  fi
+  if [ -f "${backup_cfg}" ]; then
+    had_backup=1
+  elif [ -e "${backup_cfg}" ] || [ -L "${backup_cfg}" ]; then
+    rm -f "${temp_cfg}"
+    log_error "moonraker-config: refusing non-regular AutoPrinter config backup ${backup_cfg}"
+    return 1
+  fi
+  if [ "${had_backup}" -eq 0 ]; then
+    if ! cp -p "${core_cfg}" "${backup_cfg}" || ! cmp -s "${core_cfg}" "${backup_cfg}"; then
+      rm -f "${temp_cfg}" "${backup_cfg}"
+      log_error "moonraker-config: cannot create AutoPrinter config backup for ${core_cfg}"
+      return 1
+    fi
+  fi
+  if ! mv -f "${temp_cfg}" "${core_cfg}"; then
+    rm -f "${temp_cfg}"
+    log_error "moonraker-config: cannot publish AutoPrinter config migration for ${core_cfg}"
+    return 1
+  fi
+}
+
+deploy_base_fragments() {
+  local preserved_core=""
+  if [ "${DEPLOY_MODE}" = "preserve" ] && [ -f "${DST_BASE_DIR}/00-core.conf" ]; then
+    preserved_core="$(mktemp)"
+    cp -f "${DST_BASE_DIR}/00-core.conf" "${preserved_core}"
+  fi
+  rm -rf "${DST_BASE_DIR}"
+  ensure_dir "${DST_BASE_DIR}"
+  cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
+  render_base_fragment_templates
+  if [ -n "${preserved_core}" ]; then
+    merge_preserved_autoprinter_section "${preserved_core}" "${DST_BASE_DIR}/00-core.conf"
     rm -f "${preserved_core}"
   fi
   configure_mainsail_updater_section
@@ -569,6 +637,7 @@ EOF
 
 # Блок 4: Основной сценарий деплоя moonraker-конфига и компонентов.
 if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+  remove_legacy_autoprinter_options "${DST_BASE_DIR}/00-core.conf"
   ensure_moonraker_allowed_service "treed-shell"
   deploy_treed_update_command
   restart_and_verify_moonraker_components

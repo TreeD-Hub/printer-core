@@ -551,6 +551,14 @@ fi
 trap 'rc=$?; log_error "FAILED step=${CURRENT_STEP:-unknown} rc=${rc} line=${BASH_LINENO[0]} cmd=${BASH_COMMAND}"; exit ${rc}' ERR
 
 # Блок 15: Реестр шагов оркестрации (порядок критичен).
+UI_STEPS=()
+if [ "$(resolve_treed_ui_mode ts)" = "ks" ]; then
+  UI_STEPS=(
+    "klipperscreen-install"    # Установка/health-check KlipperScreen.
+    "klipperscreen-theme"      # Деплой темы/шрифта и обновление KlipperScreen.conf.
+    "klipperscreen-integr"     # Systemd override KlipperScreen для корректного splash.
+  )
+fi
 STEPS=(
   # Предварительные проверки и подготовка окружения.
   "check-env"                # Контракт окружения: root, PI_USER/PI_HOME, OS sanity.
@@ -578,9 +586,7 @@ STEPS=(
   "crowsnest-webcam"         # Деплой камеры (crowsnest + moonraker webcam fragment).
   "treed-cam"                # Runtime-скрипты TreeD камеры в ~/treed/cam.
   "klipper-mainsail-theme"   # Синхронизация темы Mainsail в runtime-конфиг.
-  "klipperscreen-install"    # Установка/health-check KlipperScreen.
-  "klipperscreen-theme"      # Деплой темы/шрифта и обновление KlipperScreen.conf.
-  "klipperscreen-integr"     # Systemd override KlipperScreen для корректного splash.
+  "${UI_STEPS[@]}"
   "treed-shell-install"      # Деплой TreeD Shell и команды переключения TS/KS.
 
   # Финализация и контроль.

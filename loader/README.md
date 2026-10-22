@@ -88,9 +88,9 @@ Plymouth в режиме `updates`. Экран использует только
 | 19 | `crowsnest-webcam` | optional | Настройка камеры/crowsnest/Moonraker webcam-фрагмента. |
 | 20 | `treed-cam` | required | Runtime-скрипты камеры TreeD. |
 | 21 | `klipper-mainsail-theme` | required | Синхронизация темы Mainsail. |
-| 22 | `klipperscreen-install` | required | Managed-установка/проверка KlipperScreen. |
-| 23 | `klipperscreen-theme` | required | Деплой темы/шрифта KlipperScreen. |
-| 24 | `klipperscreen-integr` | required | Systemd override KlipperScreen. |
+| 22 | `klipperscreen-install` | required при `ks` | Managed-установка/проверка KlipperScreen. |
+| 23 | `klipperscreen-theme` | required при `ks` | Деплой темы/шрифта KlipperScreen. |
+| 24 | `klipperscreen-integr` | required при `ks` | Systemd override KlipperScreen. |
 | 25 | `treed-shell-install` | required | Деплой TreeD Shell из `treed-shell-ui.zip` и команды переключения TS/KS. |
 | 26 | `maintenance-start` | required | Запуск required/best-effort сервисов. |
 | 27 | `verify` | required | Финальная валидация V2-контура с разделением fatal/diagnostic проверок. |
@@ -145,7 +145,6 @@ Plymouth в режиме `updates`. Экран использует только
 - `TREED_KLIPPERSCREEN_REF` — полный commit SHA из runtime manifest; newer checkout также возвращается на manifest SHA.
 - `TREED_FORCE_KLIPPERSCREEN_INSTALL` — `1` повторно запускает installer без удаления managed checkout.
 - `TREED_KLIPPERSCREEN_ENV` — путь venv KlipperScreen, default `${PI_HOME}/.KlipperScreen-env`.
-- `TREED_KLIPPERSCREEN_REQUIRED` — `0|1`, default `1`; оставлен для совместимости, активный UI проверяется через `TREED_UI_MODE`.
 - `TREED_UI_MODE` — `ts|ks`, default `ts`; выбранный экранный UI. Если `/etc/default/treed-ui` уже существует, bootstrap берет режим оттуда.
 - `TREED_UI_ENV_FILE` — default `/etc/default/treed-ui`, persisted-состояние выбранного UI.
 - `TREED_SHELL_RELEASE_API_URL` — default `https://api.github.com/repos/TreeD-Hub/printer-ui/releases`, GitHub Releases API.
@@ -163,6 +162,8 @@ Plymouth в режиме `updates`. Экран использует только
 - `TREED_SHELL_START_TIMEOUT` — default `45`, ожидание активного `treed-shell.service`.
 - `TREED_KLIPPER_START_REQUIRE_ACTIVE` — `0|1`, default `1`; при `1` `maintenance-start` блокирует loader, если `klipper.service` не стал active в таймаут.
 - `TREED_ALLOW_HARDWARE_NOT_READY` — `0|1`, default `0`; только явный service/install режим переводит hardware readiness failures в diagnostic.
+
+При `TREED_UI_MODE=ts` шаги KlipperScreen не входят в реестр установки и его checkout не проверяется. TreeD Shell самостоятельно устанавливает нужные X11-пакеты и настраивает Xwrapper для своего systemd-сервиса. При `ks` три шага установки и проверки KlipperScreen остаются обязательными.
 
 ## Запуск
 

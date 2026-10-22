@@ -91,6 +91,48 @@ install_missing_packages() {
   apt_get_noninteractive install "${missing[@]}"
 }
 
+configure_xwrapper() {
+  local wrapper_config="/etc/X11/Xwrapper.config"
+  local temp_config=""
+  local existing_mode="0644"
+  local had_wrapper_config=0
+
+  if [ -L "${wrapper_config}" ] || { [ -e "${wrapper_config}" ] && [ ! -f "${wrapper_config}" ]; }; then
+    log_error "treed-shell-install: refusing non-regular Xwrapper config path ${wrapper_config}"
+    return 1
+  fi
+
+  install -d -m 0755 "$(dirname "${wrapper_config}")"
+  if [ -f "${wrapper_config}" ]; then
+    had_wrapper_config=1
+    existing_mode="$(stat -c '%a' "${wrapper_config}")"
+  else
+    install -m 0644 /dev/null "${wrapper_config}"
+  fi
+
+  temp_config="$(mktemp "${wrapper_config}.XXXXXX")"
+  if ! awk '
+    /^[[:space:]]*allowed_users[[:space:]]*=/ { next }
+    /^[[:space:]]*needs_root_rights[[:space:]]*=/ { next }
+    { print }
+  ' "${wrapper_config}" > "${temp_config}"; then
+    rm -f "${temp_config}"
+    return 1
+  fi
+  printf '%s\n' 'allowed_users=anybody' 'needs_root_rights=yes' >> "${temp_config}"
+
+  if cmp -s "${wrapper_config}" "${temp_config}"; then
+    rm -f "${temp_config}"
+    return 0
+  fi
+
+  if [ "${had_wrapper_config}" = "1" ]; then
+    backup_file_once "${wrapper_config}"
+  fi
+  chmod "${existing_mode}" "${temp_config}"
+  mv -f "${temp_config}" "${wrapper_config}"
+}
+
 install_optional_unclutter() {
   if package_installed unclutter; then
     return 0
@@ -514,7 +556,10 @@ apply_selected_ui_mode() {
 }
 
 # Блок 6: Основной сценарий установки.
-install_missing_packages curl ca-certificates python3 xinit dbus-x11
+install_missing_packages curl ca-certificates python3 xinit dbus-x11 \
+  xserver-xorg-legacy xserver-xorg-video-fbdev \
+  xserver-xorg-input-evdev xserver-xorg-input-libinput x11-xserver-utils
+configure_xwrapper
 install_optional_unclutter
 ensure_browser_runtime
 deploy_treed_ui_command

@@ -24,10 +24,22 @@ class ServiceModeTests(unittest.TestCase):
         self.printer = {
             "toolhead": {
                 "homed_axes": "",
+                "position": {"x": 125.0, "y": 128.5, "z": 10.0},
                 "axis_minimum": {axis: CFG.getfloat("stepper_" + axis, "position_min") for axis in "xyz"},
                 "axis_maximum": {axis: CFG.getfloat("stepper_" + axis, "position_max") for axis in "xyz"},
             },
+            "treed_driver_mode": {"mode": "normal", "service_velocity_limit": 350.0},
+            "gcode_move": {"speed_factor": 1.0},
+            "configfile": {"settings": {
+                "stepper_x": {"position_min": CFG.getfloat("stepper_x", "position_min"),
+                              "position_max": CFG.getfloat("stepper_x", "position_max")},
+                "stepper_y": {"position_min": CFG.getfloat("stepper_y", "position_min"),
+                              "position_max": CFG.getfloat("stepper_y", "position_max")},
+                "stepper_z": {"position_min": CFG.getfloat("stepper_z", "position_min"),
+                              "position_max": CFG.getfloat("stepper_z", "position_max")},
+            }},
             "gcode_macro _TREED_OPERATION_STATE": {"phase": "idle"},
+            "gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": 0},
             "gcode_macro _TREED_CLOG_RECOVERY_STATE": {"active": 0},
             "print_stats": {"state": "standby"},
             "pause_resume": {"is_paused": False},
@@ -46,6 +58,10 @@ class ServiceModeTests(unittest.TestCase):
                 self.render("_TREED_OPERATION_REQUIRE", {"OP": "service_mode"})
             self.commands.append(line)
 
+    def run_move_axis(self, params):
+        self.commands = self.render("TREED_UI_MOVE_AXIS", params)
+        return next(line for line in self.commands if line.startswith("G1 "))
+
     # Блок 2: Центр сопла вычисляется из полного хода; нижняя опора предшествует XY.
     def test_service_parks_bottom_then_centers_nozzle_without_eddy_or_heat(self):
         self.run_service()
@@ -62,6 +78,37 @@ class ServiceModeTests(unittest.TestCase):
         self.printer["toolhead"]["axis_maximum"].update(x=240, y=220)
         self.run_service()
         self.assertIn("G1 X115.0 Y120.0 F6000", self.commands)
+
+    def test_quiet_service_center_caps_actual_speed_without_changing_normal(self):
+        for factor, expected_feed in [(0.5, 6000.0), (2.0, 1500.0)]:
+            with self.subTest(factor=factor):
+                self.printer["treed_driver_mode"].update(mode="quiet", service_velocity_limit=50.0)
+                self.printer["gcode_move"]["speed_factor"] = factor
+                self.commands = []
+                self.run_service()
+                move = next(line for line in self.commands if line.startswith("G1 X"))
+                feed = float(move.rsplit("F", 1)[1])
+                self.assertEqual(feed, expected_feed)
+                self.assertLessEqual(feed * factor / 60.0, 50.0)
+
+        self.printer["treed_driver_mode"].update(mode="normal", service_velocity_limit=350.0)
+        self.printer["gcode_move"]["speed_factor"] = 2.0
+        self.commands = []
+        self.run_service()
+        self.assertIn("G1 X125.0 Y128.5 F6000", self.commands)
+
+    def test_quiet_manual_xy_caps_requested_feed_and_preserves_lower_request(self):
+        self.printer["toolhead"]["homed_axes"] = "xyz"
+        self.printer["treed_driver_mode"].update(mode="quiet", service_velocity_limit=50.0)
+        self.printer["gcode_move"]["speed_factor"] = 2.0
+
+        move = self.run_move_axis({"AXIS": "X", "DISTANCE": "10", "FEEDRATE": "4000"})
+        self.assertEqual(move, "G1 X10.0 F1500.0")
+        self.assertEqual(float(move.rsplit("F", 1)[1]) * 2.0 / 60.0, 50.0)
+
+        move = self.run_move_axis({"AXIS": "Y", "DISTANCE": "10", "FEEDRATE": "1200"})
+        self.assertEqual(move, "G1 Y10.0 F1200.0")
+        self.assertLessEqual(float(move.rsplit("F", 1)[1]) * 2.0 / 60.0, 50.0)
 
     # Блок 3: Запреты проверяются до первой команды движения.
     def test_busy_or_unknown_operation_has_no_side_effects(self):
