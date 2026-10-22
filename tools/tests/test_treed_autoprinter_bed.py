@@ -120,6 +120,10 @@ class _FakeProcess:
 
 
 class E0BedCheckerTest(unittest.IsolatedAsyncioTestCase):
+    def test_printer_name_cannot_replace_uuid(self):
+        with self.assertRaisesRegex(ValueError, "invalid_printer_id"):
+            bed.E0BedChecker("tr-v2", "", "", "http://127.0.0.1:8080/?action=snapshot")
+
     async def test_shared_worker_needs_no_legacy_runner_paths(self):
         socket_path = os.path.abspath("vision.sock")
         instance = bed.E0BedChecker(

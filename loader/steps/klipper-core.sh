@@ -147,8 +147,12 @@ else
 fi
 
 # Блок 5: Полная раскладка runtime-конфига из staging.
-# Полная очистка runtime-слоя (без удаления самого каталога).
-find "${CONFIG_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+# Moonraker сохранит локальные параметры на своём шаге, поэтому до него их не удаляем.
+if [ "${DEPLOY_MODE}" = "preserve" ]; then
+  find "${CONFIG_DIR}" -mindepth 1 -maxdepth 1 ! -name moonraker ! -name moonraker.conf -exec rm -rf {} +
+else
+  find "${CONFIG_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+fi
 
 # Полная раскладка дерева из staging в runtime.
 cp -a "${STAGE_DIR}/." "${CONFIG_DIR}/"

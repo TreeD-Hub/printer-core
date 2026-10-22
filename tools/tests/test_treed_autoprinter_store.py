@@ -27,6 +27,23 @@ DATA = b"G1 X10 Y10\n"
 
 
 class AutoPrinterStoreTest(unittest.TestCase):
+    def test_uuid_identity_is_persistent_and_cannot_be_replaced(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = AutoPrinterStore(root, PRINTER, PROFILE)
+            self.assertEqual(store.printer_id, PRINTER)
+            store.close()
+            with self.assertRaisesRegex(StoreError, "identity_mismatch"):
+                AutoPrinterStore(root, "22222222-2222-4222-8222-222222222222", PROFILE)
+            reopened = AutoPrinterStore(root, PRINTER, PROFILE)
+            self.assertEqual(reopened.printer_id, PRINTER)
+            reopened.close()
+
+    def test_printer_identity_requires_uuid(self):
+        for name in ("tr-v2", "", "../tr-v2", "tr/v2", "tr v2", "tr-v2\n", "x" * 101, None):
+            with self.subTest(name=name), self.assertRaisesRegex(StoreError, "invalid_uuid"):
+                AutoPrinterStore(self.root / "invalid", name, PROFILE)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

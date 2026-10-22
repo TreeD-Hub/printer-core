@@ -30,6 +30,49 @@ class FakeLock:
 
 
 class UpdateServiceTests(unittest.TestCase):
+    def test_loader_preserves_account_config_before_moonraker_merge(self):
+        git = shutil.which("git")
+        bash = str(Path(git).parents[1] / "bin/bash.exe") if sys.platform == "win32" and git else shutil.which("bash")
+        if not bash or not Path(bash).is_file():
+            self.skipTest("Bash недоступен для проверки сохранения аккаунта")
+        klipper = (ROOT / "loader/steps/klipper-core.sh").read_text(encoding="utf-8")
+        rebuild = klipper.split("# Блок 5:", 1)[1].split("# Блок 6:", 1)[0].split("\n", 1)[1]
+        moonraker = (ROOT / "loader/steps/moonraker-config.sh").read_text(encoding="utf-8")
+        deploy = "deploy_base_fragments() {" + moonraker.split("deploy_base_fragments() {", 1)[1].split("\nprune_treed_generated_fragments()", 1)[0]
+        old = "[treed_autoprinter]\nprinter_id: permanent-device\napi_origin: https://device.example\n"
+        defaults = "[treed_autoprinter]\nprinter_id:\napi_origin:\nbed_check_socket: /private/vision.sock\n"
+        for mode in ("preserve", "clean"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                config = root / "config"
+                (config / "moonraker/base").mkdir(parents=True)
+                (config / "moonraker/base/00-core.conf").write_text(old, encoding="utf-8")
+                (config / "moonraker.conf").write_text("old entrypoint\n", encoding="utf-8")
+                (config / "printer.cfg").write_text("old printer config\n", encoding="utf-8")
+                (root / "stage").mkdir()
+                (root / "stage/printer.cfg").write_text("new printer config\n", encoding="utf-8")
+                (root / "source").mkdir()
+                (root / "source/00-core.conf").write_text(defaults, encoding="utf-8")
+                prelude = ('set -e\nTMPDIR="$PWD"\nCONFIG_DIR=./config\nSTAGE_DIR=./stage\n'
+                           'SRC_BASE_DIR=./source\nDST_BASE_DIR=./config/moonraker/base\n'
+                           'PI_USER=unused\ngrp=unused\n'
+                           'ensure_dir() { mkdir -p "$1"; }\n'
+                           'render_base_fragment_templates() { :; }\n'
+                           'configure_mainsail_updater_section() { :; }\n'
+                           'configure_crowsnest_updater_section() { :; }\n'
+                           'log_info() { :; }\nchown() { :; }\n')
+                prelude += f'python3() {{ "{Path(sys.executable).as_posix()}" "$@"; }}\n'
+                # Обе настоящие функции выполняются в порядке loader, системные операции изолированы.
+                script = prelude + f"DEPLOY_MODE={mode}\n" + rebuild + "\n" + deploy + "\ndeploy_base_fragments\n"
+                result = subprocess.run([bash, "-c", script], cwd=temp, capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+                final = (config / "moonraker/base/00-core.conf").read_text(encoding="utf-8")
+                self.assertIn("bed_check_socket: /private/vision.sock", final)
+                self.assertEqual("printer_id: permanent-device" in final, mode == "preserve")
+                self.assertEqual("api_origin: https://device.example" in final, mode == "preserve")
+                self.assertEqual((config / "moonraker.conf").exists(), mode == "preserve")
+                self.assertEqual((config / "printer.cfg").read_text(), "new printer config\n")
+
     def test_override_copy_failure_aborts_before_runtime_rebuild(self):
         git = shutil.which("git")
         bash = str(Path(git).parents[1] / "bin/bash.exe") if sys.platform == "win32" and git else shutil.which("bash")

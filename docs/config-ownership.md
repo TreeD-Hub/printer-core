@@ -78,6 +78,9 @@ Runtime:
   из действующего `moonraker/base/00-core.conf` поверх новых defaults; отсутствующие
   в старой версии параметры добавляются из исходника. В `clean` используются только
   значения репозитория.
+- Предшествующий шаг `klipper-core` в `preserve` оставляет `moonraker/` и
+  `moonraker.conf` до их собственного шага обновления. Иначе старый `00-core.conf`
+  удаляется раньше слияния, и параметры аккаунта заменяются пустыми defaults.
 - `${PI_HOME}/treed/cam/config/runtime.env` и `/etc/default/treed-vision` сохраняют
   локальные параметры камеры/авторизации и валидированный путь `VISION_PYTHON`;
   loader не удаляет credentials или runtime override-файл.

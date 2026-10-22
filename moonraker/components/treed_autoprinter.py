@@ -53,7 +53,16 @@ class TreeDAutoPrinter:
         self._last_sync_at = None
         self._workers: set[asyncio.Task] = set()
         self._closed = False
-        self._config = config
+        # Moonraker проверяет непрочитанные опции до component_init, включая неполный конфиг.
+        self._config = {key: config.get(key, default) for key, default in {
+            "printer_id": "", "profile_id": "", "credentials_path": "", "storage_path": "",
+            "api_origin": "", "frontend_origin": "", "max_journal_bytes": DEFAULT_MAX_JOURNAL_BYTES,
+            "bed_check_model_path": "", "bed_check_python": "", "bed_check_socket": None,
+            "bed_check_snapshot_url": "http://127.0.0.1:8080/?action=snapshot",
+        }.items()}
+        # Старые флаги больше не управляют функциями, но допустимы в сохранённом конфиге.
+        for key in ("enabled", "execution_enabled", "bed_check_enabled"):
+            config.get(key, None)
         self._boot_id = str(uuid.uuid4())
         self._snapshot_seq = 0
         self._connection = "unconfigured"
@@ -85,7 +94,7 @@ class TreeDAutoPrinter:
         bed_checker = None
         try:
             bed_checker = E0BedChecker(
-                self._config.get("printer_id"),
+                self._store.printer_id,
                 self._config.get("bed_check_model_path", ""),
                 self._config.get("bed_check_python", ""),
                 self._config.get("bed_check_snapshot_url", "http://127.0.0.1:8080/?action=snapshot"),
@@ -114,13 +123,13 @@ class TreeDAutoPrinter:
 
     def _create_configured(self):
         # Блок 3: Секрет читается только из отдельного закрытого JSON-файла.
-        printer_id = self._config.get("printer_id")
         profile_id = self._config.get("profile_id")
         credential_path = Path(self._config.get("credentials_path"))
         origin = self._config.get("api_origin", "")
         credentials = _read_credentials(credential_path)
-        if credentials["printer_id"] != printer_id:
-            raise ValueError("identity_mismatch")
+        printer_id = credentials["printer_id"]
+        if self._config.get("printer_id") and self._config["printer_id"] != printer_id:
+            raise StoreError("identity_mismatch")
         transport = AutoPrinterTransport(origin, credentials["secret"], self._config.get("frontend_origin") or origin)
         store = AutoPrinterStore(
             Path(self._config.get("storage_path")), printer_id, profile_id,
