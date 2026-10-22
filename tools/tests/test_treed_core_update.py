@@ -412,6 +412,8 @@ class CoreUpdateTests(unittest.TestCase):
         self.assert_upgrade_from("4c3e11d864084f810001137b4d98cc97825167c9", has_gate=True)
 
     def assert_upgrade_from(self, revision, has_gate):
+        # CI работает без root; проверяем запрос владельца, сохраняя реальные записи/fsync/rename.
+        chown = self.stack.enter_context(patch.object(core.os, "fchown", create=True))
         try:
             source = subprocess.check_output([
                 "git", "-C", str(ROOT), "show",
@@ -449,6 +451,9 @@ class CoreUpdateTests(unittest.TestCase):
                                      self.payload[key])
         self.services.side_effect = service
         self.assertEqual(legacy.apply("v0.2.0", OPERATION, self.env)["status"], "applied")
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
+        chown.reset_mock()
         if has_gate:
             self.admission.assert_called_once_with("BEGIN")
         else:
@@ -463,6 +468,8 @@ class CoreUpdateTests(unittest.TestCase):
         result = core.apply("v0.3.0", "22222222-2222-4222-8222-222222222222", self.env)
         self.assertEqual(result["status"], "applied")
         self.admission.assert_called_once_with("BEGIN")
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
         self.services.assert_has_calls([call("stop"), call("start")])
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.3.0")
         self.assertNotIn(b"enabled", path.read_bytes())
