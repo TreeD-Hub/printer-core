@@ -409,14 +409,18 @@ def merge_local_section(default_text, previous_text, name):
     new_start, new_end, new_header, new_body = body(new_lines)
     if old_header is None or new_header is None:
         return default_text
+    legacy = {"enabled", "execution_enabled", "bed_check_enabled"}
+    old_body = [line for line in old_body if not (
+        (match := re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line))
+        and name == "treed_autoprinter" and match[1].lower() in legacy)]
     keys = set()
     for line in old_body:
-        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
         if match:
             keys.add(match.group(1).lower())
     additions = []
     for line in new_body:
-        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
         if match and match.group(1).lower() not in keys:
             additions.append(line)
             keys.add(match.group(1).lower())
@@ -450,6 +454,8 @@ def download(tag, archive, env, asset_name=ASSET):
                 raise ValueError(f"Пакет {asset_name} превышает допустимый размер")
             checksum.update(block)
             output.write(block)
+        output.flush()
+        os.fsync(output.fileno())
     if checksum.hexdigest() != digest.removeprefix("sha256:"):
         raise ValueError(f"SHA-256 {asset_name} не совпадает с GitHub")
 
@@ -514,8 +520,7 @@ def extract_source(archive, directory, manifest, payload):
             if row.is_dir():
                 continue
             target = directory.joinpath(*path.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(bundle.read(row))
+            write_file(target, bundle.read(row))
     if not (directory / "loader/loader.sh").is_file():
         raise ValueError("Source package не содержит entrypoint loader")
     if (directory / "VERSION").read_text(encoding="utf-8").strip() != manifest["version"]:
@@ -676,6 +681,32 @@ def idle():
         return False
 
 
+def update_admission(action):
+    if action not in {"BEGIN", "END"}:
+        raise ValueError("Недопустимое действие admission gate")
+    request_json("/printer/gcode/script", {"script": f"_TREED_UPDATE_GATE ACTION={action}"})
+    state = request_json("/printer/objects/query?gcode_macro%20_TREED_UPDATE_ADMISSION_STATE")
+    status = state.get("status") if isinstance(state, dict) else None
+    gate = status.get("gcode_macro _TREED_UPDATE_ADMISSION_STATE") if isinstance(status, dict) else None
+    expected = 1 if action == "BEGIN" else 0
+    if not isinstance(gate, dict) or type(gate.get("active")) is not int or gate["active"] != expected:
+        raise RuntimeError(f"Klipper не подтвердил состояние admission gate после {action}")
+
+
+def services_inactive(units=("klipper.service", "moonraker.service")):
+    # Переходное или неизвестное состояние службы не подтверждает остановку.
+    for unit in units:
+        try:
+            result = subprocess.run(["systemctl", "show", "--property=ActiveState", "--value", unit],
+                                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError, UnicodeError):
+            return False
+        if not isinstance(result.stdout, str) or result.stdout.strip() not in {"inactive", "failed"}:
+            return False
+    return True
+
+
 def services(action):
     vision_units = tuple(unit for unit in ("treed-vision.service", "treed-detection.service")
                          if subprocess.run(["systemctl", "cat", unit], stdout=subprocess.DEVNULL,
@@ -752,7 +783,7 @@ def terminate_process_group(process, grace=5):
 
 
 def run_managed_loader(source, child_env, log_path, timeout=1500):
-    with log_path.open("xb") as log:
+    with log_path.open("ab") as log:
         os.chmod(log_path, 0o600)
         try:
             process = subprocess.Popen(["bash", "loader/loader.sh"], cwd=source, env=child_env,
@@ -769,6 +800,25 @@ def run_managed_loader(source, child_env, log_path, timeout=1500):
         log.flush()
         os.fsync(log.fileno())
     return code
+
+
+def provision_runtime(env, journal, operation):
+    child_env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "USER", "LOGNAME") if key in os.environ}
+    locations = roots(env)
+    child_env.update({"PI_USER": env["TREED_UPDATE_PI_USER"], "PI_HOME": env["TREED_UPDATE_PI_HOME"],
+                      "TREED_UPDATE_MANAGED": "1", "TREED_UPDATE_MANAGED_LOADER": "1",
+                      "TREED_UPDATE_OPERATION_ID": operation, "TREED_DEPLOY_MODE": "preserve",
+                      "TREED_SHELL_INSTALL": "0",
+                      "TREED_KLIPPER_SRC_DIR": str(locations["klipper"].parents[1]),
+                      "TREED_MOONRAKER_SRC_DIR": str(locations["moonraker"].parents[1])})
+    return run_managed_loader(journal.parent / "source", child_env, journal.parent / "loader.log")
+
+
+def verify_runtime_files(manifest, env):
+    for row in manifest["files"]:
+        data, _info = read_file(destination(row["path"], roots(env)))
+        if data is None or not matches_managed_file(row["path"], data, row["runtimeSha256"]):
+            raise RuntimeError(f"Runtime файл отличается от проверенного target: {row['path']}")
 
 
 def baseline(repo, env):
@@ -860,6 +910,18 @@ def prepare(manifest, payload, env, journal, reset_configs=None):
     return current
 
 
+def stop_for_recovery():
+    try:
+        update_admission("BEGIN")
+    except Exception:
+        # Moonraker может работать при остановленном Klipper: печать невозможна.
+        if not services_inactive(("klipper.service",)):
+            raise RuntimeError("Recovery остановлена: admission gate недоступен, а Klipper не подтверждён как остановленный")
+    services("stop")
+    if not services_inactive():
+        raise RuntimeError("Recovery остановлена: systemd не подтвердил остановку Klipper и Moonraker")
+
+
 def rollback(env, journal, transaction):
     # До начала записи rollback не должен затирать более свежие ручные правки.
     # Старые journal со stage=prepared сохраняют прежний recovery-контракт.
@@ -867,6 +929,10 @@ def rollback(env, journal, transaction):
         services("start")
         if not wait_ready(read_json(manifest_path(env))):
             raise RuntimeError("Обновление не началось, но сервисы не прошли readiness")
+        try:
+            update_admission("END")
+        except Exception as release_error:
+            raise RuntimeError(f"Recovery не смогла снять admission gate после readiness: {release_error}") from release_error
         transaction["stage"] = "aborted"
         write_json(journal, transaction)
         return {"status": "error", "resultCode": "core_not_installed",
@@ -876,7 +942,7 @@ def rollback(env, journal, transaction):
     except (OSError, subprocess.SubprocessError):
         # Сбой нового service entrypoint не должен мешать возврату его старой копии.
         print("Core rollback: phase notification failed", file=sys.stderr)
-    services("stop")
+    stop_for_recovery()
     locations = roots(env)
     for row in transaction["entries"]:
         path = destination(row["path"], locations)
@@ -915,8 +981,39 @@ def recover(env, operation):
             if installed == expected and wait_ready(expected):
                 return {"status": "applied", "resultCode": "core_updated_recovered",
                         "message": "Готовность установленного TreeD Core после provisioning подтверждена."}
+        expected = read_json(journal.parent / "manifest.new.json")
+        source = journal.parent / "source"
+        if expected and (source / "loader/loader.sh").is_file():
+            # Продолжаем тот же проверенный выпуск, не откатывая уже сменённые зависимости.
+            with zipfile.ZipFile(journal.parent / SOURCE_ASSET) as bundle:
+                for row in bundle.infolist():
+                    if not row.is_dir():
+                        saved = source / row.filename
+                        if saved.is_symlink() or saved.read_bytes() != bundle.read(row):
+                            raise ValueError("Recovery source повреждён: " + row.filename)
+            if ((source / "VERSION").read_text(encoding="utf-8").strip() != expected["version"]
+                    or package_manifest_for_source(source, expected)["provisioning"] != expected["provisioning"]):
+                raise ValueError("Recovery source не соответствует сохранённому выпуску")
+            verify_runtime_files(expected, env)
+            stop_for_recovery()
+            transaction.update(stage="provisioning", provisioningStarted=True)
+            write_json(journal, transaction)
+            if provision_runtime(env, journal, operation):
+                transaction["stage"] = "provisioning_failed"
+                write_json(journal, transaction)
+                return {"status": "error", "resultCode": "provisioning_failed",
+                        "message": "Подготовка системы не завершена. Повтор обновления продолжит сохранённую операцию."}
+            check_compatibility(expected, env, expected)
+            verify_runtime_files(expected, env)
+            if not vision_units_installed() or not wait_ready(expected):
+                raise RuntimeError("Provisioning recovery не прошла readiness")
+            write_json(manifest_path(env), expected)
+            transaction["stage"] = "committed"
+            write_json(journal, transaction)
+            return {"status": "applied", "resultCode": "core_updated_recovered",
+                    "message": "Подготовка системы продолжена, новый выпуск установлен и проверен."}
         return {"status": "error", "resultCode": "provisioning_interrupted",
-                "message": "Provisioning прерван; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
+                "message": "Для восстановления не хватает сохранённого source package; файлы и журнал оставлены без изменений."}
     if transaction["stage"] == "committed":
         installed = read_json(manifest_path(env))
         expected = read_json(journal.parent / "manifest.new.json")
@@ -955,7 +1052,8 @@ def apply(tag, operation, env, reset_configs=None):
             provision = needs_provisioning(manifest, previous, env)
             if provision:
                 source_archive = journal.parent / SOURCE_ASSET
-                journal.parent.mkdir(parents=True, exist_ok=True)
+                with parent_fd(source_archive, create=True):
+                    pass
                 download(tag, source_archive, env, SOURCE_ASSET)
                 extract_source(source_archive, journal.parent / "source", manifest, payload)
             else:
@@ -968,12 +1066,23 @@ def apply(tag, operation, env, reset_configs=None):
         if not idle():
             raise ValueError("Core update требует готового принтера без активной печати или паузы")
         prepare(manifest, payload, env, journal, reset_configs)
-    if not idle():
-        raise ValueError("Принтер начал печать во время подготовки обновления")
-    stop_heating()
+    # BEGIN выполняется в последовательной очереди Klipper: проверка состояния
+    # и закрытие поддерживаемых входов печати происходят одной командой.
+    update_admission("BEGIN")
+    try:
+        stop_heating()
+    except Exception as heater_error:
+        try:
+            update_admission("END")
+        except Exception as release_error:
+            print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+            raise RuntimeError(f"{heater_error}; admission gate may remain active: {release_error}") from heater_error
+        raise
     try:
         phase("installing", "Устанавливаем компоненты TreeD; локальные настройки сохраняются.")
         services("stop")
+        if not services_inactive():
+            raise RuntimeError("Core update остановлена: systemd не подтвердил остановку Klipper и Moonraker")
         # После остановки Klipper SAVE_CONFIG уже не может изменяться.
         # Переподготовка также подхватывает последнее сохранение до остановки.
         current = prepare(manifest, payload, env, journal, reset_configs)
@@ -995,30 +1104,25 @@ def apply(tag, operation, env, reset_configs=None):
             transaction["provisioningStarted"] = True
             write_json(journal, transaction)
             phase("installing", "Обновляем зависимости и службы через loader, сохраняя настройки устройства.")
-            child_env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "USER", "LOGNAME") if key in os.environ}
-            locations = roots(env)
-            child_env.update({"PI_USER": env["TREED_UPDATE_PI_USER"], "PI_HOME": env["TREED_UPDATE_PI_HOME"],
-                              "TREED_UPDATE_MANAGED": "1", "TREED_UPDATE_MANAGED_LOADER": "1",
-                              "TREED_UPDATE_OPERATION_ID": operation, "TREED_DEPLOY_MODE": "preserve",
-                              "TREED_SHELL_INSTALL": "0",
-                              "TREED_KLIPPER_SRC_DIR": str(locations["klipper"].parents[1]),
-                              "TREED_MOONRAKER_SRC_DIR": str(locations["moonraker"].parents[1])})
-            source = journal.parent / "source"
-            result = run_managed_loader(source, child_env, journal.parent / "loader.log")
+            result = provision_runtime(env, journal, operation)
             if result:
                 transaction["stage"] = "provisioning_failed"
                 write_json(journal, transaction)
+                release_failed = False
+                try:
+                    update_admission("END")
+                except Exception as release_error:
+                    print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+                    release_failed = True
                 return {"status": "error", "resultCode": "provisioning_failed",
-                        "message": "Loader не завершил provisioning; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
+                        "message": "Loader не завершил подготовку системы. Повтор обновления продолжит сохранённую операцию."
+                                   + (" Admission gate может оставаться активным; после остановки worker перезапустите Klipper." if release_failed else "")}
             transaction["stage"] = "provisioned"
             write_json(journal, transaction)
             check_compatibility(manifest, env, current)
             if not vision_units_installed():
                 raise RuntimeError("Loader завершился без обязательных runtime units")
-            for row in current["files"]:
-                data, _info = read_file(destination(row["path"], roots(env)))
-                if data is None or content_hash(row["path"], data) != row["runtimeSha256"]:
-                    raise RuntimeError(f"После loader runtime файл отличается от проверенного target: {row['path']}")
+            verify_runtime_files(current, env)
         phase("restarting", "Запускаем Klipper и Moonraker.")
         if not provision:
             services("start")
@@ -1036,8 +1140,15 @@ def apply(tag, operation, env, reset_configs=None):
                 "provisioning", "provisioning_failed", "provisioned"}):
             transaction["stage"] = "provisioning_failed"
             write_json(journal, transaction)
+            release_failed = False
+            try:
+                update_admission("END")
+            except Exception as release_error:
+                print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+                release_failed = True
             return {"status": "error", "resultCode": "provisioning_failed",
-                    "message": "Provisioning не подтверждён; runtime rollback не выполнялся. Нужен новый осознанный запуск."}
+                    "message": "Подготовка системы не подтверждена. Повтор обновления продолжит сохранённую операцию."
+                               + (" Admission gate может оставаться активным; после остановки worker перезапустите Klipper." if release_failed else "")}
         return rollback(env, journal, transaction)
 
 

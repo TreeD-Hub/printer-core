@@ -45,16 +45,31 @@ class FakeConfig:
     def __init__(self, **values):
         self.server = FakeServer()
         self.values = values
+        self.requested = set()
 
     def get_server(self):
         return self.server
 
     def get(self, key, default=None):
+        self.requested.add(key)
         return self.values.get(key, default)
 
 
 # Блок 2: Проверки границ конфигурации, identity, sync и команд.
 class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
+    def test_options_are_consumed_before_moonraker_checks_unused_config(self):
+        config = FakeConfig(
+            printer_id="", profile_id="treed_v2_corexy_v1", api_origin="", frontend_origin="",
+            credentials_path="/private/credentials.json", storage_path="/private/autoprinter",
+            max_journal_bytes="67108864", bed_check_socket="/private/vision.sock",
+            bed_check_model_path="", bed_check_python="", bed_check_snapshot_url="http://127.0.0.1/snapshot",
+            enabled="true", execution_enabled="false", bed_check_enabled="true",
+        )
+        with patch.object(component, "_read_credentials") as credentials:
+            component.load_component(config)
+        self.assertEqual(config.requested, set(config.values))
+        credentials.assert_not_called()
+
     def test_avatar_negotiation_and_unlink_profile_validation(self):
         transport = AutoPrinterTransport("https://treed.example", "test-secret")
         with patch.object(transport, "_opener") as opener:
@@ -167,7 +182,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 {"printer_id": printer_id, "secret": "s" * 32}), encoding="utf-8")
             if os.name != "nt":
                 credentials.chmod(0o600)
-            config = FakeConfig(printer_id=printer_id,
+            config = FakeConfig(printer_id="",
                                 profile_id=profile_id, credentials_path=str(credentials),
                                 api_origin="https://example.test", storage_path=str(root / "store"))
             instance = component.TreeDAutoPrinter(config)
@@ -179,6 +194,7 @@ class AutoPrinterComponentTest(unittest.IsolatedAsyncioTestCase):
                 try:
                     await instance.component_init()
                     self.assertIs(instance._device, device.return_value)
+                    self.assertEqual(instance._store.printer_id, printer_id)
                     self.assertTrue(instance._executor.enabled)
                     self.assertIs(instance._executor.bed_checker, bed_checker.return_value)
                     device.assert_called_once_with(config.server)

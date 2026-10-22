@@ -74,10 +74,23 @@ Runtime:
 - `${PI_HOME}/printer_data/config/treed_variables.cfg` — штатный `save_variables`,
   включая режимы XYZ и обдува. `klipper-core.sh` сохраняет его в `preserve`
   с явной ошибкой при сбое копирования; `clean` сбрасывает настройки.
+- В `preserve` `klipper-core.sh` также сохраняет `filament_motion_runtime.cfg` и
+  SAVE_CONFIG-сегмент `printer.cfg`; сбой чтения, снимка или возврата останавливает
+  раскладку либо сообщает об ошибке и оставляет recovery-копию в
+  `${PI_HOME}/printer_data/.treed-config-preserve`. Завершённый снимок повторно
+  используется после прерывания; он удаляется только после возврата и синхронизации данных.
+  Сохраняемые файлы должны быть обычными файлами, не symlink.
 - В `preserve` шаг `moonraker-config` переносит локальные опции `[treed_autoprinter]`
   из действующего `moonraker/base/00-core.conf` поверх новых defaults; отсутствующие
   в старой версии параметры добавляются из исходника. В `clean` используются только
-  значения репозитория.
+  значения репозитория. Копия для повтора хранится рядом с base в
+  `moonraker/base.preserve-core.conf` до завершения слияния и синхронизации.
+  Явный `clean` отменяет сохранённые снимки незавершённого `preserve`.
+  Managed loader не переписывает конфиги, уже подготовленные updater: их содержимое
+  связано с журналом и контрольными суммами операции, включая переход со старого updater.
+- Предшествующий шаг `klipper-core` в `preserve` оставляет `moonraker/` и
+  `moonraker.conf` до их собственного шага обновления. Иначе старый `00-core.conf`
+  удаляется раньше слияния, и параметры аккаунта заменяются пустыми defaults.
 - `${PI_HOME}/treed/cam/config/runtime.env` и `/etc/default/treed-vision` сохраняют
   локальные параметры камеры/авторизации и валидированный путь `VISION_PYTHON`;
   loader не удаляет credentials или runtime override-файл.

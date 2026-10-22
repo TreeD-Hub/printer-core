@@ -239,12 +239,14 @@ PY
   fi
   if [ -d "${SHELL_WEB_DIR}" ]; then
     mv "${SHELL_WEB_DIR}" "${rollback_dir}"
+    sync -f "${SHELL_RUNTIME_DIR}"
   fi
   /usr/local/sbin/treed-update-service phase installing "Устанавливаем UI bundle."
   if ! mv "${UPDATE_STAGED_DIR}" "${SHELL_WEB_DIR}"; then
     /usr/local/sbin/treed-update-service phase rolling_back "Восстанавливаем предыдущую версию UI."
     if [ -d "${rollback_dir}" ] \
-      && mv "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && cp -a "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && sync -f "${SHELL_RUNTIME_DIR}" \
       && systemctl restart "${SHELL_SERVICE}" \
       && wait_shell_ready; then
       write_state "rolling_back" "1" "Предыдущая версия TreeD UI восстановлена." "1" "rolling_back" "true"
@@ -254,12 +256,14 @@ PY
     return 1
   fi
 
+  sync -f "${SHELL_RUNTIME_DIR}"
   /usr/local/sbin/treed-update-service phase restarting "Перезапускаем интерфейс TreeD."
   if ! systemctl restart "${SHELL_SERVICE}" || ! wait_shell_ready; then
     /usr/local/sbin/treed-update-service phase rolling_back "Новый интерфейс не запустился. Восстанавливаем предыдущую версию."
     if rm -rf "${SHELL_WEB_DIR}" \
       && [ -d "${rollback_dir}" ] \
-      && mv "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && cp -a "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && sync -f "${SHELL_RUNTIME_DIR}" \
       && systemctl restart "${SHELL_SERVICE}" \
       && wait_shell_ready; then
       write_state "rolling_back" "1" "Предыдущая версия TreeD UI восстановлена." "1" "rolling_back" "true"
@@ -273,7 +277,8 @@ PY
     /usr/local/sbin/treed-update-service phase rolling_back "Не удалось сохранить пакет. Восстанавливаем предыдущую версию UI."
     if rm -rf "${SHELL_WEB_DIR}" \
       && [ -d "${rollback_dir}" ] \
-      && mv "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && cp -a "${rollback_dir}" "${SHELL_WEB_DIR}" \
+      && sync -f "${SHELL_RUNTIME_DIR}" \
       && systemctl restart "${SHELL_SERVICE}" \
       && wait_shell_ready; then
       write_state "rolling_back" "1" "Предыдущая версия TreeD UI восстановлена." "1" "rolling_back" "true"
@@ -288,6 +293,7 @@ PY
       echo "treed-update: prior UI kept at ${rollback_dir}" >&2
     fi
   fi
+  sync -f "${SHELL_RUNTIME_DIR}"
 }
 
 # Блок 3: Применение выбранного release target.

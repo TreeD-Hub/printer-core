@@ -292,7 +292,10 @@ class TreeDUpdate:
             raise self.server.error("Повторите проверку и явно выберите файлы сброса.", 400)
         if cancel_paused_print and self._build_status(None)["busy"]:
             raise self.server.error("Другое обновление уже выполняется.", 409)
-        await self._ensure_apply_allowed(cancel_paused_print=cancel_paused_print)
+        resume = self._core_resume_state()
+        if not (resume and target_id == "printer-core" and target_tag == resume.get("targetTag")):
+            await self._ensure_apply_allowed(cancel_paused_print=cancel_paused_print)
+        # Recovery проверяет gate/systemd в root worker; недоступный Klipper не блокирует сам запрос.
 
         command = [*self.submit_command.split(), request_id, target_id, target_tag]
         if ui_target_tag is not None or reset_configs:
@@ -543,6 +546,14 @@ class TreeDUpdate:
             message = "Установлены актуальные версии."
         return self._status_payload(release_results, message)
 
+    def _core_resume_state(self) -> Dict[str, Any]:
+        state = self._read_state()
+        if (state.get("targetId") == "printer-core" and state.get("status") == "error"
+                and (state.get("resumeCore") or state.get("resultCode") in {
+                    "provisioning_failed", "provisioning_interrupted", "core_update_failed"})):
+            return state
+        return {}
+
     def _build_status(self, message: Optional[str]) -> Dict[str, Any]:
         # Блок 8: Status payload из локальных данных и последнего apply state.
         results = self.last_release_results or [
@@ -559,6 +570,7 @@ class TreeDUpdate:
         capability = self._core_capability()
         is_busy = state.get("busy") is True
         installed = {target.id: target.current_version for target in self._build_targets()}
+        resume = self._core_resume_state()
         for release in release_results:
             current = installed.get(release.get("id"), "unknown")
             release["currentVersion"] = current
@@ -570,6 +582,9 @@ class TreeDUpdate:
                 release.update(status="latest", message="Установлена последняя версия.")
             release["canApply"] = release.get("status") == "available" and not is_busy
             if release.get("id") == "printer-core":
+                if resume and not is_busy:
+                    release.update(status="available", latestTag=resume["targetTag"], canApply=True,
+                                   message="Продолжить прерванное обновление системы.")
                 release["capability"] = capability
                 release["canApply"] = release["canApply"] and capability.get("supported") is True
         can_apply = any(release.get("canApply") is True for release in release_results)

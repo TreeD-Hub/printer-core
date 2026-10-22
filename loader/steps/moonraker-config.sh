@@ -193,6 +193,15 @@ PY
   log_info "moonraker-config: all required TreeD components loaded"
 }
 
+install_update_file() {
+  local mode="$1" source="$2" target="$3" temporary=""
+  temporary="$(mktemp "${target}.XXXXXX")"
+  install -m "${mode}" "${source}" "${temporary}"
+  sync -f "${temporary}"
+  mv -f "${temporary}" "${target}"
+  sync -f "$(dirname "${target}")"
+}
+
 deploy_treed_update_command() {
   local apply_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
   local service_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-service"
@@ -213,14 +222,17 @@ deploy_treed_update_command() {
       exit 1
     fi
   done
-  install -m 0755 "${apply_src}" /usr/local/sbin/treed-update-apply
-  install -m 0755 "${service_src}" /usr/local/sbin/treed-update-service
-  install -m 0755 "${core_src}" /usr/local/sbin/treed-core-update
-  install -m 0755 "${loading_src}" /usr/local/sbin/treed-loading-screen
-  install -m 0755 "${ab_src}" /usr/local/sbin/treed-ab
-  install -m 0644 "${worker_unit_src}" /etc/systemd/system/treed-update.service
-  install -m 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
-  install -m 0644 "${recover_unit_src}" /etc/systemd/system/treed-update-recover.service
+  # В managed-режиме эти команды уже атомарно доставлены core-транзакцией.
+  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]; then
+    install_update_file 0755 "${apply_src}" /usr/local/sbin/treed-update-apply
+    install_update_file 0755 "${service_src}" /usr/local/sbin/treed-update-service
+    install_update_file 0755 "${core_src}" /usr/local/sbin/treed-core-update
+    install_update_file 0755 "${loading_src}" /usr/local/sbin/treed-loading-screen
+  fi
+  install_update_file 0755 "${ab_src}" /usr/local/sbin/treed-ab
+  install_update_file 0644 "${worker_unit_src}" /etc/systemd/system/treed-update.service
+  install_update_file 0644 "${path_unit_src}" /etc/systemd/system/treed-update.path
+  install_update_file 0644 "${recover_unit_src}" /etc/systemd/system/treed-update-recover.service
   install -d -m 0755 -o root -g root /var/lib/treed-update /var/log/treed-update
 
   # Блок 3.2: Устраняем только пустой каталог от прежнего MakeDirectory=yes.
@@ -478,25 +490,17 @@ render_base_fragment_templates() {
   done < <(find "${DST_BASE_DIR}" -maxdepth 1 -type f -name '*.conf' -print0 2>/dev/null)
 }
 
-deploy_base_fragments() {
-  local preserved_core=""
-  if [ "${DEPLOY_MODE}" = "preserve" ] && [ -f "${DST_BASE_DIR}/00-core.conf" ]; then
-    preserved_core="$(mktemp)"
-    cp -f "${DST_BASE_DIR}/00-core.conf" "${preserved_core}"
-  fi
-  rm -rf "${DST_BASE_DIR}"
-  ensure_dir "${DST_BASE_DIR}"
-  cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
-  render_base_fragment_templates
-  if [ -n "${preserved_core}" ]; then
-    python3 - "${preserved_core}" "${DST_BASE_DIR}/00-core.conf" <<'PY'
+merge_preserved_autoprinter_section() {
+  python3 - "$1" "$2" <<'PY'
 import re, sys
 from pathlib import Path
 
 old_path, new_path = map(Path, sys.argv[1:])
-old, new = old_path.read_text(encoding="utf-8").splitlines(), new_path.read_text(encoding="utf-8").splitlines()
+old_text, new_text = old_path.read_text(encoding="utf-8"), new_path.read_text(encoding="utf-8")
+old, new = old_text.splitlines(), new_text.splitlines()
 section = re.compile(r"^\s*\[treed_autoprinter\]\s*$", re.I)
 header = re.compile(r"^\s*\[[^]]+\]\s*$")
+legacy_keys = {"enabled", "execution_enabled", "bed_check_enabled"}
 
 def body(lines):
     for start, line in enumerate(lines):
@@ -507,17 +511,31 @@ def body(lines):
             return lines[start], lines[start + 1:end]
     return None, []
 
+def without_legacy_keys(lines):
+    result = []
+    for line in lines:
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
+        if match and match.group(1).lower() in legacy_keys:
+            continue
+        result.append(line)
+    return result
+
 old_header, old_body = body(old)
 new_header, new_body = body(new)
+original_old_body = old_body
+old_body = without_legacy_keys(old_body)
+new_body = without_legacy_keys(new_body)
+if old_text == new_text and old_body == original_old_body:
+    raise SystemExit(0)
 if old_header and new_header:
     keys = set()
     for line in old_body:
-        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
         if match:
             keys.add(match.group(1).lower())
     additions = []
     for line in new_body:
-        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*:", line)
+        match = re.match(r"^\s*([A-Za-z0-9_]+)\s*[:=]", line)
         if match and match.group(1).lower() not in keys:
             additions.append(line)
             keys.add(match.group(1).lower())
@@ -529,7 +547,44 @@ if old_header and new_header:
     new[start:end] = [new_header, *merged]
     new_path.write_text("\n".join(new) + "\n", encoding="utf-8")
 PY
+}
+
+
+deploy_base_fragments() {
+  local preserved_core=""
+  local recovery_core="${DST_BASE_DIR}.preserve-core.conf"
+  if [ "${DEPLOY_MODE}" = "clean" ]; then
+    rm -f "${recovery_core}"
+  fi
+  if [ "${DEPLOY_MODE}" = "preserve" ]; then
+    if [ -L "${recovery_core}" ] || { [ -e "${recovery_core}" ] && [ ! -f "${recovery_core}" ]; }; then
+      log_error "moonraker-config: invalid recovery file ${recovery_core}"
+      return 1
+    fi
+    if [ -f "${recovery_core}" ]; then
+      preserved_core="${recovery_core}"
+    elif [ -e "${DST_BASE_DIR}/00-core.conf" ] || [ -L "${DST_BASE_DIR}/00-core.conf" ]; then
+      if [ -L "${DST_BASE_DIR}/00-core.conf" ] || [ ! -f "${DST_BASE_DIR}/00-core.conf" ]; then
+        log_error "moonraker-config: refusing non-regular core config"
+        return 1
+      fi
+      preserved_core="$(mktemp "${recovery_core}.XXXXXX")"
+      cp -p "${DST_BASE_DIR}/00-core.conf" "${preserved_core}"
+      sync -f "${preserved_core}"
+      mv "${preserved_core}" "${recovery_core}"
+      preserved_core="${recovery_core}"
+      sync -f "$(dirname "${recovery_core}")"
+    fi
+  fi
+  rm -rf "${DST_BASE_DIR}"
+  ensure_dir "${DST_BASE_DIR}"
+  cp -a "${SRC_BASE_DIR}/." "${DST_BASE_DIR}/"
+  render_base_fragment_templates
+  if [ -n "${preserved_core}" ]; then
+    merge_preserved_autoprinter_section "${preserved_core}" "${DST_BASE_DIR}/00-core.conf"
+    sync -f "${DST_BASE_DIR}"
     rm -f "${preserved_core}"
+    sync -f "$(dirname "${preserved_core}")"
   fi
   configure_mainsail_updater_section
   configure_crowsnest_updater_section
@@ -569,6 +624,7 @@ EOF
 
 # Блок 4: Основной сценарий деплоя moonraker-конфига и компонентов.
 if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+  # Файлы и контрольные суммы уже подготовил вызывающий updater, в том числе старой версии.
   ensure_moonraker_allowed_service "treed-shell"
   deploy_treed_update_command
   restart_and_verify_moonraker_components

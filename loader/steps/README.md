@@ -31,9 +31,9 @@
 | 19 | `crowsnest-webcam.sh` | optional | Настройка камеры/crowsnest/webcam-фрагмента. |
 | 20 | `treed-cam.sh` | required | Runtime-скрипты камеры TreeD. |
 | 21 | `klipper-mainsail-theme.sh` | required | Деплой темы Mainsail. |
-| 22 | `klipperscreen-install.sh` | required | Managed-установка/проверка KlipperScreen. |
-| 23 | `klipperscreen-theme.sh` | required | Деплой темы/шрифта KlipperScreen. |
-| 24 | `klipperscreen-integr.sh` | required | Systemd override KlipperScreen. |
+| 22 | `klipperscreen-install.sh` | required при `ks` | Managed-установка/проверка KlipperScreen. |
+| 23 | `klipperscreen-theme.sh` | required при `ks` | Деплой темы/шрифта KlipperScreen. |
+| 24 | `klipperscreen-integr.sh` | required при `ks` | Systemd override KlipperScreen. |
 | 25 | `treed-shell-install.sh` | required | Деплой TreeD Shell из `treed-shell-ui.zip` и команды переключения TS/KS. |
 | 26 | `maintenance-start.sh` | required | Запуск required/best-effort сервисов. |
 | 27 | `verify.sh` | required | Финальная валидация V2-контура (boot/service/http/CAN/camera), без проверки runtime-конфигов. |
@@ -167,7 +167,6 @@ Standalone `apply` использует `runtime-scripts/treed-update/treed-load
 - `TREED_KLIPPERSCREEN_ENV` (default `${PI_HOME}/.KlipperScreen-env`)
 - `TREED_KS_THEME` (`treed-oled|...|keep`, default `treed-oled`)
 - `TREED_KS_LANGUAGE` (`ru|...|keep`, default `ru`)
-- `TREED_KLIPPERSCREEN_REQUIRED` (`0|1`, default `1`; оставлен для совместимости, активный UI проверяется через `TREED_UI_MODE`)
 
 ### TreeD Shell / UI switch
 
@@ -187,6 +186,8 @@ Standalone `apply` использует `runtime-scripts/treed-update/treed-load
 - `TREED_SHELL_WINDOW_POSITION` (default `0,0`)
 - `TREED_SHELL_DEVICE_SCALE_FACTOR` (default `1`)
 - `TREED_SHELL_START_TIMEOUT` (default `45`)
+
+При `TREED_UI_MODE=ts` три шага KlipperScreen пропускаются, а verify не требует его checkout. TreeD Shell самостоятельно устанавливает X11 runtime-пакеты и задаёт `allowed_users=anybody` и `needs_root_rights=yes` в `/etc/X11/Xwrapper.config`, сохраняя остальные настройки. При `ks` установка, интеграция и проверка KlipperScreen остаются обязательными.
 
 `treed-shell-install.sh`:
 - скачивает release asset `treed-shell-ui.zip`;
@@ -250,6 +251,7 @@ treed-ui status
   - `clean`: `KlipperScreen.conf` без `.bak`.
   - `preserve`: `backup_file_once` перед изменением.
 - `treed-shell-install.sh`
+  - устанавливает X11-пакеты, нужные TreeD Shell, и настраивает два параметра Xwrapper для systemd-сервиса без консольной TTY;
   - release asset берется из `${TREED_SHELL_UI_ARCHIVE_URL}` или из GitHub Releases API `${TREED_SHELL_RELEASE_API_URL}`;
   - распакованный UI находится в `${TREED_SHELL_WEB_DIR:-${TREED_SHELL_RUNTIME_DIR}/ui}`;
   - kiosk launcher находится в `${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}/start-treed-shell-kiosk.sh`;

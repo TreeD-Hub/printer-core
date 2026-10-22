@@ -21,7 +21,7 @@
   height stamp после restart, подача/cleanup и сохранение rotation_distance.
   Запуск `python -B tools/tests/test_treed_calibration.py`; без Klipper и устройства.
 
-- `test_driver_modes.py` — офлайн-модель допуска XYZ, частичных SPI-отказов и отката, сохранения, профилей обдува и доставки. Запуск `python -B tools/tests/test_driver_modes.py`; аппаратную приёмку не заменяет.
+- `test_driver_modes.py` — офлайн-модель допуска XYZ, частичных SPI-отказов и отката, сохранения, профилей обдува и доставки; проверяет возврат обычных лимитов после тихого homing, включая ошибку. Запуск `python -B tools/tests/test_driver_modes.py`; аппаратную приёмку не заменяет.
 
 - `test_loader_progress.py` — настоящий apply-цикл на временных шагах: TTY-шкала/спиннер, сохранение логов, счётчики, required fail-fast/exit status, optional skip/failure и режим `off`. Запуск на Linux/WSL: `python3 -B tools/tests/test_loader_progress.py`; без установки пакетов, сервисов или подключения к устройству.
 
@@ -45,6 +45,8 @@
 - `test_sgt_calibration.py` / `test_sgt_executor.py` — поиск SGT, модель Klipper, восстановление и отказы; [контракт и запуск](../../docs/sgt-calibration.md).
 - `test_loader_contracts.ps1` — PowerShell-проверка ключевых контрактов bootstrap/runtime/verify.
 - `test_managed_loader.py` — адресные shell-проверки управляемого перехода updater к loader: реестр шагов, сохранение пользовательской конфигурации и отсутствие конкурирующего baseline. Запуск `python3 -B tools/tests/test_managed_loader.py`; требуется Bash, runtime-службы не запускаются.
+- `test_klipper_preserve.py` — сохранение локальных настроек и SAVE_CONFIG, отказ до очистки при ошибке снимка, сохранность копии при ошибке восстановления. Запуск `python -B tools/tests/test_klipper_preserve.py`; требуется Bash, работа идёт во временных каталогах без устройства.
+- `test_update_admission.py` — допуск обновления в реальных Jinja-макросах и запрет новых запусков печати при занятом допуске. Запуск `python -B tools/tests/test_update_admission.py` в окружении с Jinja2; без устройства.
 - `test_treed_loading_screen.py` — показ существующей темы TreeD, владение Plymouth и восстановление интерфейса после ошибки; системные команды заменяются заглушками. Запуск `python3 -B tools/tests/test_treed_loading_screen.py`.
 - `test_can_txqueue_contracts.ps1` / `test_can_txqueue_runtime.sh` — default `128` и повторное применение qlen к существующему `can0`.
 - `test_klipper_eddy_contracts.ps1` — PowerShell-проверка Eddy Z-home, штатной парковки и единственного START_PRINT-сценария.
@@ -57,7 +59,7 @@
 - `test_loader_optimizations.ps1` — runnable-проверка кэша APT-индекса и очистки webcam-конфигов на временных fixtures.
 - `test_treed_update_service.py` — request idempotency, busy lock, durable state, UI recovery и dispatch/recovery core worker. Запуск `python -B tools/tests/test_treed_update_service.py`; без systemd и устройства.
 - `test_treed_update_component.py` — быстрый POST, локальный polling, runtime manifest/capability и отказ для source-only release. Запуск `python -B tools/tests/test_treed_update_component.py`; без сети и устройства.
-- `test_treed_core_update.py` — пакет, checksum/allowlist, полнота AutoPrinter и загрузка доставленных модулей без ML, сохранение приватных данных, полный rollback и journal recovery после частичной установки. Проверяет readiness по manifest и отказ при failed-компоненте. Запуск `python -B tools/tests/test_treed_core_update.py`; services/network изолированы, symlink и Linux dir_fd требуют соответствующих возможностей среды.
+- `test_treed_core_update.py` — пакет, checksum/allowlist, полнота AutoPrinter и загрузка доставленных модулей без ML, сохранение приватных данных, полный rollback и journal recovery после частичной установки. Проверяет подтверждённый допуск до воздействия на сервисы, readiness по manifest и отказ при failed-компоненте. Запуск `python -B tools/tests/test_treed_core_update.py`; services/network изолированы, symlink и Linux dir_fd требуют соответствующих возможностей среды.
 - `check_moonraker_startup.py` — запуск конфигов и модулей из runtime ZIP на настоящем Moonraker из `runtime-versions.env`. Проверяет все обязательные loader-компоненты, стабильную readiness, API, совместимость старого конфига без `vision_socket` и отказ при отсутствующем `frames_root`. Требует Linux, отдельный checkout закреплённого Moonraker и его Python-зависимости; Klippy заменён локальным имитатором, оборудование и systemd не используются. Команда: `python -B tools/tests/check_moonraker_startup.py --moonraker-source /tmp/moonraker --archive /tmp/treed-core-runtime.zip`. Проверка обязательна в обоих CI workflows после полного offline-набора; в `run_offline.py` не входит, поскольку требует upstream runtime.
 - `test_runtime_repo_sync.sh` — runnable-проверка exact Git sync, восстановления detached/shallow/wrong-origin checkout и сохранения dirty данных.
 - `test_mainsail_bundle_offline.sh` — runnable offline deployment bundled Mainsail без обращения к GitHub.

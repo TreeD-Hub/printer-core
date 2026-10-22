@@ -85,6 +85,7 @@ class LightEventTests(unittest.TestCase):
             ("preparing", "paused", 1, 0, False), ("auto_remove", "complete", 0, 0, False),
         ]:
             printer = {"gcode_macro _TREED_OPERATION_STATE": {"phase": phase},
+                "gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": 0},
                 "print_stats": {"state": print_state}, "pause_resume": {"is_paused": paused},
                 "gcode_macro _TREED_CLOG_RECOVERY_STATE": {"active": clog}}
             with self.subTest(phase=phase, clog=clog):

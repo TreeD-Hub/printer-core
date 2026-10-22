@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 PATH = ROOT / "runtime-scripts/treed-update/treed-core-update"
 core = types.ModuleType("treed_core_update")
 exec(compile(PATH.read_text(encoding="utf-8"), str(PATH), "exec"), core.__dict__)
+core_update_admission = core.update_admission
+core_services_inactive = core.services_inactive
 OPERATION = "11111111-1111-4111-8111-111111111111"
 
 
@@ -64,6 +66,8 @@ class CoreUpdateTests(unittest.TestCase):
         self.compatibility = self.stack.enter_context(patch.object(core, "check_compatibility"))
         self.phase = self.stack.enter_context(patch.object(core, "phase"))
         self.services = self.stack.enter_context(patch.object(core, "services"))
+        self.services_inactive = self.stack.enter_context(patch.object(core, "services_inactive", return_value=True))
+        self.admission = self.stack.enter_context(patch.object(core, "update_admission"))
         self.stack.enter_context(patch.object(core, "idle", return_value=True))
         self.stop_heating = self.stack.enter_context(patch.object(core, "stop_heating"))
         self.wait = self.stack.enter_context(patch.object(core, "wait_ready", return_value=True))
@@ -215,6 +219,57 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual((self.locations["config"] / "printer.cfg").read_bytes(),
                          self.old["config/printer.cfg"])
 
+    def interrupted_provisioning(self):
+        journal, transaction = self.prepared_install_transaction()
+        source = journal.parent / "source"
+        files = {"VERSION": "0.2.0\n", "loader/loader.sh": "#!/bin/bash\nexit 0\n",
+                 "runtime-versions.env": 'TREED_KLIPPER_REF="' + "a" * 40 + '"\nTREED_MOONRAKER_REF="' + "b" * 40 + '"\n',
+                 "runtime-scripts/treed-vision/models.json": "{}\n"}
+        with zipfile.ZipFile(journal.parent / core.SOURCE_ASSET, "w") as archive:
+            for name, content in files.items():
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8", newline="\n")
+                archive.writestr(name, content)
+        expected = core.read_json(journal.parent / "manifest.new.json")
+        expected.update(requires={"klipper": "a" * 40, "moonraker": "b" * 40},
+                        provisioning={"schema": 1, "revision": core.provisioning_revision(source)})
+        core.write_json(journal.parent / "manifest.new.json", expected)
+        transaction.update(stage="provisioning_failed", provisioningStarted=True)
+        core.write_json(journal, transaction)
+        return journal, source
+
+    def test_provisioning_retry_preserves_data_and_allows_next_update(self):
+        private = self.seed_autoprinter_update()
+        journal, source = self.interrupted_provisioning()
+        with patch.object(core, "run_managed_loader", side_effect=[1, 0]) as loader:
+            self.assertEqual("provisioning_failed", core.recover(self.env, OPERATION)["resultCode"])
+            self.assertEqual("0.1.0", core.read_json(core.manifest_path(self.env))["version"])
+            self.assertEqual("applied", core.recover(self.env, OPERATION)["status"])
+            self.assertEqual(loader.call_args.args[0], source)
+            self.assertEqual(loader.call_args.args[1]["TREED_UPDATE_OPERATION_ID"], OPERATION)
+        self.assertEqual("committed", core.read_json(journal)["stage"])
+        for path, data in private.items():
+            self.assertEqual(data, path.read_bytes())
+        self.manifest.update(version="0.3.0", tag="v0.3.0")
+        self.assertEqual("applied", core.apply("v0.3.0", "22222222-2222-4222-8222-222222222222", self.env)["status"])
+
+    def test_recovery_rejects_damaged_source_before_stopping_services(self):
+        _, source = self.interrupted_provisioning()
+        (source / "loader/loader.sh").write_text("broken", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Recovery source"):
+            core.recover(self.env, OPERATION)
+        self.services.assert_not_called()
+
+    def test_provisioning_recovery_does_not_commit_without_readiness(self):
+        journal, _ = self.interrupted_provisioning()
+        self.wait.return_value = False
+        with patch.object(core, "run_managed_loader", return_value=0), \
+                self.assertRaisesRegex(RuntimeError, "readiness"):
+            core.recover(self.env, OPERATION)
+        self.assertEqual("0.1.0", core.read_json(core.manifest_path(self.env))["version"])
+        self.assertNotEqual("committed", core.read_json(journal)["stage"])
+
     def test_committed_managed_provisioning_recovers_only_when_ready(self):
         journal = core.journal_path(self.env, OPERATION)
         journal.parent.mkdir(parents=True)
@@ -335,8 +390,190 @@ class CoreUpdateTests(unittest.TestCase):
         self.stop_heating.side_effect = ValueError("heater still active")
         with self.assertRaisesRegex(ValueError, "heater still active"):
             self.apply()
+        self.assertEqual(self.admission.call_args_list, [call("BEGIN"), call("END")])
         self.services.assert_not_called()
         self.assert_restored()
+
+    def test_update_gate_precedes_heater_shutdown_and_service_stop(self):
+        events = []
+        self.admission.side_effect = lambda action: events.append(action)
+        self.stop_heating.side_effect = lambda: events.append("heaters")
+        self.services.side_effect = lambda action: events.append(action)
+
+        self.assertEqual(self.apply()["status"], "applied")
+        self.assertEqual(events[:3], ["BEGIN", "heaters", "stop"])
+        self.assertEqual(events[-1], "start")
+
+    def test_pre_gate_updater_installs_gate_and_next_update_uses_it(self):
+        # Закреплённая версия до admission: переход выполняет старый процесс.
+        self.assert_upgrade_from("0f7d77108cf57730e2bc0cfffc6d52e4fd9c654d", has_gate=False)
+
+    def test_previous_updater_installs_new_package_and_can_update_again(self):
+        self.assert_upgrade_from("4c3e11d864084f810001137b4d98cc97825167c9", has_gate=True)
+
+    def assert_upgrade_from(self, revision, has_gate):
+        # CI работает без root; проверяем запрос владельца, сохраняя реальные записи/fsync/rename.
+        chown = self.stack.enter_context(patch.object(core.os, "fchown", create=True))
+        try:
+            source = subprocess.check_output([
+                "git", "-C", str(ROOT), "show",
+                f"{revision}:runtime-scripts/treed-update/treed-core-update"],
+                stderr=subprocess.PIPE, timeout=10)
+        except subprocess.CalledProcessError:
+            self.skipTest("Для upgrade-проверки нужна история Git с " + revision)
+        legacy = types.ModuleType("pre_gate_updater")
+        exec(compile(source, "pre_gate_updater", "exec"), legacy.__dict__)
+        self.assertEqual(has_gate, hasattr(legacy, "update_admission"))
+        if has_gate:
+            self.stack.enter_context(patch.object(legacy, "update_admission", self.admission))
+            self.stack.enter_context(patch.object(legacy, "services_inactive", self.services_inactive))
+        gate_key = "config/profiles/treed_v2_corexy_v1/macros_core.cfg"
+        self.payload[gate_key] = core.sources(ROOT)[gate_key].read_bytes()
+        self.payload["sbin/treed-core-update"] = PATH.read_bytes()
+        account_key = "config/moonraker/base/00-core.conf"
+        account = b"[treed_autoprinter]\ncredentials_path: /private/device.json\nenabled: true\n"
+        path = core.destination(account_key, self.locations)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(account)
+        self.previous["files"].append({"path": account_key, "runtimeSha256": core.content_hash(account_key, account)})
+        core.write_json(core.manifest_path(self.env), self.previous)
+        self.payload[account_key] = b"[treed_autoprinter]\ncredentials_path:\n"
+        # Подменяются только границы окружения; install/journal/restore настоящие.
+        for name in ("roots", "download", "load_package", "vision_units_installed",
+                     "check_compatibility", "phase", "services", "idle",
+                     "stop_heating", "wait_ready", "owner"):
+            self.stack.enter_context(patch.object(legacy, name, getattr(core, name)))
+
+        def service(action):
+            if action == "start":
+                for key in (gate_key, "sbin/treed-core-update"):
+                    self.assertEqual(core.destination(key, self.locations).read_bytes(),
+                                     self.payload[key])
+        self.services.side_effect = service
+        self.assertEqual(legacy.apply("v0.2.0", OPERATION, self.env)["status"], "applied")
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
+        chown.reset_mock()
+        if has_gate:
+            self.admission.assert_called_once_with("BEGIN")
+        else:
+            self.admission.assert_not_called()
+        self.admission.reset_mock()
+        self.services.assert_has_calls([call("stop"), call("start")])
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.2.0")
+        self.assertIn(b"enabled: true", path.read_bytes())
+
+        self.services.reset_mock()
+        self.manifest.update(version="0.3.0", tag="v0.3.0")
+        result = core.apply("v0.3.0", "22222222-2222-4222-8222-222222222222", self.env)
+        self.assertEqual(result["status"], "applied")
+        self.admission.assert_called_once_with("BEGIN")
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
+        self.services.assert_has_calls([call("stop"), call("start")])
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.3.0")
+        self.assertNotIn(b"enabled", path.read_bytes())
+        self.assertIn(b"credentials_path: /private/device.json", path.read_bytes())
+
+    def test_admission_sends_the_private_begin_and_end_gcode(self):
+        with patch.object(core, "request_json") as request:
+            request.side_effect = [None,
+                {"status": {"gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": 1}}},
+                None,
+                {"status": {"gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": 0}}},
+            ]
+            core_update_admission("BEGIN")
+            core_update_admission("END")
+        self.assertEqual(request.call_args_list, [
+            call("/printer/gcode/script", {"script": "_TREED_UPDATE_GATE ACTION=BEGIN"}),
+            call("/printer/objects/query?gcode_macro%20_TREED_UPDATE_ADMISSION_STATE"),
+            call("/printer/gcode/script", {"script": "_TREED_UPDATE_GATE ACTION=END"}),
+            call("/printer/objects/query?gcode_macro%20_TREED_UPDATE_ADMISSION_STATE"),
+        ])
+
+    def test_unknown_command_ack_without_gate_status_fails_closed(self):
+        with patch.object(core, "request_json", side_effect=[
+                "ok", {"status": {}}]) as request:
+            with self.assertRaisesRegex(RuntimeError, "не подтвердил состояние admission gate"):
+                core_update_admission("BEGIN")
+        self.assertEqual(request.call_count, 2)
+
+    def test_admission_rejects_a_status_value_that_does_not_match_the_action(self):
+        cases = [("BEGIN", 0), ("END", 1), ("BEGIN", "1")]
+        for action, active in cases:
+            with self.subTest(action=action, active=active), \
+                 patch.object(core, "request_json", side_effect=[None, {
+                     "status": {"gcode_macro _TREED_UPDATE_ADMISSION_STATE": {"active": active}}
+                 }]):
+                with self.assertRaisesRegex(RuntimeError, "не подтвердил состояние admission gate"):
+                    core_update_admission(action)
+
+    def test_missing_update_gate_fails_before_heaters_or_service_stop(self):
+        self.admission.side_effect = RuntimeError("unknown command _TREED_UPDATE_GATE")
+        with self.assertRaisesRegex(RuntimeError, "unknown command"):
+            self.apply()
+        self.stop_heating.assert_not_called()
+        self.services.assert_not_called()
+
+    def test_validated_recovery_releases_gate_after_services_are_ready(self):
+        events = []
+        self.admission.side_effect = lambda action: events.append(action)
+        self.phase.side_effect = lambda name, _message: (_ for _ in ()).throw(RuntimeError("phase failed")) \
+            if name == "installing" else None
+        result = self.apply()
+        self.assertEqual(result["resultCode"], "core_not_installed")
+        self.assertEqual(events, ["BEGIN", "END"])
+        self.services.assert_called_once_with("start")
+
+    def test_validated_recovery_does_not_report_completion_when_gate_release_fails(self):
+        self.phase.side_effect = lambda name, _message: (_ for _ in ()).throw(RuntimeError("phase failed")) \
+            if name == "installing" else None
+        self.admission.side_effect = [None, RuntimeError("Klipper response lost")]
+        with self.assertRaisesRegex(RuntimeError, "не смогла снять admission gate"):
+            self.apply()
+        self.services.assert_called_once_with("start")
+        self.assertEqual(core.read_json(core.journal_path(self.env, OPERATION))["stage"], "validated")
+
+    def prepared_install_transaction(self):
+        journal = core.journal_path(self.env, OPERATION)
+        core.prepare(self.manifest, self.payload, self.env, journal)
+        transaction = core.read_json(journal)
+        transaction["stage"] = "installing"
+        core.write_json(journal, transaction)
+        for key, data in self.payload.items():
+            core.destination(key, self.locations).write_bytes(data)
+        return journal, transaction
+
+    def test_rollback_refuses_to_stop_running_services_without_gate(self):
+        journal, transaction = self.prepared_install_transaction()
+        self.admission.side_effect = RuntimeError("Klipper unavailable")
+        self.services_inactive.return_value = False
+        with self.assertRaisesRegex(RuntimeError, "не подтверждён как остановленный"):
+            core.rollback(self.env, journal, transaction)
+        self.services.assert_not_called()
+        self.assertEqual(core.destination("klipper/treed_driver_mode.py", self.locations).read_bytes(),
+                         self.payload["klipper/treed_driver_mode.py"])
+
+    def test_rollback_can_recover_offline_when_systemd_confirms_both_services_stopped(self):
+        journal, transaction = self.prepared_install_transaction()
+        self.admission.side_effect = RuntimeError("Klipper unavailable")
+        self.assertEqual(core.rollback(self.env, journal, transaction)["status"], "rolled_back")
+        self.services.assert_has_calls([call("stop"), call("start")])
+        self.assert_restored()
+
+    def test_rollback_does_not_restore_files_if_service_stop_is_unconfirmed(self):
+        journal, transaction = self.prepared_install_transaction()
+        self.services_inactive.side_effect = [False]
+        with self.assertRaisesRegex(RuntimeError, "не подтвердил остановку"):
+            core.rollback(self.env, journal, transaction)
+        self.services.assert_called_once_with("stop")
+        self.assertEqual(core.destination("klipper/treed_driver_mode.py", self.locations).read_bytes(),
+                         self.payload["klipper/treed_driver_mode.py"])
+
+    def test_systemd_unknown_state_is_not_treated_as_offline(self):
+        unknown = subprocess.CompletedProcess([], 0, stdout="deactivating\n", stderr="")
+        with patch.object(core.subprocess, "run", return_value=unknown):
+            self.assertFalse(core_services_inactive())
 
     # Блок 2: Успех и сохранность принадлежащего принтеру состояния.
     def test_selected_config_reset_uses_package_and_retains_manual_backup(self):
@@ -621,6 +858,17 @@ class CoreUpdateTests(unittest.TestCase):
 
 
 class ManagedLoaderProcessTests(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Real Bash process fixture runs on Linux")
+    def test_repeated_loader_process_appends_to_existing_operation_log(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp)
+            (source / "loader").mkdir()
+            (source / "loader/loader.sh").write_text("printf 'step completed\\n'\n", encoding="utf-8")
+            log = source / "loader.log"
+            for _ in range(2):
+                self.assertEqual(0, core.run_managed_loader(source, dict(os.environ), log, timeout=5))
+            self.assertEqual(b"step completed\nstep completed\n", log.read_bytes())
+
     def test_timeout_terminates_process_group_and_keeps_durable_log(self):
         class Process:
             pid = 4123
@@ -710,6 +958,7 @@ class Server:
     def register_event_handler(self, *args): pass
 class Config:
     def get_server(self): return Server()
+    def get(self, key, default=None): return default
 instance = component.load_component(Config())
 assert instance._store is None and instance._task is None
 print("DELIVERED_IMPORT_OK")
@@ -859,6 +1108,7 @@ print("DELIVERED_IMPORT_OK")
     def test_render_preserves_local_autoprinter_identity_and_adds_new_defaults(self):
         key = "config/moonraker/base/00-core.conf"
         old = ("[treed_autoprinter]\nprinter_id: local-id\napi_origin: https://local.example\n"
+               "enabled=true\nexecution_enabled: false\nbed_check_enabled = false\n"
                "credentials_path: /private/credentials.json\nstorage_path: /private/state.sqlite3\n").encode()
         new = ("[treed_autoprinter]\nprinter_id: new-default\napi_origin: https://default.example\n"
                "credentials_path: /new/default.json\nstorage_path: /new/state.sqlite3\n"
@@ -871,6 +1121,11 @@ print("DELIVERED_IMPORT_OK")
         self.assertIn("storage_path: /private/state.sqlite3", result)
         self.assertIn("bed_check_socket: /home/radxa/treed/vision/run/vision.sock", result)
         self.assertNotIn("printer_id: new-default", result)
+        self.assertNotIn("enabled", result)
+        equals = core.render(key, new, old.replace(b"credentials_path:", b"credentials_path ="), {
+            "TREED_UPDATE_PI_HOME": "/home/radxa", "TREED_UPDATE_PI_USER": "radxa"}).decode()
+        self.assertEqual(1, equals.count("credentials_path"))
+        self.assertIn("credentials_path = /private/credentials.json", equals)
 
     def test_compatibility_checks_both_pinned_upstreams_and_tracked_edits(self):
         manifest = {"requires": {"klipper": "a" * 40, "moonraker": "b" * 40}}

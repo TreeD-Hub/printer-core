@@ -63,6 +63,24 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
         config = NS(get_server=lambda: self.server, get=lambda key, default=None: values.get(key, default))
         self.component = module.TreeDUpdate(config)
 
+    async def test_interrupted_core_is_retryable_offline_and_uses_saved_tag(self):
+        state = {"targetId": "printer-core", "targetTag": "v0.2.0", "status": "error",
+                 "resultCode": "provisioning_failed", "busy": False}
+        self.api.query_objects.side_effect = RuntimeError("Klipper offline")
+        process = NS(returncode=0, communicate=AsyncMock(return_value=(b'{"status":"queued"}', b"")))
+        with patch.object(self.component, "_read_state", return_value=state), \
+                patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+                patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)):
+            status = self.component._status_payload([
+                {"id": "printer-core", "status": "available", "latestTag": "v0.3.0"}], None)
+            self.assertEqual("v0.2.0", status["releaseResults"][0]["latestTag"])
+            self.assertTrue(status["canApply"])
+            result = await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.2.0"))
+            self.assertTrue(result["busy"])
+            with self.assertRaises(ApiError):
+                await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.3.0"))
+        self.api.run_gcode.assert_not_awaited()
+
     async def test_cancelled_job_is_allowed_despite_stale_pause_flags(self):
         self.api.query_objects.return_value = {
             "print_stats": {"state": " CANCELLED "},
