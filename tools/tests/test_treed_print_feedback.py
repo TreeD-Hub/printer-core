@@ -59,6 +59,7 @@ class FeedbackTests(unittest.IsolatedAsyncioTestCase):
         )
         values = {"frames_root": str(self.frames), "session_file": str(self.marker)}
         config = NS(get_server=lambda: server, get=lambda key, default=None: values.get(key, default))
+        self.config = config
         self.component = feedback.load_component(config)
 
     def create_session(self, session_id, filename, closed=True, token=None):
@@ -96,10 +97,116 @@ class FeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.get(), expected)
         expected["rating"] = "good"
         self.assertEqual(await self.post(), expected)
+        original = self.session
+        self.session = self.frames / "successful" / original.name
+        self.assertFalse(original.exists())
         self.assertEqual(json.loads((self.session / "rating.json").read_text(encoding="utf-8")), expected)
         self.assertEqual(await self.get(), expected)
         self.assertEqual((self.session / "img_start.jpg").read_bytes(), b"original JPEG bytes")
         self.assertEqual((await self.post(rating="bad"))["rating"], "bad")
+        failed = self.frames / "failed" / self.session.name
+        self.assertFalse(self.session.exists())
+        self.assertEqual((failed / "img_start.jpg").read_bytes(), b"original JPEG bytes")
+        self.assertEqual((await self.get())["rating"], "bad")
+        self.assertEqual((await self.post(rating="bad"))["rating"], "bad")
+
+    async def test_bad_first_and_rating_changes_move_one_complete_folder(self):
+        original = self.session
+        (original / "notes.json").write_text('{"frame": "img_start.jpg"}', encoding="utf-8")
+        await self.post(rating="bad")
+        failed = self.frames / "failed" / original.name
+        self.assertFalse(original.exists())
+        session_bytes = (failed / "session.json").read_bytes()
+        await self.post(rating="good")
+        successful = self.frames / "successful" / original.name
+        self.assertFalse(failed.exists())
+        self.assertEqual((successful / "session.json").read_bytes(), session_bytes)
+        self.assertEqual((successful / "notes.json").read_text(), '{"frame": "img_start.jpg"}')
+        self.assertEqual((successful / "img_start.jpg").read_bytes(), b"original JPEG bytes")
+        self.assertEqual((await self.get())["rating"], "good")
+
+    async def test_failed_move_is_recovered_after_component_restart(self):
+        with patch.object(feedback.Path, "rename", side_effect=OSError("disk failure")):
+            await self.assert_error(self.post(), 409)
+        self.assertTrue(self.session.is_dir())
+        self.assertEqual((self.session / "img_start.jpg").read_bytes(), b"original JPEG bytes")
+        self.assertEqual(json.loads((self.session / "rating.json").read_text())["rating"], "good")
+        self.component = feedback.load_component(self.config)
+        self.assertEqual((await self.get())["rating"], "good")
+        self.assertFalse(self.session.exists())
+        self.assertTrue((self.frames / "successful" / self.session.name / "img_start.jpg").is_file())
+        await self.post()
+
+    async def test_failed_reclassification_can_be_retried_or_changed(self):
+        await self.post()
+        successful = self.frames / "successful" / self.session.name
+        with patch.object(feedback.Path, "rename", side_effect=OSError("disk failure")):
+            await self.assert_error(self.post(rating="bad"), 409)
+        self.assertTrue(successful.is_dir())
+        self.assertEqual((await self.post())["rating"], "good")
+        self.assertTrue(successful.is_dir())
+        await self.post(rating="bad")
+        self.assertFalse(successful.exists())
+        self.assertEqual((await self.get())["rating"], "bad")
+
+    async def test_failed_final_move_does_not_mix_opposite_labels(self):
+        await self.post()
+        original_rename = feedback.Path.rename
+
+        def fail_classification(source, target):
+            if target.parent == self.frames:
+                return original_rename(source, target)
+            raise OSError("disk failure")
+
+        with patch.object(feedback.Path, "rename", autospec=True, side_effect=fail_classification):
+            await self.assert_error(self.post(rating="bad"), 409)
+        self.assertFalse((self.frames / "successful" / self.session.name).exists())
+        self.assertFalse((self.frames / "failed" / self.session.name).exists())
+        self.assertTrue(self.session.is_dir())
+        self.assertEqual(json.loads((self.session / "rating.json").read_text())["rating"], "bad")
+        self.assertEqual((await self.get())["rating"], "bad")
+        self.assertFalse(self.session.exists())
+        self.assertTrue((self.frames / "failed" / self.session.name / "img_start.jpg").is_file())
+
+    async def test_destination_collision_preserves_both_directories(self):
+        parent = self.frames / "successful"
+        parent.mkdir()
+        target = parent / self.session.name
+        target.mkdir()
+        (target / "keep.txt").write_text("untouched")
+        await self.assert_error(self.post(), 409)
+        self.assertEqual((target / "keep.txt").read_text(), "untouched")
+        self.assertEqual((self.session / "img_start.jpg").read_bytes(), b"original JPEG bytes")
+        self.assertFalse((self.session / "rating.json").exists())
+
+    async def test_legacy_rating_is_classified_on_reopen(self):
+        metadata.write_json(self.session / "rating.json", {
+            "sessionId": self.session.name, "filename": self.filename, "rating": "bad",
+        })
+        self.assertEqual((await self.get())["rating"], "bad")
+        self.assertFalse(self.session.exists())
+        self.assertTrue((self.frames / "failed" / self.session.name / "img_start.jpg").is_file())
+
+    async def test_unrated_and_still_owned_sessions_are_not_moved(self):
+        self.assertIsNone((await self.get())["rating"])
+        self.assertTrue(self.session.is_dir())
+        self.assertFalse((self.frames / "successful").exists())
+        self.marker.write_text(str(self.session), encoding="utf-8")
+        await self.assert_error(self.post(), 409)
+        self.assertTrue(self.session.is_dir())
+        self.marker.unlink()
+        await self.post()
+
+    async def test_classification_rejects_symlinked_bucket(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        try:
+            (self.frames / "successful").symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"Создание ссылок недоступно: {error}")
+        await self.assert_error(self.post(), 409)
+        self.assertTrue(self.session.is_dir())
+        self.assertEqual(list(outside.iterdir()), [])
 
     async def test_selected_old_session_can_be_saved_after_new_print_starts(self):
         selected = await self.get()
@@ -173,11 +280,15 @@ class FeedbackTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_atomic_failure_preserves_prior_rating(self):
         await self.post()
+        self.session = self.frames / "successful" / self.session.name
         prior = (self.session / "rating.json").read_bytes()
         with patch.object(feedback.os, "replace", side_effect=OSError("disk failure")):
             await self.assert_error(self.post(rating="bad"), 409)
+        self.assertFalse(self.session.exists())
+        self.session = self.frames / self.session.name
         self.assertEqual((self.session / "rating.json").read_bytes(), prior)
         self.assertEqual(list(self.session.glob(".rating-*")), [])
+        self.assertEqual((await self.get())["rating"], "good")
 
     async def test_corrupt_saved_rating_is_visible(self):
         (self.session / "rating.json").write_text('{"rating": "bad"}')

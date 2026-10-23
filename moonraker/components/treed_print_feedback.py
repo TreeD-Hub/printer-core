@@ -1,6 +1,6 @@
 """Оценка закрытой сессии кадров TreeD; контур required API.
 
-GET связывает завершённое задание с сессией, POST сохраняет выбранный ID.
+GET связывает завершённое задание с сессией, POST сохраняет оценку и сортирует её папку.
 Компонент не запускает печать и не преобразует кадры.
 """
 
@@ -15,6 +15,7 @@ import stat
 import tempfile
 
 MAX_JSON_BYTES = 32768
+RATING_FOLDERS = {"good": "successful", "bad": "failed"}
 RUNTIME_OBJECTS = {
     "print_stats": ["state", "filename"],
     "gcode_macro _TREED_CAM_STATE": ["enabled", "session_token"],
@@ -74,11 +75,21 @@ class TreeDPrintFeedback:
         )
 
     def _session(self, session_id: str, filename: str, token: int | None = None) -> Path:
-        directory = self.frames_root / _validate_session_id(session_id)
-        if (self.frames_root.is_symlink() or directory.is_symlink()
-                or not directory.is_dir()
-                or directory.resolve().parent != self.frames_root.resolve()):
-            raise ValueError("Сессия должна быть прямым каталогом внутри prints без ссылок")
+        session_id = _validate_session_id(session_id)
+        directories = []
+        for parent in (self.frames_root, *(self.frames_root / name for name in RATING_FOLDERS.values())):
+            if (parent.is_symlink() or (parent.exists() and not parent.is_dir())
+                    or self.frames_root.is_symlink()):
+                raise ValueError("Каталог кадров или раздел оценки недоступен либо является ссылкой")
+            candidate = parent / session_id
+            if candidate.exists() or candidate.is_symlink():
+                if (candidate.is_symlink() or not candidate.is_dir()
+                        or candidate.resolve().parent != parent.resolve()):
+                    raise ValueError("Папка сессии должна быть каталогом без ссылок")
+                directories.append(candidate)
+        if len(directories) != 1:
+            raise ValueError("Сессия не найдена либо её ID встречается в нескольких разделах")
+        directory = directories[0]
         metadata = _read_json(directory / "session.json")
         saved_token = metadata.get("sessionToken")
         if (metadata.get("sessionId") != session_id or metadata.get("filename") != filename
@@ -118,13 +129,40 @@ class TreeDPrintFeedback:
                 stream.flush()
                 os.fsync(stream.fileno())
             # Повторная проверка перед публикацией защищает от подмены пути сессии.
-            self._session(directory.name, result["filename"])
+            if self._session(directory.name, result["filename"]) != directory:
+                raise ValueError("Каталог сессии изменился перед записью")
             if path.is_symlink():
                 raise ValueError("Ссылка вместо оценки запрещена")
             os.replace(temporary, path)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+    # Блок 5: Оценка служит намерением переноса; повтор после сбоя завершает сортировку.
+    def _classify(self, directory: Path, result: dict) -> Path:
+        parent = (self.frames_root if result["rating"] is None
+                  else self.frames_root / RATING_FOLDERS[result["rating"]])
+        if parent.is_symlink():
+            raise ValueError("Ссылка вместо раздела оценки запрещена")
+        parent.mkdir(exist_ok=True)
+        if (not parent.is_dir() or (parent != self.frames_root
+                                   and parent.resolve().parent != self.frames_root.resolve())):
+            raise ValueError("Раздел оценки должен находиться внутри prints")
+        destination = parent / directory.name
+        if directory == destination:
+            return directory
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("Целевая папка сессии уже существует")
+        if self._session(directory.name, result["filename"]) != directory:
+            raise ValueError("Каталог сессии изменился перед переносом")
+        if self.session_file.is_symlink():
+            raise ValueError("Ссылка вместо указателя активной сессии запрещена")
+        if (self.session_file.exists()
+                and Path(self.session_file.read_text(encoding="utf-8").strip()) == directory):
+            raise ValueError("Камера ещё не освободила папку сессии")
+        # rename не копирует кадры; при ошибке, в том числе EXDEV, исходная папка сохраняется.
+        directory.rename(destination)
+        return destination
 
     async def _handle_feedback(self, web_request) -> dict:
         filename = web_request.get("filename", None)
@@ -140,7 +178,7 @@ class TreeDPrintFeedback:
             raise self.server.error(str(error), 400) from error
 
         async with self._lock:
-            # Блок 5: Latest читается только для complete; POST всегда использует явный ID.
+            # Блок 6: Latest читается только для complete; POST всегда использует явный ID.
             if action == "GET":
                 objects = await self.klippy_apis.query_objects(RUNTIME_OBJECTS, default={})
                 stats = objects.get("print_stats", {})
@@ -158,13 +196,17 @@ class TreeDPrintFeedback:
                 directory = self._session(session_id, filename, token if action == "GET" else None)
                 result = self._result(directory, filename)
                 if action == "POST":
+                    # Сбой смены оценки не оставляет новый ярлык в противоположном разделе.
+                    if directory.parent != self.frames_root and result["rating"] != rating:
+                        directory = self._classify(directory, result | {"rating": None})
                     result["rating"] = rating
                     self._save(directory, result)
+                self._classify(directory, result)
                 return result
             except (OSError, ValueError, TypeError) as error:
                 raise self.server.error(f"Оценка сессии недоступна: {error}", 409) from error
 
 
-# Блок 6: Entry-point штатной загрузки Moonraker.
+# Блок 7: Entry-point штатной загрузки Moonraker.
 def load_component(config) -> TreeDPrintFeedback:
     return TreeDPrintFeedback(config)
