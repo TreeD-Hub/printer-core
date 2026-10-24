@@ -125,6 +125,8 @@ ensure_repo_present() {
       '/klippy/extras/treed_filament_motion_sensor.py' \
       '/klippy/extras/treed_print_cancel.py' \
       '/klippy/extras/treed_hotend_limit.py' \
+      '/klippy/extras/treed_light_control.py' \
+      '/klippy/extras/__pycache__/treed_light_control.*.pyc' \
       '/klippy/extras/__pycache__/treed_hotend_limit.*.pyc' \
       '/klippy/extras/treed_calibration.py' \
       '/klippy/extras/__pycache__/treed_calibration.*.pyc' \
@@ -155,6 +157,8 @@ ensure_repo_present() {
       '/klippy/extras/treed_filament_motion_sensor.py' \
       '/klippy/extras/treed_print_cancel.py' \
       '/klippy/extras/treed_hotend_limit.py' \
+      '/klippy/extras/treed_light_control.py' \
+      '/klippy/extras/__pycache__/treed_light_control.*.pyc' \
       '/klippy/extras/__pycache__/treed_hotend_limit.*.pyc' \
       '/klippy/extras/treed_calibration.py' \
       '/klippy/extras/__pycache__/treed_calibration.*.pyc' \
@@ -623,8 +627,8 @@ motor_guard="${REPO_DIR}/klipper-host/treed_motor_guard.py"
 [ -f "${motor_guard}" ] || { log_error "runtime-bootstrap: missing motor guard"; exit 1; }
 install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${motor_guard}" "${KLIPPER_DIR}/klippy/extras/treed_motor_guard.py"
 
-# SGT, Z, филамент, отмена, нагрев, калибровки и режимы драйверов/обдува: доставка обязательна.
-for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py klipper-host/treed_filament_motion_sensor.py klipper-host/treed_print_cancel.py klipper-host/treed_hotend_limit.py klipper-host/treed_calibration.py klipper-host/treed_driver_mode.py klipper-host/treed_driver_fan_mode.py; do
+# SGT, Z, филамент, отмена, нагрев, свет, калибровки и режимы драйверов/обдува: доставка обязательна.
+for sgt_source in tools/treed_sgt_calibration.py klipper-host/treed_sgt_executor.py klipper-host/treed_z_recovery.py klipper-host/treed_filament_motion_sensor.py klipper-host/treed_print_cancel.py klipper-host/treed_hotend_limit.py klipper-host/treed_light_control.py klipper-host/treed_calibration.py klipper-host/treed_driver_mode.py klipper-host/treed_driver_fan_mode.py; do
   [ -f "${REPO_DIR}/${sgt_source}" ] || { log_error "runtime-bootstrap: missing ${sgt_source}"; exit 1; }
   install -m 0644 -o "${PI_USER}" -g "${PI_GROUP}" "${REPO_DIR}/${sgt_source}" \
     "${KLIPPER_DIR}/klippy/extras/${sgt_source##*/}"

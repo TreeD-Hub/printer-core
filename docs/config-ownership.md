@@ -74,6 +74,12 @@ Runtime:
 - `${PI_HOME}/printer_data/config/treed_variables.cfg` — штатный `save_variables`,
   включая режимы XYZ и обдува. `klipper-core.sh` сохраняет его в `preserve`
   с явной ошибкой при сбое копирования; `clean` сбрасывает настройки.
+- Выбор `driver_mode` применяется ранним `treed_driver_mode` к разобранному
+  конфигу в памяти, до создания TMC и шаговых осей. Тихий профиль не записывает
+  128 микрошагов и TMC/PWM в `steppers.cfg`, `local_overrides.cfg` или
+  SAVE_CONFIG. В `normal` заново читаются исходные файлы. Смена профиля сохраняет
+  только выбор и вызывает `FIRMWARE_RESTART`; отдельного файла профиля и миграции
+  пользовательских конфигов нет.
 - В `preserve` `klipper-core.sh` также сохраняет `filament_motion_runtime.cfg` и
   SAVE_CONFIG-сегмент `printer.cfg`; сбой чтения, снимка или возврата останавливает
   раскладку либо сообщает об ошибке и оставляет recovery-копию в

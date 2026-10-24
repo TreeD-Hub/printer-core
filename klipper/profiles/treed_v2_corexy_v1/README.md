@@ -9,14 +9,14 @@
 
 Основная include-цепочка задается в `klipper/printer.cfg`:
 
-1. `profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg`
-2. `profiles/treed_v2_corexy_v1/ebb42_can.cfg`
-3. `profiles/treed_v2_corexy_v1/printer_base.cfg`
-4. `profiles/treed_v2_corexy_v1/geometry.cfg`
-5. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
-6. `profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg`
-7. `profiles/treed_v2_corexy_v1/steppers.cfg`
-8. `profiles/treed_v2_corexy_v1/driver_mode.cfg`
+1. `profiles/treed_v2_corexy_v1/driver_mode.cfg` — полный профиль до создания TMC и шаговых осей.
+2. `profiles/treed_v2_corexy_v1/mcu_main_octopus_can.cfg`
+3. `profiles/treed_v2_corexy_v1/ebb42_can.cfg`
+4. `profiles/treed_v2_corexy_v1/printer_base.cfg`
+5. `profiles/treed_v2_corexy_v1/geometry.cfg`
+6. `profiles/treed_v2_corexy_v1/gcode_features.cfg`
+7. `profiles/treed_v2_corexy_v1/probe_eddy_duo.cfg`
+8. `profiles/treed_v2_corexy_v1/steppers.cfg`
 9. `profiles/treed_v2_corexy_v1/z_recovery.cfg`
 10. `profiles/treed_v2_corexy_v1/motion_guard.cfg`
 11. `profiles/treed_v2_corexy_v1/macros_homing.cfg`
@@ -150,6 +150,12 @@ LIGHT_OFF
 ```
 
 По умолчанию и при аварийном завершении Klipper подсветка выключена (`value: 0`, `shutdown_value: 0`).
+
+Новый UI использует `POST /printer/treed/light/set` с целым `value` (`0` или `1`),
+если `_TREED_UI_CONTRACT.capability_light_async=1`. Запрос обходит очередь
+G-code, включая температурные ожидания; старый Core обслуживается макросами.
+Секция `[treed_light_control]` и host-модуль доставляются штатным обновлением.
+[API, очередь и ограничения](../../../klipper-host/README.md#модули-и-контракты).
 
 В «Управление → Освещение» доступны два независимых сохранённых флага:
 `TREED_LIGHT_SETTINGS STARTUP=0|1` (по умолчанию `0`) и

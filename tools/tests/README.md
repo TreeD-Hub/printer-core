@@ -5,6 +5,8 @@
 
 ## Состав
 
+- `test_light_control.py` — валидация API подсветки, отказ вне ready и единая очередь макросов/API. Для проверки настоящих классов закреплённого Klipper задать `TREED_LIGHT_KLIPPER_SOURCE` на каталог с его `output_pin.py`, `webhooks.py`, `gcode.py` и выполнить `python -B tools/tests/test_light_control.py`. MCU и реактор моделируются; это не аппаратная проверка M109/M190 или печати.
+
 - `test_treed_autoprinter_component.py` — жизненный цикл выключенного компонента, локальный endpoint управления, закрытый credential, wire-синхронизация, default-off проверки стола, безопасная диагностика sync/журнала и независимый executor poll во время sync backoff с ожиданием задач при shutdown. Запуск `python -B tools/tests/test_treed_autoprinter_component.py`; без сети, Moonraker runtime и устройства.
 - `test_treed_autoprinter_store.py` — durable-приём assets, журнал результатов, восстановление очереди и receipts, лимит SQLite с откатом переполненной записи и сохранением событий после reopen. Запуск `python -B tools/tests/test_treed_autoprinter_store.py`; без сети и устройства.
 - `test_treed_autoprinter_execution.py` — durable-очередь исполнителя, восстановление, события, контекст проверки стола и запрет кандидату `empty` разрешать live-запуск или завершение. Запуск `python -B tools/tests/test_treed_autoprinter_execution.py`; с fake-устройством и без Moonraker runtime.
@@ -21,7 +23,7 @@
   height stamp после restart, подача/cleanup и сохранение rotation_distance.
   Запуск `python -B tools/tests/test_treed_calibration.py`; без Klipper и устройства.
 
-- `test_driver_modes.py` — офлайн-модель допуска XYZ, частичных SPI-отказов и отката, сохранения, профилей обдува и доставки; проверяет возврат обычных лимитов после тихого homing, включая ошибку. Запуск `python -B tools/tests/test_driver_modes.py`; аппаратную приёмку не заменяет.
+- `test_driver_modes.py` — офлайн-модель ранней загрузки полного quiet-профиля, согласования MRES, допуска XYZ, сохранения/перезапуска и восстановления при отказах, частичных SPI-отказов, профилей обдува и доставки. Проверяет возврат quiet-лимитов после homing, включая ошибку. Запуск `python -B tools/tests/test_driver_modes.py`; аппаратную приёмку не заменяет.
 
 - `test_loader_progress.py` — настоящий apply-цикл на временных шагах: TTY-шкала/спиннер, сохранение логов, счётчики, required fail-fast/exit status, optional skip/failure и режим `off`. Запуск на Linux/WSL: `python3 -B tools/tests/test_loader_progress.py`; без установки пакетов, сервисов или подключения к устройству.
 

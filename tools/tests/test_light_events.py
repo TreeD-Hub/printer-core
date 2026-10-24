@@ -61,6 +61,11 @@ class LightEventTests(unittest.TestCase):
             self.assertEqual("LIGHT_ON" in render("service_fans.cfg", "delayed_gcode _TREED_LIGHT_STARTUP", printer), startup)
             self.assertEqual("LIGHT_ON" in render("service_fans.cfg", "gcode_macro _TREED_LIGHT_PRINT_START", printer), printing)
 
+    def test_light_macros_share_the_async_pin_queue(self):
+        for name, value in [('LIGHT_ON', 1), ('LIGHT_OFF', 0)]:
+            self.assertEqual(render('service_fans.cfg', 'gcode_macro ' + name, {}).strip(),
+                             f'TREED_LIGHT_SET VALUE={value}')
+
     def test_settings_validate_before_saving(self):
         for key, variable in [("STARTUP", "light_on_startup"), ("PRINT_START", "light_on_print_start")]:
             result = render("service_fans.cfg", "gcode_macro TREED_LIGHT_SETTINGS", {}, **{key: "1"})
