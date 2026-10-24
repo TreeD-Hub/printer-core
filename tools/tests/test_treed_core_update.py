@@ -268,6 +268,8 @@ class CoreUpdateTests(unittest.TestCase):
         self.services.assert_not_called()
 
     def test_replacement_replays_forward_and_preserves_fresh_save_config(self):
+        # Смена владельца на root — внешняя граница; записи/fsync/rename остаются реальными.
+        chown = self.stack.enter_context(patch.object(core.os, "fchown", create=True))
         if os.name == "nt" and GIT_BASH.is_file():
             original_run = subprocess.run
 
@@ -391,6 +393,8 @@ class CoreUpdateTests(unittest.TestCase):
             next_result = core.apply(next_manifest["tag"], next_operation, self.env)
         self.assertEqual("applied", next_result["status"])
         self.assertEqual(next_version, core.read_json(core.manifest_path(self.env))["version"])
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
 
     def test_replacement_does_not_mutate_runtime_when_admission_gate_rejects_print(self):
         old_operation, old_resets = self.seed_failed_provisioning()
@@ -421,6 +425,8 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertTrue(transaction["forwardOnly"])
 
     def test_validated_replacement_recovers_after_admission_gate_defers(self):
+        # Непривилегированный CI проверяет запрос root-владельца без настоящего chown.
+        chown = self.stack.enter_context(patch.object(core.os, "fchown", create=True))
         if os.name == "nt" and GIT_BASH.is_file():
             original_run = subprocess.run
 
@@ -469,6 +475,8 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual("committed", core.read_json(journal)["stage"])
         self.assertEqual(core.read_json(journal.parent / "manifest.new.json"),
                          core.read_json(core.manifest_path(self.env)))
+        if os.name != "nt":
+            chown.assert_any_call(ANY, 0, 0)
 
     def test_committed_forward_only_journal_revalidates_runtime_and_upstream(self):
         if os.name == "nt" and GIT_BASH.is_file():
