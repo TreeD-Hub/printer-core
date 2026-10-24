@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 # Блок 1: Фиксированный контракт пакета и разрешённые назначения.
+import errno
 import hashlib
 import json
 import os
@@ -13,14 +14,17 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import signal
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 import zipfile
+import zlib
 from contextlib import contextmanager
 
 KIND = "treed-core-runtime"
@@ -34,6 +38,11 @@ VISION = {"service.py", "models.json"}
 PRESERVED = {"local_overrides.cfg", "treed_variables.cfg", "filament_motion_runtime.cfg"}
 MAX_PACKAGE = 32 * 1024 * 1024
 MAX_CONTENT = 64 * 1024 * 1024
+MANAGED_RUNTIME = "loader/managed-runtime.json"
+MANAGED_SAFETY_STEPS = {"check-env", "update-recovery-bootstrap", "maintenance-stop",
+                        "maintenance-start", "verify"}
+TRANSIENT_ERRNOS = {errno.ECONNREFUSED, errno.ECONNRESET, errno.EHOSTUNREACH,
+                    errno.ENETUNREACH, errno.ETIMEDOUT, errno.EPIPE}
 AUTOPRINTER_MODULES = {f"moonraker/treed_autoprinter{suffix}.py" for suffix in (
     "", "_store", "_transport", "_execution", "_device", "_bed", "_bed_inference",
 )} | {"moonraker/treed_vision_client.py"}
@@ -131,9 +140,12 @@ def package_manifest(repo, *, use_release_tag=False):
         if not match:
             raise ValueError(f"Отсутствует закреплённый SHA {component}")
         requirements[component.lower()] = match[1]
+    managed = managed_runtime_plan(repo)
     return {"kind": KIND, "schema": 1, "version": version, "tag": f"v{version}",
             "sha": commit, "requires": requirements,
-            "provisioning": {"schema": 1, "revision": provisioning_revision(repo)}, "files": []}
+            "provisioning": {"schema": 1, "revision": provisioning_revision(repo),
+                             "managedRevision": managed["revision"], "steps": managed["steps"]},
+            "files": []}
 
 
 def provisioning_revision(repo):
@@ -149,6 +161,92 @@ def provisioning_revision(repo):
             digest.update(len(relative).to_bytes(4, "big")); digest.update(relative)
             digest.update(len(data).to_bytes(8, "big")); digest.update(data)
     return digest.hexdigest()
+
+
+def managed_runtime_plan(repo):
+    registry = repo / MANAGED_RUNTIME
+    if registry.is_symlink() or not registry.is_file():
+        raise ValueError("Отсутствует безопасный managed runtime registry")
+    raw = registry.read_bytes()
+    plan = json.loads(raw)
+    if (not isinstance(plan, dict) or set(plan) != {"schema", "steps", "requiredSteps", "inputs"}
+            or plan.get("schema") != 1):
+        raise ValueError("Неизвестная схема managed runtime registry")
+    steps, required, inputs = plan.get("steps"), plan.get("requiredSteps"), plan.get("inputs")
+    valid_step = lambda name: isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]*", name)
+    if (not isinstance(steps, list) or not steps or any(not valid_step(name) for name in steps)
+            or len(steps) != len(set(steps)) or not isinstance(required, list)
+            or any(not valid_step(name) for name in required) or len(required) != len(set(required))
+            or not isinstance(inputs, list) or any(not isinstance(path, str) for path in inputs)
+            or len(inputs) != len(set(inputs))
+            or not MANAGED_SAFETY_STEPS <= set(required)
+            or not set(required) <= set(steps)):
+        raise ValueError("Некорректный managed runtime registry")
+    positions = [steps.index(name) for name in required]
+    if positions != sorted(positions):
+        raise ValueError("Managed runtime safety steps стоят в неверном порядке")
+    paths = list(inputs)
+    for name in steps:
+        paths.append(f"loader/steps/{name}.sh")
+    digest = hashlib.sha256()
+    for relative in [MANAGED_RUNTIME, *sorted(paths)]:
+        path = PurePosixPath(relative)
+        if (path.as_posix() != relative or path.is_absolute() or "\\" in relative
+                or ".." in path.parts):
+            raise ValueError(f"Недопустимый managed runtime path: {relative}")
+        if relative != MANAGED_RUNTIME and relative in inputs:
+            allowed_input = (
+                relative in {"loader/loader.sh", "runtime-versions.env", "runtime-scripts/treed-vision/models.json"}
+                or len(path.parts) == 3 and path.parts[:2] == ("loader", "lib") and path.suffix == ".sh"
+                or len(path.parts) == 3 and path.parts[:2] == ("runtime-scripts", "treed-update")
+                and path.suffix in {".service", ".path", ".timer"}
+            )
+            if not allowed_input:
+                raise ValueError(f"Недопустимый managed runtime input: {relative}")
+        source = repo.joinpath(*path.parts)
+        if source.is_symlink() or not source.is_file():
+            raise ValueError(f"Managed runtime source отсутствует или является ссылкой: {relative}")
+        data = source.read_bytes()
+        encoded = relative.encode("utf-8")
+        digest.update(len(encoded).to_bytes(4, "big")); digest.update(encoded)
+        digest.update(len(data).to_bytes(8, "big")); digest.update(data)
+    return {"steps": steps, "requiredSteps": required, "revision": digest.hexdigest()}
+
+
+class TransientDownloadError(Exception):
+    pass
+
+
+class PrinterNotReady(ValueError):
+    """Печать стала активной во время загрузки; запрос можно повторить позже."""
+
+
+class ValidationError(ValueError, RuntimeError):
+    """Постоянная ошибка целостности данных, совместимая с обоими контрактами."""
+
+
+def update_error_result(error):
+    if isinstance(error, TransientDownloadError):
+        code = "core_download_failed"
+    elif isinstance(error, PrinterNotReady):
+        code = "core_not_ready"
+    elif isinstance(error, ValueError):
+        code = "core_validation_failed"
+    else:
+        code = "core_update_failed"
+    return {"status": "error", "resultCode": code, "message": str(error)}
+
+
+def _transient_download_error(error):
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code in {408, 429} or 500 <= error.code <= 599
+    if isinstance(error, urllib.error.URLError):
+        reason = error.reason
+        return (isinstance(reason, (socket.timeout, TimeoutError, ConnectionError))
+                or isinstance(reason, OSError) and reason.errno in TRANSIENT_ERRNOS
+                or isinstance(reason, OSError) and getattr(reason, "errno", None) == getattr(socket, "EAI_AGAIN", None))
+    return isinstance(error, (socket.timeout, TimeoutError, ConnectionError)) or (
+        isinstance(error, OSError) and error.errno in TRANSIENT_ERRNOS)
 
 
 def build(repo, archive):
@@ -245,18 +343,21 @@ def parent_fd(path, create=False):
 
 
 def read_file(path):
-    with parent_fd(path) as descriptor:
-        try:
-            info = os.stat(path.name if descriptor is not None else path,
-                           dir_fd=descriptor, follow_symlinks=False)
-        except FileNotFoundError:
-            return None, None
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONTENT:
-            raise ValueError(f"Runtime-файл не является обычным файлом: {path}")
-        handle = os.open(path.name if descriptor is not None else path,
-                         os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=descriptor)
-        with os.fdopen(handle, "rb") as stream:
-            return stream.read(MAX_CONTENT + 1), info
+    try:
+        with parent_fd(path) as descriptor:
+            try:
+                info = os.stat(path.name if descriptor is not None else path,
+                               dir_fd=descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                return None, None
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_CONTENT:
+                raise ValueError(f"Runtime-файл не является обычным файлом: {path}")
+            handle = os.open(path.name if descriptor is not None else path,
+                             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=descriptor)
+            with os.fdopen(handle, "rb") as stream:
+                return stream.read(MAX_CONTENT + 1), info
+    except FileNotFoundError:
+        return None, None
 
 
 def write_file(path, data, mode=0o644, uid=None, gid=None):
@@ -444,8 +545,13 @@ def download(tag, archive, env, asset_name=ASSET):
         raise ValueError("Core release API должен быть GitHub HTTPS")
     request = urllib.request.Request(api.rstrip("/") + "/tags/" + tag,
                                      headers={"Accept": "application/vnd.github+json", "User-Agent": "treed-core-update"})
-    with urllib.request.urlopen(request, timeout=10) as response:
-        release = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            release = json.load(response)
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+        if _transient_download_error(error):
+            raise TransientDownloadError(str(error)) from error
+        raise
     if release.get("tag_name") != tag or release.get("draft") or release.get("prerelease"):
         raise ValueError("Выпуск core не является опубликованным стабильным релизом")
     asset = next((row for row in release.get("assets", []) if row.get("name") == asset_name), {})
@@ -454,17 +560,22 @@ def download(tag, archive, env, asset_name=ASSET):
     if (not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
             or not url.startswith("https://github.com/")):
         raise ValueError(f"Отсутствует пакет {asset_name} с SHA-256 GitHub")
-    with urllib.request.urlopen(url, timeout=30) as response, archive.open("wb") as output:
-        size = 0
-        checksum = hashlib.sha256()
-        while block := response.read(65536):
-            size += len(block)
-            if size > MAX_PACKAGE:
-                raise ValueError(f"Пакет {asset_name} превышает допустимый размер")
-            checksum.update(block)
-            output.write(block)
-        output.flush()
-        os.fsync(output.fileno())
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response, archive.open("wb") as output:
+            size = 0
+            checksum = hashlib.sha256()
+            while block := response.read(65536):
+                size += len(block)
+                if size > MAX_PACKAGE:
+                    raise ValueError(f"Пакет {asset_name} превышает допустимый размер")
+                checksum.update(block)
+                output.write(block)
+            output.flush()
+            os.fsync(output.fileno())
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+        if _transient_download_error(error):
+            raise TransientDownloadError(str(error)) from error
+        raise
     if checksum.hexdigest() != digest.removeprefix("sha256:"):
         raise ValueError(f"SHA-256 {asset_name} не совпадает с GitHub")
 
@@ -512,6 +623,7 @@ def extract_source(archive, directory, manifest, payload):
     if not isinstance(provisioning, dict) or provisioning.get("schema") != 1 or not re.fullmatch(
             r"[0-9a-f]{64}", str(provisioning.get("revision", ""))):
         raise ValueError("В target manifest отсутствует корректная provisioning revision")
+    validate_managed_metadata(provisioning)
     with zipfile.ZipFile(archive) as bundle:
         infos = bundle.infolist()
         names = [row.filename for row in infos]
@@ -537,6 +649,10 @@ def extract_source(archive, directory, manifest, payload):
     source_manifest = package_manifest_for_source(directory, manifest)
     if source_manifest["provisioning"]["revision"] != provisioning["revision"]:
         raise ValueError("Provisioning revision source package не совпадает с target manifest")
+    if "managedRevision" in provisioning:
+        if (source_manifest["provisioning"]["managedRevision"] != provisioning["managedRevision"]
+                or source_manifest["provisioning"]["steps"] != provisioning["steps"]):
+            raise ValueError("Managed runtime metadata source package не совпадает с registry/hash")
     source_files = sources(directory)
     for key, data in payload.items():
         source = source_files.get(key)
@@ -546,6 +662,8 @@ def extract_source(archive, directory, manifest, payload):
 
 
 def package_manifest_for_source(repo, target_manifest):
+    target_provisioning = target_manifest.get("provisioning")
+    validate_managed_metadata(target_provisioning)
     runtime = (repo / "runtime-versions.env").read_text(encoding="utf-8")
     requirements = {}
     for component in ("KLIPPER", "MOONRAKER"):
@@ -553,8 +671,35 @@ def package_manifest_for_source(repo, target_manifest):
         if not match or match[1] != target_manifest["requires"].get(component.lower()):
             raise ValueError(f"Source package pins {component} не совпадают с target manifest")
         requirements[component.lower()] = match[1]
-    return {"provisioning": {"schema": 1, "revision": provisioning_revision(repo)},
+    source_provisioning = {"schema": 1, "revision": provisioning_revision(repo)}
+    if "managedRevision" in target_provisioning:
+        managed = managed_runtime_plan(repo)
+        source_provisioning.update(managedRevision=managed["revision"], steps=managed["steps"])
+    return {"provisioning": source_provisioning,
             "requires": requirements}
+
+
+def validate_managed_metadata(provisioning):
+    if not isinstance(provisioning, dict):
+        raise ValueError("Некорректный provisioning metadata в runtime manifest")
+    if not set(provisioning) <= {"schema", "revision", "managedRevision", "steps"}:
+        raise ValueError("Неизвестные поля provisioning metadata")
+    if provisioning.get("schema") != 1 or re.fullmatch(r"[0-9a-f]{64}",
+                                                        str(provisioning.get("revision", ""))) is None:
+        raise ValueError("Некорректная provisioning revision в runtime manifest")
+    has_revision, has_steps = "managedRevision" in provisioning, "steps" in provisioning
+    if has_revision != has_steps:
+        raise ValueError("Managed runtime metadata должен содержать revision и steps вместе")
+    if not has_revision:
+        return
+    steps = provisioning["steps"]
+    if (not isinstance(provisioning["managedRevision"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", provisioning["managedRevision"]) is None
+            or not isinstance(steps, list) or any(
+                not isinstance(step, str) or re.fullmatch(r"[a-z][a-z0-9-]*", step) is None for step in steps)
+            or not steps or len(steps) != len(set(steps))
+            or not MANAGED_SAFETY_STEPS <= set(steps)):
+        raise ValueError("Некорректные managed runtime metadata в target manifest")
 
 
 def _managed_upstream_untracked(repo, name, locations, manifests):
@@ -618,10 +763,20 @@ def check_compatibility(manifest, env, installed=None):
             raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
 
 
-def check_upstream_clean(locations, installed=None):
+def check_upstream_clean(locations, installed=None, reset_configs=None, physical_base=None):
+    resets = validate_config_resets(reset_configs or [])
+    manifests = [manifest for manifest in (installed, physical_base) if manifest is not None]
     for name, repo in (("klipper", locations["klipper"].parents[1]),
                        ("moonraker", locations["moonraker"].parents[1])):
-        if _upstream_dirty(repo, name, locations, (installed,)):
+        reset_rows = []
+        for key, digest in resets.items():
+            group, relative = allowed(key)
+            if group == name and len(relative.parts) == 1:
+                reset_rows.append({"path": key, "runtimeSha256": digest})
+        accepted = [*manifests]
+        if reset_rows:
+            accepted.append({"files": reset_rows})
+        if _upstream_dirty(repo, name, locations, accepted):
             raise ValueError(f"Изменены исходники установленного {name}; core update остановлен")
 
 
@@ -637,7 +792,17 @@ def needs_provisioning(target, installed, env):
         raise ValueError("Target manifest не содержит корректный provisioning revision")
     if not isinstance(installed, dict) or installed.get("kind") != KIND or installed.get("schema") != 1:
         raise ValueError("Установленный runtime baseline повреждён")
-    if not installed.get("provisioning") or installed["provisioning"] != provision:
+    validate_managed_metadata(provision)
+    installed_provision = installed.get("provisioning")
+    if installed_provision is not None:
+        validate_managed_metadata(installed_provision)
+    if not installed_provision:
+        return True
+    if "managedRevision" in provision and "managedRevision" in installed_provision:
+        if (provision["managedRevision"] != installed_provision["managedRevision"]
+                or provision["steps"] != installed_provision["steps"]):
+            return True
+    elif installed_provision.get("revision") != provision.get("revision"):
         return True
     locations = roots(env)
     if not vision_units_installed():
@@ -827,7 +992,7 @@ def verify_runtime_files(manifest, env):
     for row in manifest["files"]:
         data, _info = read_file(destination(row["path"], roots(env)))
         if data is None or not matches_managed_file(row["path"], data, row["runtimeSha256"]):
-            raise RuntimeError(f"Runtime файл отличается от проверенного target: {row['path']}")
+            raise ValidationError(f"Runtime файл отличается от проверенного target: {row['path']}")
 
 
 def baseline(repo, env):
@@ -849,16 +1014,146 @@ def baseline(repo, env):
     write_json(manifest_path(env), manifest)
 
 
+def acquire_loader_update_lock(env):
+    import fcntl
+
+    lock_path = Path(env.get("TREED_UPDATE_LOCK_FILE", "/run/lock/treed-update.lock"))
+    inherited = os.environ.get("TREED_UPDATE_LOCK_FD")
+    if inherited is not None:
+        if re.fullmatch(r"[0-9]+", inherited) is None:
+            raise ValueError("TREED_UPDATE_LOCK_FD должен быть дескриптором файла")
+        fd = int(inherited)
+        try:
+            descriptor_stat = os.fstat(fd)
+            path_stat = lock_path.lstat()
+        except OSError as error:
+            raise ValueError("Унаследованный update lock недоступен") from error
+        if (not stat.S_ISREG(descriptor_stat.st_mode) or not stat.S_ISREG(path_stat.st_mode)
+                or (descriptor_stat.st_dev, descriptor_stat.st_ino) != (path_stat.st_dev, path_stat.st_ino)):
+            raise ValueError("Унаследованный update lock не совпадает с настроенным файлом")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("Другой TreeD update удерживает lock") from error
+        return None
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = lock_path.open("a+")
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception:
+        lock.close()
+        raise
+    return lock
+
+
+def _inspection_manifest(path, expected_tag=None, baseline=False):
+    path = Path(path)
+    if (path.is_symlink() or path.parent.is_symlink() or path.parent.parent.is_symlink()
+            or not path.is_file()):
+        raise ValueError("Core inspection metadata отсутствует или небезопасно")
+    manifest = read_json(path)
+    if baseline:
+        if not isinstance(manifest, dict) or manifest.get("kind") != KIND or manifest.get("schema") != 1:
+            raise ValueError("Core baseline повреждён")
+        rows = manifest.get("files")
+        if not isinstance(rows, list) or not rows or len(rows) > 256:
+            raise ValueError("Core baseline содержит неверные файлы")
+        files = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Core baseline содержит неверную запись")
+            key = row.get("path")
+            allowed(key)
+            digest = row.get("runtimeSha256")
+            if key in files or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("Core baseline содержит повторный путь или неверный hash")
+            files[key] = digest
+        return manifest, files
+    files = validate_target_manifest(manifest, expected_tag, require_provisioning=False)
+    return manifest, {key: row["runtimeSha256"] for key, row in files.items()}
+
+
+def _inspection_anchor(env, operation, tag):
+    journal = journal_path(env, operation)
+    if (journal.is_symlink() or journal.parent.is_symlink() or journal.parent.parent.is_symlink()
+            or not journal.is_file()):
+        raise ValueError("Core inspection anchor отсутствует или небезопасен")
+    transaction = read_json(journal)
+    if (not isinstance(transaction, dict) or transaction.get("schema") != 1
+            or transaction.get("targetTag") is not None and transaction["targetTag"] != tag
+            or transaction.get("operationId", operation) != operation
+            or transaction.get("stage") not in {
+                "validated", "installing", "provisioning", "provisioning_failed", "provisioned", "committed"}
+            and transaction.get("provisioningStarted") is not True):
+        raise ValueError("Core inspection anchor не связан с failed target")
+    target, files = _inspection_manifest(journal.parent / "manifest.new.json", tag)
+    manifests = [(target, files)]
+    if transaction.get("forwardOnly") is True:
+        base_tag = transaction.get("supersedesTargetTag")
+        base, base_files = _inspection_manifest(journal.parent / "manifest.installation-base.json", base_tag)
+        if (not isinstance(transaction.get("supersedesOperationId"), str)
+                or str(uuid.UUID(transaction["supersedesOperationId"])) != transaction["supersedesOperationId"]):
+            raise ValueError("Core inspection forward link повреждён")
+        manifests.append((base, base_files))
+    return transaction, manifests
+
+
 def config_conflicts(env):
     # Read-only: калибровки SAVE_CONFIG не считаются ручной правкой профиля.
-    previous = read_json(manifest_path(env))
-    if not previous or previous.get("kind") != KIND or previous.get("schema") != 1:
-        raise ValueError("Core baseline отсутствует")
+    _previous, baseline_files = _inspection_manifest(manifest_path(env), baseline=True)
+    known = dict((key, {digest}) for key, digest in baseline_files.items())
+    state = read_json(Path(env.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json")))
+    if (isinstance(state, dict) and state.get("targetId") == "printer-core"
+            and state.get("status") == "error" and state.get("busy") is not True
+            and isinstance(state.get("operationId"), str)
+            and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                             state["operationId"])):
+        journal = journal_path(env, state["operationId"])
+        if journal.is_symlink() or journal.parent.is_symlink() or journal.parent.parent.is_symlink():
+            raise ValueError("Core inspection journal небезопасен")
+        if journal.exists():
+            transaction, targets = _inspection_anchor(env, state["operationId"], state.get("targetTag"))
+            for _manifest, files in targets:
+                for key, digest in files.items():
+                    known.setdefault(key, set()).add(digest)
+            if transaction.get("forwardOnly") is True:
+                names = ("supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs")
+                if (any(name not in state for name in names)
+                        or transaction.get("supersedesOperationId") != state["supersedesOperationId"]
+                        or transaction.get("supersedesTargetTag") != state["supersedesTargetTag"]
+                        or validate_config_resets(transaction.get("supersededResetConfigs", []))
+                        != validate_config_resets(state["supersededResetConfigs"])):
+                    raise ValueError("Core inspection root link не совпадает с journal")
+                anchor_tx, anchor_manifests = _inspection_anchor(
+                    env, state["supersedesOperationId"], state["supersedesTargetTag"])
+                if not any(manifest == targets[1][0] for manifest, _files in anchor_manifests):
+                    raise ValueError("Core inspection installation base не совпадает с anchor")
+                for _manifest, files in anchor_manifests:
+                    for key, digest in files.items():
+                        known.setdefault(key, set()).add(digest)
+        elif any(name in state for name in
+                 ("supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs")):
+            names = ("supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs")
+            code = state.get("resultCode")
+            if (not all(name in state for name in names)
+                    or code not in {"core_download_failed", "core_not_ready", "core_validation_failed",
+                                    "service_start_failed", "corrective_precondition_deferred"}
+                    or code == "core_validation_failed" and state.get("lastFailurePhase") not in {
+                        "queued", "validating", "downloading"}):
+                raise ValueError("Core inspection no-journal link не подтверждает pre-mutation отказ")
+            _anchor_tx, anchor_manifests = _inspection_anchor(
+                env, state["supersedesOperationId"], state["supersedesTargetTag"])
+            if tuple(map(int, state["targetTag"][1:].split("."))) <= tuple(
+                    map(int, state["supersedesTargetTag"][1:].split("."))):
+                raise ValueError("Core inspection target не новее anchor")
+            for _manifest, files in anchor_manifests:
+                for key, digest in files.items():
+                    known.setdefault(key, set()).add(digest)
     conflicts = []
-    for row in previous["files"]:
-        key = row["path"]
+    for key in sorted(known):
         data, _info = read_file(destination(key, roots(env)))
-        if data is not None and not matches_managed_file(key, data, row["runtimeSha256"]):
+        if data is not None and not any(matches_managed_file(key, data, digest)
+                                        for digest in known[key]):
             conflicts.append({"path": key, "sha256": sha(data)})
     return conflicts
 
@@ -878,27 +1173,153 @@ def validate_config_resets(value):
     return selected
 
 
-def prepare(manifest, payload, env, journal, reset_configs=None):
+def validate_target_manifest(manifest, expected_tag=None, require_provisioning=True):
+    if (not isinstance(manifest, dict) or manifest.get("kind") != KIND or manifest.get("schema") != 1
+            or not isinstance(manifest.get("version"), str)
+            or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", manifest["version"]) is None
+            or manifest.get("tag") != "v" + manifest["version"]
+            or expected_tag is not None and manifest["tag"] != expected_tag
+            or re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("sha", ""))) is None):
+        raise ValueError("Core target manifest повреждён или не связан с операцией")
+    requirements = manifest.get("requires")
+    provisioning = manifest.get("provisioning")
+    if require_provisioning:
+        if (not isinstance(requirements, dict) or any(not re.fullmatch(
+                r"[0-9a-f]{40}", str(requirements.get(name, ""))) for name in ("klipper", "moonraker"))
+                or not isinstance(provisioning, dict) or provisioning.get("schema") != 1
+                or not re.fullmatch(r"[0-9a-f]{64}", str(provisioning.get("revision", "")))):
+            raise ValueError("Core target manifest неполон")
+        validate_managed_metadata(provisioning)
+    files = manifest.get("files")
+    if not isinstance(files, list) or not files or len(files) > 256:
+        raise ValueError("Core target manifest содержит неверный список файлов")
+    result = {}
+    for row in files:
+        if not isinstance(row, dict):
+            raise ValueError("Core target manifest содержит неверную запись файла")
+        key = row.get("path")
+        allowed(key)
+        digest = row.get("runtimeSha256")
+        if key in result or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("Core target manifest содержит повторный путь или неверный hash")
+        result[key] = row
+    return result
+
+
+def replacement_context(state, operation, tag, env, check_confirmed=True):
+    names = ("supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs")
+    present = [name in state for name in names]
+    if not any(present):
+        return None
+    if not all(present):
+        raise ValueError("Неполный replacement context core")
+    old_operation = state["supersedesOperationId"]
+    if (not isinstance(old_operation, str) or str(uuid.UUID(old_operation)) != old_operation
+            or old_operation == operation):
+        raise ValueError("Некорректный supersedes operation id")
+    old_tag = state["supersedesTargetTag"]
+    if (not isinstance(old_tag, str) or re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", old_tag) is None
+            or re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None
+            or tuple(map(int, tag[1:].split("."))) <= tuple(map(int, old_tag[1:].split(".")))):
+        raise ValueError("Replacement target должен быть новее superseded target")
+    audit_resets = state["supersededResetConfigs"]
+    validate_config_resets(audit_resets)
+    old_journal = journal_path(env, old_operation)
+    if old_journal.is_symlink() or old_journal.parent.is_symlink():
+        raise ValueError("Superseded core journal небезопасен")
+    transaction = read_json(old_journal)
+    if (not isinstance(transaction, dict) or transaction.get("schema") != 1
+            or transaction.get("stage") not in {"provisioning", "provisioning_failed", "provisioned"}
+            and transaction.get("provisioningStarted") is not True):
+        raise ValueError("Superseded core journal не подтверждает начатый provisioning")
+    if (transaction.get("operationId") is not None and transaction["operationId"] != old_operation
+            or transaction.get("targetTag") is not None and transaction["targetTag"] != old_tag):
+        raise ValueError("Superseded journal target не совпадает с root state")
+    if ("resetConfigs" in transaction
+            and validate_config_resets(transaction["resetConfigs"]) != validate_config_resets(audit_resets)):
+        raise ValueError("Superseded reset consent не совпадает с journal")
+    entries = transaction.get("entries")
+    if not isinstance(entries, list) or not entries or len(entries) > 256:
+        raise ValueError("Superseded core journal содержит неверный список файлов")
+    seen, backups = set(), set()
+    for row in entries:
+        if not isinstance(row, dict):
+            raise ValueError("Superseded core journal содержит неверную запись")
+        key, backup = row.get("path"), row.get("backup")
+        allowed(key)
+        if (key in seen or not isinstance(backup, str) or re.fullmatch(r"[0-9]+", backup) is None
+                or backup in backups or not isinstance(row.get("delete"), bool)
+                or not isinstance(row.get("existed"), bool)):
+            raise ValueError("Superseded core journal содержит неверный путь или backup")
+        seen.add(key); backups.add(backup)
+        if row["existed"]:
+            backup_path = old_journal.parent / backup
+            if backup_path.is_symlink() or not backup_path.is_file():
+                raise ValueError("Superseded core journal backup отсутствует или небезопасен")
+        if not row["delete"]:
+            staged = old_journal.parent / (backup + ".new")
+            if staged.is_symlink() or not staged.is_file():
+                raise ValueError("Superseded core journal target отсутствует или небезопасен")
+    target_path = old_journal.parent / "manifest.new.json"
+    confirmed_path = old_journal.parent / "manifest.before.json"
+    if any(path.is_symlink() or not path.is_file() for path in (target_path, confirmed_path)):
+        raise ValueError("Superseded core manifest отсутствует или небезопасен")
+    installation_base = read_json(target_path)
+    installation_files = validate_target_manifest(installation_base, old_tag)
+    confirmed = read_json(confirmed_path)
+    validate_target_manifest(confirmed, require_provisioning=False)
+    if check_confirmed and read_json(manifest_path(env)) != confirmed:
+        raise ValueError("Confirmed core baseline изменился после неудачного provisioning")
+    entry_map = {row["path"]: row for row in entries}
+    if set(entry_map) != set(installation_files) | {
+            row["path"] for row in confirmed["files"] if row["path"] not in installation_files}:
+        raise ValueError("Superseded journal entries не совпадают с target/base file set")
+    for key, row in installation_files.items():
+        entry = entry_map.get(key)
+        if entry is None or entry["delete"]:
+            raise ValueError("Superseded journal пропускает target file")
+        staged = old_journal.parent / (entry["backup"] + ".new")
+        if not matches_managed_file(key, staged.read_bytes(), row["runtimeSha256"]):
+            raise ValueError("Superseded journal staged target не совпадает с manifest hash")
+    for key, entry in entry_map.items():
+        if entry["delete"] and (key in installation_files or key not in {r["path"] for r in confirmed["files"]}):
+            raise ValueError("Superseded journal удаляет файл вне known installation base")
+    return {"oldOperationId": old_operation, "oldTargetTag": old_tag,
+            "installationBase": installation_base, "installationFiles": installation_files,
+            "confirmedBase": confirmed, "auditResetConfigs": audit_resets,
+            "oldJournal": old_journal}
+
+
+def prepare(manifest, payload, env, journal, reset_configs=None, replacement=None):
     locations = roots(env)
     previous = read_json(manifest_path(env))
     if not previous or previous.get("kind") != KIND or previous.get("schema") != 1:
         raise ValueError("Core baseline отсутствует; сначала установите новый updater через loader")
     if tuple(map(int, manifest["version"].split("."))) <= tuple(map(int, previous["version"].split("."))):
         raise ValueError("Core пакет не новее установленной версии")
-    old_files = {row["path"]: row for row in previous["files"]}
+    old_files = ({row["path"]: row for row in previous["files"]} if replacement is None
+                 else replacement["installationFiles"])
+    confirmed_files = {row["path"]: row for row in previous["files"]}
     selected = validate_config_resets([] if reset_configs is None else reset_configs)
     for key in selected:
-        if key not in old_files:
-            raise ValueError(f"Файл сброса отсутствует в установленном выпуске: {key}")
+        if key not in old_files and key not in confirmed_files:
+            raise ValueError(f"Файл сброса отсутствует в управляемой установке: {key}")
     entries, installed = [], []
-    for index, key in enumerate(sorted(payload.keys() | old_files.keys())):
+    keys = payload.keys() | old_files.keys()
+    if replacement is not None:
+        keys |= confirmed_files.keys()
+    for index, key in enumerate(sorted(keys)):
         path = destination(key, locations)
         old, info = read_file(path)
         if key in selected and (old is None or sha(old) != selected[key]):
             raise ValueError(f"Файл изменился после выбора сброса: {key}; повторите проверку")
-        if old is not None and key in old_files and key not in selected and not matches_managed_file(key, old, old_files[key]["runtimeSha256"]):
+        known = [files[key]["runtimeSha256"] for files in (confirmed_files, old_files) if key in files]
+        if old is not None and key not in selected and not any(
+                matches_managed_file(key, old, expected) for expected in known):
+            if key not in old_files and key not in confirmed_files:
+                raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
             raise ValueError(f"Локально изменён управляемый файл: {key}; выберите сброс при обновлении")
-        if old is not None and key not in old_files:
+        if old is not None and key not in old_files and key not in confirmed_files:
             raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
         backup = str(index)
         if old is not None:
@@ -906,6 +1327,8 @@ def prepare(manifest, payload, env, journal, reset_configs=None):
         entry = {"path": key, "backup": backup, "existed": old is not None,
                  "mode": stat.S_IMODE(info.st_mode) if info else 0o644,
                  "uid": info.st_uid if info else 0, "gid": info.st_gid if info else 0}
+        if key in selected:
+            entry["resetSha256"] = selected[key]
         data = render(key, payload[key], old, env) if key in payload else None
         if data is not None:
             write_file(journal.parent / (backup + ".new"), data, mode=0o600)
@@ -915,23 +1338,45 @@ def prepare(manifest, payload, env, journal, reset_configs=None):
     write_json(journal.parent / "manifest.before.json", previous)
     current = dict(manifest, files=installed)
     write_json(journal.parent / "manifest.new.json", current)
-    write_json(journal, {"schema": 1, "stage": "validated", "entries": entries})
+    transaction = {"schema": 1, "stage": "validated", "operationId": journal.parent.name,
+                   "targetTag": manifest["tag"], "entries": entries,
+                   "resetConfigs": reset_configs or []}
+    if replacement is not None:
+        write_json(journal.parent / "manifest.installation-base.json", replacement["installationBase"])
+        transaction.update(forwardOnly=True, provisioningStarted=False,
+                           supersedesOperationId=replacement["oldOperationId"],
+                           supersedesTargetTag=replacement["oldTargetTag"],
+                           supersededResetConfigs=replacement["auditResetConfigs"])
+    write_json(journal, transaction)
     return current
 
 
 def stop_for_recovery():
+    gate_ready = False
     try:
         update_admission("BEGIN")
+        gate_ready = True
     except Exception:
         # Moonraker может работать при остановленном Klipper: печать невозможна.
         if not services_inactive(("klipper.service",)):
             raise RuntimeError("Recovery остановлена: admission gate недоступен, а Klipper не подтверждён как остановленный")
+    if gate_ready:
+        try:
+            stop_heating()
+        except Exception as heater_error:
+            try:
+                update_admission("END")
+            except Exception as release_error:
+                raise RuntimeError(f"Recovery не смогла снять admission gate: {release_error}") from heater_error
+            raise RuntimeError(f"Recovery остановлена до выключения нагрева: {heater_error}") from heater_error
     services("stop")
     if not services_inactive():
         raise RuntimeError("Recovery остановлена: systemd не подтвердил остановку Klipper и Moonraker")
 
 
 def rollback(env, journal, transaction):
+    if transaction.get("forwardOnly") is True:
+        raise ValueError("Forward-only core transition нельзя откатывать по отдельным файлам")
     # До начала записи rollback не должен затирать более свежие ручные правки.
     # Старые journal со stage=prepared сохраняют прежний recovery-контракт.
     if transaction["stage"] in {"validated", "aborted"}:
@@ -974,6 +1419,223 @@ def rollback(env, journal, transaction):
             "message": "Предыдущие компоненты TreeD восстановлены и проверены."}
 
 
+def validate_forward_only(journal, transaction, env, check_current=True):
+    if (transaction.get("schema") != 1 or transaction.get("forwardOnly") is not True
+            or transaction.get("operationId") != journal.parent.name
+            or transaction.get("stage") not in {
+                "validated", "installing", "provisioning", "provisioning_failed", "provisioned", "committed"}):
+        raise ValueError("Forward-only journal повреждён или имеет неизвестную стадию")
+    expected_path = journal.parent / "manifest.new.json"
+    confirmed_path = journal.parent / "manifest.before.json"
+    base_path = journal.parent / "manifest.installation-base.json"
+    if any(path.is_symlink() or not path.is_file() for path in (expected_path, confirmed_path, base_path)):
+        raise ValueError("Forward-only journal manifest отсутствует или небезопасен")
+    expected = read_json(expected_path)
+    target_files = validate_target_manifest(expected, transaction.get("targetTag"))
+    confirmed = read_json(confirmed_path)
+    validate_target_manifest(confirmed, require_provisioning=False)
+    base = read_json(base_path)
+    base_files = validate_target_manifest(base, transaction.get("supersedesTargetTag"))
+    linked = replacement_context({
+        "supersedesOperationId": transaction.get("supersedesOperationId"),
+        "supersedesTargetTag": transaction.get("supersedesTargetTag"),
+        "supersededResetConfigs": transaction.get("supersededResetConfigs"),
+    }, journal.parent.name, expected.get("tag"), env, check_confirmed=False)
+    if (linked is None or linked["installationBase"] != base or linked["confirmedBase"] != confirmed
+            or transaction.get("supersedesOperationId") == journal.parent.name
+            or str(uuid.UUID(str(transaction.get("supersedesOperationId")))) != transaction.get("supersedesOperationId")
+            or tuple(map(int, expected["version"].split("."))) <= tuple(map(int, base["version"].split(".")))
+            or read_json(manifest_path(env)) not in (confirmed, expected)):
+        raise ValueError("Forward-only journal linkage или confirmed baseline повреждены")
+    audit_resets = transaction.get("supersededResetConfigs")
+    validate_config_resets(audit_resets)
+    selected = validate_config_resets(transaction.get("resetConfigs", []))
+    entries = transaction.get("entries")
+    if not isinstance(entries, list) or not entries or len(entries) > 256:
+        raise ValueError("Forward-only journal содержит неверные entries")
+    entry_map, backups = {}, set()
+    locations = roots(env)
+    for row in entries:
+        if not isinstance(row, dict):
+            raise ValueError("Forward-only journal содержит неверную entry")
+        key, backup = row.get("path"), row.get("backup")
+        allowed(key)
+        if (key in entry_map or not isinstance(backup, str) or re.fullmatch(r"[0-9]+", backup) is None
+                or backup in backups or not isinstance(row.get("existed"), bool)
+                or not isinstance(row.get("delete"), bool)):
+            raise ValueError("Forward-only journal содержит некорректный путь или backup")
+        mode, uid, gid = row.get("mode"), row.get("uid"), row.get("gid")
+        if (not isinstance(mode, int) or isinstance(mode, bool) or mode < 0 or mode > 0o7777
+                or any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+                       for value in (uid, gid))):
+            raise ValueError("Forward-only journal содержит некорректные права файла")
+        if "resetSha256" in row and (row["path"] not in selected
+                or row["resetSha256"] != selected[row["path"]]):
+            raise ValueError("Forward-only reset consent не совпадает с journal")
+        backup_path = journal.parent / backup
+        staged_path = journal.parent / (backup + ".new")
+        if row["existed"] and (backup_path.is_symlink() or not backup_path.is_file()):
+            raise ValueError("Forward-only backup отсутствует или небезопасен")
+        if row["delete"]:
+            if key in target_files or key not in base_files and key not in {r["path"] for r in confirmed["files"]}:
+                raise ValueError("Forward-only delete выходит за known managed paths")
+            if staged_path.exists() or staged_path.is_symlink():
+                raise ValueError("Forward-only delete имеет неожиданный staged файл")
+        else:
+            if staged_path.is_symlink() or not staged_path.is_file() or key not in target_files:
+                raise ValueError("Forward-only staged target отсутствует или небезопасен")
+            if not matches_managed_file(key, staged_path.read_bytes(), target_files[key]["runtimeSha256"]):
+                raise ValueError("Forward-only staged target не совпадает с manifest hash")
+        entry_map[key] = row
+        backups.add(backup)
+    if set(entry_map) != set(target_files) | set(base_files) | {r["path"] for r in confirmed["files"]}:
+        raise ValueError("Forward-only entries не совпадают с target/base file sets")
+    if {key for key, row in entry_map.items() if not row["delete"]} != set(target_files):
+        raise ValueError("Forward-only staged files не совпадают с target manifest")
+    if check_current:
+        confirmed_files = {item["path"]: item for item in confirmed["files"]}
+        for key, row in entry_map.items():
+            actual, _info = read_file(destination(key, locations))
+            if actual is None:
+                if row["existed"] and not row["delete"]:
+                    raise ValueError(f"Forward-only managed file исчез после остановки: {key}")
+                if row["delete"]:
+                    continue
+            else:
+                hashes = [files[key]["runtimeSha256"] for files in
+                          (confirmed_files, base_files, target_files) if key in files]
+                if (not any(matches_managed_file(key, actual, digest) for digest in hashes)
+                        and sha(actual) != selected.get(key)):
+                    raise ValueError(f"Forward-only текущий файл изменён после подготовки: {key}")
+    return expected, confirmed, base, entry_map
+
+
+def validate_saved_source(journal, expected):
+    try:
+        return _validate_saved_source(journal, expected)
+    except (zipfile.BadZipFile, EOFError, zlib.error) as error:
+        raise ValidationError("Forward-only source archive повреждён") from error
+
+
+def _validate_saved_source(journal, expected):
+    archive_path = journal.parent / SOURCE_ASSET
+    source = journal.parent / "source"
+    if (archive_path.is_symlink() or not archive_path.is_file() or source.is_symlink()
+            or not source.is_dir()):
+        raise ValueError("Forward-only source package отсутствует или небезопасен")
+    archived = set()
+    with zipfile.ZipFile(archive_path) as bundle:
+        infos = bundle.infolist()
+        names = [row.filename for row in infos]
+        if (len(names) != len(set(names)) or len(names) > 4096
+                or sum(row.file_size for row in infos) > MAX_CONTENT
+                or any(stat.S_ISLNK(row.external_attr >> 16) for row in infos)):
+            raise ValueError("Forward-only source archive повреждён")
+        for row in infos:
+            name = row.filename
+            path = PurePosixPath(name)
+            canonical = path.as_posix() + ("/" if row.is_dir() else "")
+            if (not name or canonical != name or path.is_absolute() or "\\" in name
+                    or ".." in path.parts or name.startswith("/")):
+                raise ValueError("Forward-only source archive содержит небезопасный путь")
+            if row.is_dir():
+                continue
+            archived.add(name)
+            saved = source.joinpath(*path.parts)
+            if saved.is_symlink() or not saved.is_file() or saved.read_bytes() != bundle.read(row):
+                raise ValueError("Forward-only extracted source повреждён: " + name)
+    source_paths = list(source.rglob("*"))
+    extracted = {path.relative_to(source).as_posix() for path in source_paths if path.is_file()}
+    if (extracted != archived or any(path.is_symlink() for path in source_paths)
+            or (source / "loader/loader.sh").is_symlink()):
+        raise ValueError("Forward-only extracted source file set изменён")
+    if (source / "VERSION").read_text(encoding="utf-8").strip() != expected["version"]:
+        raise ValueError("Forward-only source VERSION не совпадает с target")
+    source_provisioning = package_manifest_for_source(source, expected)["provisioning"]
+    target_provisioning = expected["provisioning"]
+    if (source_provisioning["revision"] != target_provisioning["revision"]
+            or "managedRevision" in target_provisioning and (
+                source_provisioning.get("managedRevision") != target_provisioning.get("managedRevision")
+                or source_provisioning.get("steps") != target_provisioning.get("steps"))):
+        raise ValueError("Forward-only source metadata не совпадает с target")
+    return source
+
+
+def install_entries(entries, journal, env, uid, gid, replay=False, target_files=None):
+    locations = roots(env)
+    for row in entries:
+        path = destination(row["path"], locations)
+        if row["delete"]:
+            remove_file(path)
+            continue
+        staged = journal.parent / (row["backup"] + ".new")
+        data, _info = read_file(staged)
+        if data is None:
+            raise ValueError("Core staged файл отсутствует")
+        if replay and row["path"] == "config/printer.cfg":
+            current, _current_info = read_file(path)
+            if current is not None and MARKER in current:
+                data = render(row["path"], data, current, env)
+                if target_files is None or not matches_managed_file(
+                        row["path"], data, target_files[row["path"]]["runtimeSha256"]):
+                    raise ValueError("SAVE_CONFIG replay изменил target printer.cfg")
+                write_file(staged, data, mode=0o600)
+        system = row["path"].startswith("sbin/")
+        executable = system or row["path"].startswith("camera/") and row["path"].endswith(".sh")
+        write_file(path, data, 0o755 if executable else 0o644,
+                   0 if system else uid, 0 if system else gid)
+
+
+def recover_forward_only(env, operation, journal, transaction):
+    expected, confirmed, _base, entry_map = validate_forward_only(journal, transaction, env)
+    validate_saved_source(journal, expected)
+    if transaction["stage"] == "committed":
+        if read_json(manifest_path(env)) == expected:
+            check_compatibility(expected, env, expected)
+            verify_runtime_files(expected, env)
+        if read_json(manifest_path(env)) == expected and wait_ready(expected):
+            return {"status": "applied", "resultCode": "core_updated_recovered",
+                    "message": "Готовность установленного TreeD Core после replacement подтверждена."}
+        return {"status": "error", "resultCode": "provisioning_interrupted",
+                "message": "Forward-only target committed, но readiness не подтверждена; откат запрещён."}
+    stop_for_recovery()
+    expected, confirmed, _base, entry_map = validate_forward_only(journal, transaction, env)
+    validate_saved_source(journal, expected)
+    transaction.update(stage="installing", provisioningStarted=False)
+    write_json(journal, transaction)
+    target_files = {row["path"]: row for row in expected["files"]}
+    install_entries(list(entry_map.values()), journal, env, *owner(env),
+                    replay=True, target_files=target_files)
+    clear_bytecode(list(entry_map.values()), roots(env))
+    transaction.update(stage="provisioning", provisioningStarted=True)
+    write_json(journal, transaction)
+    phase("installing", "Продолжаем replacement core только вперёд по проверенному journal.")
+    if provision_runtime(env, journal, operation):
+        transaction["stage"] = "provisioning_failed"
+        write_json(journal, transaction)
+        try:
+            update_admission("END")
+        except Exception as release_error:
+            print(f"Core replacement admission release failed: {release_error}", file=sys.stderr)
+        return {"status": "error", "resultCode": "provisioning_failed",
+                "message": "Replacement provisioning не завершён; журнал сохранён для forward recovery."}
+    check_compatibility(expected, env, expected)
+    if not vision_units_installed():
+        raise RuntimeError("Replacement loader завершился без обязательных runtime units")
+    verify_runtime_files(expected, env)
+    if not wait_ready(expected):
+        raise RuntimeError("Replacement target не прошёл readiness; file-only rollback запрещён")
+    write_json(manifest_path(env), expected)
+    transaction.update(stage="committed", provisioningStarted=True)
+    write_json(journal, transaction)
+    try:
+        update_admission("END")
+    except Exception as release_error:
+        raise RuntimeError(f"Replacement готов, но admission gate не снят: {release_error}") from release_error
+    return {"status": "applied", "resultCode": "core_updated_recovered",
+            "message": "Исправленный core target установлен и readiness подтверждена."}
+
+
 def recover(env, operation):
     journal = journal_path(env, operation)
     transaction = read_json(journal) if journal.parent.exists() else None
@@ -982,6 +1644,8 @@ def recover(env, operation):
                 "message": "Обновление core прервано до изменения файлов."}
     if transaction.get("schema") != 1:
         raise ValueError("Неизвестный journal core")
+    if transaction.get("forwardOnly") is True:
+        return recover_forward_only(env, operation, journal, transaction)
     if transaction.get("provisioningStarted") or transaction.get("stage") in {
             "provisioning", "provisioning_failed", "provisioned"}:
         if transaction.get("stage") == "committed":
@@ -1000,8 +1664,13 @@ def recover(env, operation):
                         saved = source / row.filename
                         if saved.is_symlink() or saved.read_bytes() != bundle.read(row):
                             raise ValueError("Recovery source повреждён: " + row.filename)
+            source_provisioning = package_manifest_for_source(source, expected)["provisioning"]
+            expected_provisioning = expected["provisioning"]
             if ((source / "VERSION").read_text(encoding="utf-8").strip() != expected["version"]
-                    or package_manifest_for_source(source, expected)["provisioning"] != expected["provisioning"]):
+                    or source_provisioning["revision"] != expected_provisioning.get("revision")
+                    or "managedRevision" in expected_provisioning and (
+                        source_provisioning["managedRevision"] != expected_provisioning.get("managedRevision")
+                        or source_provisioning["steps"] != expected_provisioning.get("steps"))):
                 raise ValueError("Recovery source не соответствует сохранённому выпуску")
             verify_runtime_files(expected, env)
             stop_for_recovery()
@@ -1043,7 +1712,7 @@ def owner(env):
             grp.getgrnam(env["TREED_UPDATE_PI_GROUP"]).gr_gid)
 
 
-def apply(tag, operation, env, reset_configs=None):
+def apply(tag, operation, env, reset_configs=None, replacement=None):
     if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None:
         raise ValueError("Недопустимый тег core")
     journal = journal_path(env, operation)
@@ -1055,10 +1724,17 @@ def apply(tag, operation, env, reset_configs=None):
         download(tag, archive, env)
         manifest, payload = load_package(archive, tag)
         previous = read_json(manifest_path(env))
-        provision = "provisioning" in manifest
+        provision = "provisioning" in manifest or replacement is not None
         if provision:
-            check_upstream_clean(roots(env), previous)
-            provision = needs_provisioning(manifest, previous, env)
+            if replacement is not None:
+                if replacement["confirmedBase"] != previous:
+                    raise ValueError("Replacement confirmed baseline изменился перед apply")
+            if replacement is None:
+                check_upstream_clean(roots(env), previous)
+            else:
+                check_upstream_clean(roots(env), previous, reset_configs,
+                                     replacement["installationBase"])
+            provision = replacement is not None or needs_provisioning(manifest, previous, env)
             if provision:
                 source_archive = journal.parent / SOURCE_ASSET
                 with parent_fd(source_archive, create=True):
@@ -1072,41 +1748,38 @@ def apply(tag, operation, env, reset_configs=None):
         uid, gid = owner(env)
         if not provision and not vision_units_installed():
             raise ValueError("Локальный vision runtime ещё не установлен; сначала запустите loader")
-        if not idle():
-            raise ValueError("Core update требует готового принтера без активной печати или паузы")
-        prepare(manifest, payload, env, journal, reset_configs)
-    # BEGIN выполняется в последовательной очереди Klipper: проверка состояния
-    # и закрытие поддерживаемых входов печати происходят одной командой.
-    update_admission("BEGIN")
-    try:
-        stop_heating()
-    except Exception as heater_error:
+        if replacement is None and not idle():
+            raise PrinterNotReady("Core update требует готового принтера без активной печати или паузы")
+        prepare(manifest, payload, env, journal, reset_configs, replacement)
+    if replacement is not None:
+        stop_for_recovery()
+    else:
+        # BEGIN выполняется в последовательной очереди Klipper до остановки сервисов.
+        update_admission("BEGIN")
         try:
-            update_admission("END")
-        except Exception as release_error:
-            print(f"Core update admission release failed: {release_error}", file=sys.stderr)
-            raise RuntimeError(f"{heater_error}; admission gate may remain active: {release_error}") from heater_error
-        raise
+            stop_heating()
+        except Exception as heater_error:
+            try:
+                update_admission("END")
+            except Exception as release_error:
+                print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+                raise RuntimeError(f"{heater_error}; admission gate may remain active: {release_error}") from heater_error
+            raise
     try:
         phase("installing", "Устанавливаем компоненты TreeD; локальные настройки сохраняются.")
-        services("stop")
-        if not services_inactive():
-            raise RuntimeError("Core update остановлена: systemd не подтвердил остановку Klipper и Moonraker")
+        if replacement is None:
+            services("stop")
+            if not services_inactive():
+                raise RuntimeError("Core update остановлена: systemd не подтвердил остановку Klipper и Moonraker")
         # После остановки Klipper SAVE_CONFIG уже не может изменяться.
         # Переподготовка также подхватывает последнее сохранение до остановки.
-        current = prepare(manifest, payload, env, journal, reset_configs)
+        current = prepare(manifest, payload, env, journal, reset_configs, replacement)
         transaction = read_json(journal)
         transaction["stage"] = "installing"
+        if replacement is not None:
+            transaction["provisioningStarted"] = False
         write_json(journal, transaction)
-        for row in transaction["entries"]:
-            path = destination(row["path"], roots(env))
-            if row["delete"]:
-                remove_file(path)
-            else:
-                data, _info = read_file(journal.parent / (row["backup"] + ".new"))
-                system = row["path"].startswith("sbin/")
-                executable = system or row["path"].startswith("camera/") and row["path"].endswith(".sh")
-                write_file(path, data, 0o755 if executable else 0o644, 0 if system else uid, 0 if system else gid)
+        install_entries(transaction["entries"], journal, env, uid, gid)
         clear_bytecode(transaction["entries"], roots(env))
         if provision:
             transaction["stage"] = "provisioning"
@@ -1145,6 +1818,15 @@ def apply(tag, operation, env, reset_configs=None):
     except Exception as error:
         print(f"Core update failed: {error}", file=sys.stderr)
         transaction = read_json(journal)
+        if transaction and transaction.get("forwardOnly") is True:
+            if transaction.get("provisioningStarted") or transaction.get("stage") in {
+                    "provisioning", "provisioning_failed", "provisioned"}:
+                transaction["stage"] = "provisioning_failed"
+                write_json(journal, transaction)
+                return {"status": "error", "resultCode": "provisioning_failed",
+                        "message": "Replacement provisioning не подтверждён; журнал сохранён для forward recovery."}
+            return {"status": "error", "resultCode": "core_update_failed",
+                    "message": "Replacement остановлен до подтверждения target; file-only rollback запрещён."}
         if transaction and (transaction.get("provisioningStarted") or transaction.get("stage") in {
                 "provisioning", "provisioning_failed", "provisioned"}):
             transaction["stage"] = "provisioning_failed"
@@ -1188,22 +1870,23 @@ def main(argv):
         print(json.dumps({"tag": manifest["tag"]}))
         return 0
     if len(argv) == 3 and argv[1] == "baseline":
-        import fcntl
-        lock_path = Path(env.get("TREED_UPDATE_LOCK_FILE", "/run/lock/treed-update.lock"))
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock = acquire_loader_update_lock(env)
+        try:
             state = read_json(Path(env.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json")))
             if state and state.get("busy"):
                 raise ValueError("Baseline запрещён при незавершённом обновлении")
             baseline(Path(argv[2]).resolve(), env)
+        finally:
+            if lock is not None:
+                lock.close()
         return 0
     if len(argv) == 4 and argv[1] == "apply":
         state = read_json(Path(env.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json")))
         if (not state or state.get("busy") is not True or state.get("targetId") != "printer-core"
                 or state.get("operationId") != argv[3] or state.get("targetTag") != argv[2]):
             raise ValueError("Core apply требует активную операцию worker")
-        result = apply(argv[2], argv[3], env, state.get("resetConfigs", []))
+        replacement = replacement_context(state, argv[3], argv[2], env)
+        result = apply(argv[2], argv[3], env, state.get("resetConfigs", []), replacement)
     elif len(argv) == 3 and argv[1] == "recover":
         result = recover(env, argv[2])
     else:
@@ -1215,6 +1898,9 @@ def main(argv):
 if __name__ == "__main__":
     try:
         raise SystemExit(main(sys.argv))
+    except TransientDownloadError as error:
+        print(json.dumps(update_error_result(error), ensure_ascii=False))
+        raise SystemExit(1)
     except Exception as error:
-        print(json.dumps({"status": "error", "resultCode": "core_update_failed", "message": str(error)}, ensure_ascii=False))
+        print(json.dumps(update_error_result(error), ensure_ascii=False))
         raise SystemExit(1)

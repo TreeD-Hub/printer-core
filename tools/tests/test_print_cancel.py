@@ -31,6 +31,9 @@ class Command:
     def get_command(self):
         return self.name
 
+    def get_command_parameters(self):
+        return self.params
+
     def get(self, key, default=None):
         if key not in self.params:
             if default is not None:
@@ -311,6 +314,63 @@ class Rig:
 
 class PrintCancelTests(unittest.TestCase):
     # Блок 3: Прерывание, валидация и восстановление после отмены.
+    def test_cancel_unwinds_motion_guard_without_shutdown(self):
+        spec = importlib.util.spec_from_file_location(
+            'treed_motor_guard', root / 'klipper-host/treed_motor_guard.py')
+        guard_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard_module)
+        for route in ('wipe_wait', 'service_move'):
+            with self.subTest(route=route):
+                rig = Rig()
+                toolhead = rig.objects['toolhead']
+                toolhead.max_velocity, toolhead.max_accel = 180., 25000.
+                toolhead.square_corner_velocity, toolhead.min_cruise_ratio = 5., .5
+                def set_limits(v, a, scv, cruise):
+                    for key, value in zip(('max_velocity', 'max_accel', 'square_corner_velocity', 'min_cruise_ratio'),
+                                          (v, a, scv, cruise)):
+                        if value is not None:
+                            setattr(toolhead, key, value)
+                toolhead.set_max_velocities = set_limits
+                rig.objects['gcode_move'].absolute_coord = True
+                rig.objects['gcode_move'].speed_factor = 1. / 60.
+                state = SimpleNamespace(variables={'state_saved': 0, 'saved_accel': 0.})
+                rig.objects['gcode_macro _TREED_START_PURGE_CFG'] = state
+                rig.objects['treed_driver_mode'] = SimpleNamespace(
+                    state='ready', mode='quiet', needs_restart=False, motion={'park_velocity': 100.})
+                rig.objects['treed_print_cancel'] = rig.extra
+                guard_module.load_config(SimpleNamespace(get_printer=lambda: rig))
+                restored = []
+                def cleanup(_command):
+                    restored.append('wipe')
+                    state.variables.update(state_saved=0, saved_accel=0.)
+                rig.gcode.register_command('_TREED_PURGE_RESTORE_STATE', cleanup)
+                if route == 'wipe_wait':
+                    def prepare(_command):
+                        state.variables.update(state_saved=1, saved_accel=25000.)
+                        toolhead.max_accel = 12500.
+                        rig.gcode.run_script_from_command('M190\nPURGE')
+                    rig.gcode.register_command('_TREED_START_NOZZLE_WIPE_PREP', prepare)
+                    script, event = 'TREED_MOTION_GUARD ACTION=START_WIPE\nPURGE', None
+                else:
+                    rig.gcode.register_command('SAVE_GCODE_STATE', lambda _cmd: None)
+                    rig.gcode.register_command('RESTORE_GCODE_STATE', lambda _cmd: restored.append('service'))
+                    rig.gcode.register_command('G1', lambda _cmd: rig.dispatch(Command('BLOCK_MOVE')))
+                    script, event = 'TREED_SERVICE_MOVE KIND=PARK X=10\nPURGE', rig.move_entered
+                worker, cancel, done, errors = rig.cancel_wait(script, event)
+                if route == 'service_move':
+                    self.assertTrue(rig.reactor.wake.wait(2.))
+                    rig.move_release.set()
+                worker.join(3.)
+                cancel.join(3.)
+                self.assertFalse(worker.is_alive() or cancel.is_alive())
+                self.assertTrue(done.is_set())
+                self.assertEqual(errors, [])
+                self.assertFalse(rig.shutdowns)
+                self.assertEqual(restored, ['wipe' if route == 'wipe_wait' else 'service'])
+                self.assertEqual(toolhead.max_accel, 25000.)
+                self.assertEqual(state.variables['state_saved'], 0)
+                self.assertNotIn('PURGE', rig.commands)
+
     def test_cancel_with_reason_interrupts_wait_and_preserves_parameter(self):
         rig = Rig()
         worker, cancel, done, errors = rig.cancel_wait('M190\nPURGE',

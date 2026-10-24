@@ -95,6 +95,15 @@ class TreedPrintCancel:
             self.heaters.turn_off_all_heaters()
             raise PrintCancelled('TreeD: выполнение прервано отменой печати')
 
+    def run_state_cleanup(self, script):
+        # Guard ещё держит G-code mutex: отмена не должна прерывать его возврат state.
+        previous = self.cleanup_active
+        self.cleanup_active = True
+        try:
+            return self.gcode.run_script_from_command(script)
+        finally:
+            self.cleanup_active = previous
+
     def _run_script_from_command(self, script):
         for line in script.split('\n'):
             self._check_cancel()

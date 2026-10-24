@@ -663,7 +663,7 @@ class RecoveryTests(unittest.TestCase):
         correction = eddy.split('[gcode_macro SET_Z_FROM_PROBE]')[1].split('[gcode_macro')[0]
         self.assertLess(home.index('_TREED_Z_TRAVEL_BEGIN'), home.index('G28.1 Z'))
         self.assertLess(correction.index('_RELOAD_Z_OFFSET_FROM_PROBE'), correction.index('_TREED_Z_TRAVEL_APPLY'))
-        self.assertLess(correction.index('_TREED_Z_TRAVEL_APPLY'), correction.index('G1 Z{cfg.z_hop'))
+        self.assertLess(correction.index('_TREED_Z_TRAVEL_APPLY'), correction.index('TREED_SERVICE_MOVE KIND=Z_TRAVEL Z={cfg.z_hop'))
         self.assertIn('z_recovery.cfg]', (ROOT / 'klipper/printer.cfg').read_text(encoding='utf-8'))
         loader = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
         self.assertIn('klipper-host/treed_z_recovery.py', loader)

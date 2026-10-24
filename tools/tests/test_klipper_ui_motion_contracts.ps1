@@ -49,10 +49,10 @@ Assert-Contains $motion 'FEEDRATE < 60 or FEEDRATE > MAX_FEEDRATE' "motion macro
 # Блок 4: Изоляция parser state и axis-specific move.
 Assert-Contains $motion '(?m)^\s*SAVE_GCODE_STATE NAME=TREED_UI_MOVE_AXIS_STATE\s*$' "motion macro must save G-code state"
 Assert-Contains $motion '(?m)^\s*G91\s*$' "motion macro must use relative mode locally"
-Assert-Contains $motion '(?m)^\s*G1 X\{DISTANCE\} F\{move_feedrate\}\s*$' "motion macro must map capped X move"
-Assert-Contains $motion '(?m)^\s*G1 Y\{DISTANCE\} F\{move_feedrate\}\s*$' "motion macro must map capped Y move"
-Assert-Contains $motion '(?m)^\s*G1 Z\{DISTANCE\} F\{FEEDRATE\}\s*$' "motion macro must map Z move"
-Assert-Contains $motion 'printer\.treed_driver_mode\.service_velocity_limit\|float \* 60\.0 / printer\.gcode_move\.speed_factor\|float' "quiet XY feed must preserve the 50 mm/s cap under M220"
+Assert-Contains $motion '(?m)^\s*TREED_SERVICE_MOVE KIND=TRAVEL X=\{DISTANCE\} SPEED=\{FEEDRATE / 60\.0\}\s*$' "motion macro must map X feedrate to the shared helper"
+Assert-Contains $motion '(?m)^\s*TREED_SERVICE_MOVE KIND=TRAVEL Y=\{DISTANCE\} SPEED=\{FEEDRATE / 60\.0\}\s*$' "motion macro must map Y feedrate to the shared helper"
+Assert-Contains $motion '(?m)^\s*TREED_SERVICE_MOVE KIND=Z_TRAVEL Z=\{DISTANCE\} SPEED=\{FEEDRATE / 60\.0\}\s*$' "motion macro must map Z feedrate to the shared helper"
+Assert-Contains $motion 'FEEDRATE / 60\.0' "UI feedrate must remain in mm/min at the public boundary"
 Assert-Contains $motion '(?m)^\s*RESTORE_GCODE_STATE NAME=TREED_UI_MOVE_AXIS_STATE MOVE=0\s*$' "motion macro must restore G-code state"
 
 Write-Host "PASS: Klipper UI motion contract"

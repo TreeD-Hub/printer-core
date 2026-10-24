@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -39,10 +40,272 @@ TARGET_RE = {
 ACTIVE = {"queued", "validating", "downloading", "installing", "restarting", "verifying", "rolling_back"}
 TERMINAL = {"applied", "error", "rolled_back", "rejected"}
 PHASES = ACTIVE | TERMINAL | {"idle"}
+RETRYABLE_CORE_CODES = {"provisioning_failed", "provisioning_interrupted", "core_update_failed",
+                        "core_download_failed", "core_not_ready"}
+FRESH_CORE_RETRY_CODES = {"core_download_failed", "core_not_ready"}
+RETRY_DELAYS = (30, 120, 300)
 
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def core_journal(state: Dict[str, Any]) -> Path:
+    return Path(os.environ.get("TREED_CORE_STATE_DIR", "/var/lib/treed-update/core")) / str(state.get("operationId", "")) / "journal.json"
+
+
+def core_supersede_eligible(state: Dict[str, Any], target_tag: str | None = None) -> bool:
+    """Read-only root eligibility check; core updater repeats all transaction checks."""
+    if (state.get("targetId") != "printer-core" or state.get("status") != "error"
+            or state.get("busy") is True or not isinstance(state.get("targetTag"), str)
+            or target_tag is not None and not TARGET_RE["printer-core"].fullmatch(target_tag)):
+        return False
+    old_match = TARGET_RE["printer-core"].fullmatch(state["targetTag"])
+    if not old_match or target_tag is not None and tuple(map(int, target_tag[1:].split("."))) <= tuple(
+            map(int, state["targetTag"][1:].split("."))):
+        return False
+    try:
+        uuid.UUID(str(state.get("operationId", "")))
+    except (TypeError, ValueError):
+        return False
+    journal = core_journal(state)
+    if (journal.is_symlink() or journal.parent.is_symlink() or journal.parent.parent.is_symlink()
+            or not journal.is_file()):
+        return False
+    try:
+        transaction = json.loads(journal.read_text(encoding="utf-8"))
+        manifest_path = journal.with_name("manifest.new.json")
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            return False
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if (not isinstance(transaction, dict) or not isinstance(transaction.get("schema"), int)
+            or isinstance(transaction.get("schema"), bool) or transaction.get("schema") != 1
+            or not (transaction.get("provisioningStarted") is True or transaction.get("stage") in {
+                "provisioning", "provisioning_failed", "provisioned"})
+            or not isinstance(manifest, dict) or not isinstance(manifest.get("schema"), int)
+            or isinstance(manifest.get("schema"), bool) or manifest.get("schema") != 1
+            or manifest.get("kind") != "treed-core-runtime"
+            or manifest.get("version") != state["targetTag"][1:]
+            or not isinstance(manifest.get("files"), list) or not manifest["files"]):
+        return False
+    paths = set()
+    for row in manifest["files"]:
+        if (not isinstance(row, dict) or not isinstance(row.get("path"), str)
+                or row["path"] in paths or not isinstance(row.get("runtimeSha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", row["runtimeSha256"])):
+            return False
+        paths.add(row["path"])
+    return True
+
+
+def add_supersede_status(state: Dict[str, Any]) -> None:
+    if core_supersede_eligible(state) or (
+            state.get("status") == "error" and corrective_replacement_context(state)):
+        state["canSupersedeCore"] = True
+    else:
+        state.pop("canSupersedeCore", None)
+
+
+def corrective_replacement_context(state: Dict[str, Any]) -> bool:
+    old_id = state.get("supersedesOperationId")
+    old_tag = state.get("supersedesTargetTag")
+    safe_error = (state.get("status") == "error" and state.get("busy") is not True
+                  and state.get("resultCode") in {
+                      "core_download_failed", "core_not_ready", "corrective_precondition_deferred",
+                      "service_start_failed"}
+                  or state.get("status") == "error" and state.get("busy") is not True
+                  and state.get("resultCode") == "core_validation_failed"
+                  and state.get("lastFailurePhase") in {"queued", "validating", "downloading"})
+    safe_queue = (state.get("status") == "queued" and state.get("busy") is True
+                  and (state.get("resultCode") in {None, "corrective_precondition_deferred"}
+                       or state.get("resultCode") in FRESH_CORE_RETRY_CODES
+                       and automatic_fresh_retry_context(state)))
+    if (not (safe_error or safe_queue) or state.get("targetId") != "printer-core"
+            or not isinstance(old_id, str)
+            or not TARGET_RE["printer-core"].fullmatch(old_tag if isinstance(old_tag, str) else "")
+            or not TARGET_RE["printer-core"].fullmatch(str(state.get("targetTag", "")))
+            or not isinstance(state.get("supersededResetConfigs"), list)):
+        return False
+    try:
+        uuid.UUID(old_id)
+        uuid.UUID(str(state.get("operationId", "")))
+    except (TypeError, ValueError):
+        return False
+    old_state = {"operationId": old_id, "targetId": "printer-core", "targetTag": old_tag,
+                 "status": "error", "busy": False}
+    journal = core_journal(state)
+    return (core_supersede_eligible(old_state, state["targetTag"])
+            and not journal.is_symlink() and not journal.parent.is_symlink() and not journal.exists())
+
+
+def klipper_confirmed_inactive() -> bool:
+    try:
+        result = subprocess.run(["systemctl", "show", "--property=ActiveState", "--value",
+                                 "klipper.service"], capture_output=True, text=True,
+                                check=False, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and result.stdout.strip() in {"inactive", "failed"}
+
+
+def corrective_admission_safe() -> bool:
+    job = printer_job_state()
+    return corrective_admission_for_job(job)
+
+
+def corrective_admission_for_job(job: Optional[str]) -> bool:
+    if job in {"printing", "paused"}:
+        return False
+    if job in {"standby", "complete", "cancelled", "error"}:
+        return True
+    return klipper_confirmed_inactive()
+
+
+def defer_corrective_replacement(state: Dict[str, Any]) -> None:
+    if not corrective_replacement_context(state):
+        return
+    scheduled = datetime.now(timezone.utc)
+    previous = state.get("retry")
+    attempts = previous.get("attempts") if isinstance(previous, dict) else None
+    if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1:
+        attempts = 1
+    state["retry"] = {
+        "attempts": attempts,
+        "scheduledAt": scheduled.isoformat().replace("+00:00", "Z"),
+        "nextAttemptAt": datetime.fromtimestamp(
+            scheduled.timestamp() + RETRY_DELAYS[0], timezone.utc).isoformat().replace("+00:00", "Z"),
+        "exhausted": False,
+        "lastResultCode": "corrective_precondition_deferred",
+    }
+    state.update(status="error", phase="error", busy=False, progress=None,
+                 resultCode="corrective_precondition_deferred",
+                 canSupersedeCore=True,
+                 message="Замена прерванного обновления отложена до подтверждения безопасного состояния принтера.",
+                 updatedAt=state["retry"]["scheduledAt"], finishedAt=state["retry"]["scheduledAt"])
+    write_state(state)
+
+
+def retryable_core_error(state: Dict[str, Any]) -> bool:
+    code = state.get("resultCode")
+    if state.get("targetId") != "printer-core" or state.get("status") != "error":
+        return False
+    if code == "corrective_precondition_deferred":
+        return corrective_replacement_context(state)
+    if code not in RETRYABLE_CORE_CODES:
+        return False
+    journal = core_journal(state)
+    return journal.is_file() or code in FRESH_CORE_RETRY_CODES and not journal.exists() and not journal.is_symlink()
+
+
+def automatic_fresh_retry_context(state: Dict[str, Any]) -> bool:
+    retry = state.get("retry")
+    if (state.get("targetId") != "printer-core" or state.get("busy") is not True
+            or state.get("resultCode") not in FRESH_CORE_RETRY_CODES or state.get("resumeCore")
+            or not isinstance(retry, dict) or retry.get("exhausted") is not False
+            or retry.get("nextAttemptAt") is not None or retry.get("lastResultCode") not in FRESH_CORE_RETRY_CODES
+            or not isinstance(retry.get("attempts"), int) or isinstance(retry.get("attempts"), bool)
+            or not 1 <= retry["attempts"] <= len(RETRY_DELAYS)
+            or not isinstance(retry.get("scheduledAt"), str)):
+        return False
+    generation = state.get("attemptGeneration")
+    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+        return False
+    try:
+        uuid.UUID(str(state.get("operationId", "")))
+        scheduled = datetime.fromisoformat(retry["scheduledAt"].replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if scheduled.tzinfo is None:
+        return False
+    journal = core_journal(state)
+    return not journal.is_symlink() and not journal.parent.is_symlink() and not journal.exists()
+
+
+def automatic_fresh_retry_pre_mutation(state: Dict[str, Any]) -> bool:
+    return (state.get("status") in {"queued", "validating", "downloading"}
+            and state.get("phase") == state.get("status")
+            and automatic_fresh_retry_context(state))
+
+
+def schedule_retry(state: Dict[str, Any]) -> bool:
+    if not retryable_core_error(state):
+        return False
+    retry = state.get("retry")
+    if "retry" not in state:
+        attempts = 0
+    else:
+        retry = state["retry"]
+        if (not isinstance(retry, dict) or retry.get("exhausted") is not False
+                or not isinstance(retry.get("attempts"), int)
+                or isinstance(retry.get("attempts"), bool) or retry["attempts"] < 1):
+            return False
+        attempts = retry["attempts"]
+    if isinstance(retry, dict) and (retry.get("nextAttemptAt") or retry.get("exhausted")):
+        return False
+    if attempts >= len(RETRY_DELAYS):
+        state["retry"] = {"attempts": attempts, "nextAttemptAt": None,
+                          "exhausted": True, "lastResultCode": state.get("resultCode")}
+        return True
+    scheduled_at = datetime.now(timezone.utc)
+    due = scheduled_at.timestamp() + RETRY_DELAYS[attempts]
+    state["retry"] = {"attempts": attempts + 1,
+                      "scheduledAt": scheduled_at.isoformat().replace("+00:00", "Z"),
+                      "nextAttemptAt": datetime.fromtimestamp(due, timezone.utc).isoformat().replace("+00:00", "Z"),
+                      "exhausted": False, "lastResultCode": state.get("resultCode")}
+    return True
+
+
+def retry_is_due(retry: Any) -> bool:
+    if (not isinstance(retry, dict) or retry.get("exhausted") is not False
+            or not isinstance(retry.get("attempts"), int) or isinstance(retry.get("attempts"), bool)
+            or not 1 <= retry["attempts"] <= len(RETRY_DELAYS)
+            or not isinstance(retry.get("scheduledAt"), str)
+            or not isinstance(retry.get("nextAttemptAt"), str)):
+        return False
+    try:
+        due = datetime.fromisoformat(retry["nextAttemptAt"].replace("Z", "+00:00"))
+        scheduled = datetime.fromisoformat(retry["scheduledAt"].replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if due.tzinfo is None or scheduled.tzinfo is None:
+        return False
+    current = datetime.now(timezone.utc)
+    # При большом откате часов ограничиваем ожидание максимальной штатной задержкой.
+    return (due <= current or (due - current).total_seconds() > max(RETRY_DELAYS)
+            or (scheduled - current).total_seconds() > max(RETRY_DELAYS))
+
+
+def context_matches(state: Dict[str, Any]) -> bool:
+    operation_id = os.environ.get("TREED_UPDATE_OPERATION_ID")
+    generation = os.environ.get("TREED_UPDATE_ATTEMPT_GENERATION")
+    return (operation_id is None and generation is None) or (
+        operation_id == str(state.get("operationId", ""))
+        and generation == str(state.get("attemptGeneration", 0))
+    )
+
+
+def inherited_lock_fd() -> int | None:
+    value = os.environ.get("TREED_UPDATE_LOCK_FD")
+    if value is None:
+        return None
+    if fcntl is None or not value.isdecimal():
+        raise RuntimeError("invalid inherited update lock descriptor")
+    descriptor = int(value)
+    try:
+        inherited = os.fstat(descriptor)
+        configured = LOCK.stat()
+    except OSError as error:
+        raise RuntimeError("inherited update lock descriptor is unavailable") from error
+    if (not stat.S_ISREG(inherited.st_mode) or inherited.st_dev != configured.st_dev
+            or inherited.st_ino != configured.st_ino):
+        raise RuntimeError("inherited descriptor does not match the update lock")
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError) as error:
+        raise RuntimeError("inherited update lock is not held exclusively") from error
+    return descriptor
 
 
 def read_state() -> Dict[str, Any]:
@@ -106,6 +369,8 @@ def response(state: Dict[str, Any], accepted: bool, duplicate: bool = False) -> 
         "message": state.get("message", "Другое обновление уже выполняется."),
         "targetId": state.get("targetId"),
         "targetTag": state.get("targetTag"),
+        "retry": state.get("retry"),
+        "canSupersedeCore": state.get("canSupersedeCore") is True,
     }
 
 
@@ -149,6 +414,49 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
         if state.get("requestId") == request_id:
             print(json.dumps(response(state, True, True), ensure_ascii=False))
             return 0
+        retry = state.get("retry") if isinstance(state.get("retry"), dict) else {}
+        replacement = False
+        fresh_after_download_error = False
+        old_core_recoverable = core_supersede_eligible(state)
+        existing_corrective = corrective_replacement_context(state)
+        replacement_anchor: tuple[str, str] | None = None
+        if target_id == "printer-core" and state.get("targetId") == "printer-core" \
+                and state.get("status") == "error" and state.get("busy") is not True \
+                and target_tag != state.get("targetTag"):
+            if core_supersede_eligible(state, target_tag):
+                replacement_anchor = (str(state["operationId"]), state["targetTag"])
+            elif (existing_corrective and (
+                    state.get("resultCode") in FRESH_CORE_RETRY_CODES | {
+                        "service_start_failed", "corrective_precondition_deferred"}
+                    or state.get("resultCode") == "core_validation_failed"
+                    and state.get("lastFailurePhase") in {"queued", "validating", "downloading"})
+                  and not core_journal(state).exists()
+                  and tuple(map(int, target_tag[1:].split("."))) > tuple(
+                      map(int, state["targetTag"][1:].split(".")))):
+                anchor_id = state["supersedesOperationId"]
+                anchor_tag = state["supersedesTargetTag"]
+                anchor_state = {"operationId": anchor_id, "targetId": "printer-core",
+                                "targetTag": anchor_tag, "status": "error", "busy": False}
+                if core_supersede_eligible(anchor_state, target_tag):
+                    replacement_anchor = (anchor_id, anchor_tag)
+            replacement = replacement_anchor is not None
+            journal = core_journal(state)
+            fresh_after_download_error = (
+                state.get("resultCode") == "core_download_failed" and not existing_corrective
+                and not journal.exists()
+                and not journal.is_symlink() and not journal.parent.is_symlink()
+                and TARGET_RE["printer-core"].fullmatch(str(state.get("targetTag", "")))
+                and tuple(map(int, target_tag[1:].split("."))) > tuple(
+                    map(int, state["targetTag"][1:].split(".")))
+            )
+            if not replacement and not fresh_after_download_error:
+                raise ValueError("Сначала восстановите сохранённый выпуск core")
+        if (old_core_recoverable and (target_id != "printer-core" or target_tag != state.get("targetTag"))
+                and not replacement):
+            raise ValueError("Сначала восстановите сохранённый выпуск core")
+        if retry.get("nextAttemptAt") and not retry.get("exhausted") and not replacement and not fresh_after_download_error:
+            print(json.dumps(response(state, False), ensure_ascii=False))
+            return 4
         if state.get("busy") is True or state.get("status") in ACTIVE:
             print(json.dumps(response(state, False), ensure_ascii=False))
             return 4
@@ -160,23 +468,45 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
             "targetId": target_id, "targetTag": target_tag,
             "startedAt": stamp, "updatedAt": stamp, "finishedAt": None,
             "busy": True, "history": state.get("history", [])[-9:],
+            "attemptGeneration": 0,
         }
         if ui_target_tag is not None:
             operation["pendingUiTag"] = ui_target_tag
+        elif target_id == "printer-core" and state.get("pendingUiTag"):
+            operation["pendingUiTag"] = state["pendingUiTag"]
         if reset_configs:
             operation["resetConfigs"] = reset_configs
         if (state.get("targetId") == "printer-core" and state.get("status") == "error"
-                and (state.get("resumeCore") or state.get("resultCode") in {
-                    "provisioning_failed", "provisioning_interrupted", "core_update_failed"})):
-            if target_id != "printer-core" or target_tag != state.get("targetTag"):
+                and (replacement or fresh_after_download_error or state.get("canSupersedeCore") is True
+                     or old_core_recoverable or state.get("resumeCore")
+                     or state.get("resultCode") in RETRYABLE_CORE_CODES)):
+            if replacement:
+                operation.update(
+                    supersedesOperationId=replacement_anchor[0],
+                    supersedesTargetTag=replacement_anchor[1],
+                    supersededResetConfigs=(state.get("supersededResetConfigs", [])
+                                            if existing_corrective else state.get("resetConfigs", [])),
+                )
+            elif fresh_after_download_error:
+                pass
+            elif target_id != "printer-core" or target_tag != state.get("targetTag"):
                 raise ValueError("Сначала повторите прерванное обновление core до сохранённого выпуска")
-            if reset_configs and reset_configs != state.get("resetConfigs", []):
+            elif reset_configs and reset_configs != state.get("resetConfigs", []):
                 raise ValueError("При восстановлении нельзя менять согласованный список сброса конфигов")
-            operation.update(operationId=state["operationId"], resumeCore=True)
-            if state.get("resetConfigs"):
-                operation["resetConfigs"] = state["resetConfigs"]
-            if state.get("pendingUiTag"):
-                operation["pendingUiTag"] = state["pendingUiTag"]
+            if not replacement and not fresh_after_download_error:
+                generation = state.get("attemptGeneration", 0)
+                if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
+                    raise ValueError("Некорректное поколение попытки обновления")
+                operation.update(operationId=state["operationId"], attemptGeneration=generation + 1,
+                                 resumeCore=core_journal(state).is_file())
+                operation.pop("retry", None)
+                if state.get("resetConfigs"):
+                    operation["resetConfigs"] = state["resetConfigs"]
+                if state.get("pendingUiTag") and ui_target_tag is None:
+                    operation["pendingUiTag"] = state["pendingUiTag"]
+                if existing_corrective:
+                    for key in ("supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs"):
+                        operation[key] = state[key]
         write_state(operation)
         try:
             subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
@@ -185,6 +515,7 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
                              progress=None, resultCode="service_start_failed",
                              message="Не удалось запустить службу обновлений.",
                              updatedAt=now(), finishedAt=now())
+            add_supersede_status(operation)
             append_history(operation)
             write_state(operation)
             print(json.dumps(response(operation, False), ensure_ascii=False))
@@ -203,6 +534,7 @@ def append_history(state: Dict[str, Any]) -> None:
     summary = {key: state.get(key) for key in (
         "operationId", "requestId", "status", "phase", "progress", "resultCode",
         "message", "targetId", "targetTag", "startedAt", "updatedAt", "finishedAt",
+        "resetConfigs", "supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs",
     )}
     history = [item for item in history if isinstance(item, dict)
                and item.get("operationId") != state.get("operationId")]
@@ -213,6 +545,8 @@ def transition(phase: str, message: str) -> None:
     if phase not in PHASES:
         raise ValueError("unsupported operation phase")
     state = read_state()
+    if not context_matches(state):
+        return
     if state.get("busy") is not True:
         raise RuntimeError("no active update operation")
     state.update(status=phase, phase=phase, progress=0 if phase == "queued" else None,
@@ -220,7 +554,7 @@ def transition(phase: str, message: str) -> None:
     write_state(state)
 
 
-def printer_is_idle() -> bool:
+def printer_job_state() -> Optional[str]:
     request = urllib.request.Request(
         "http://127.0.0.1:7125/printer/objects/query?print_stats=state",
         headers={"Accept": "application/json"},
@@ -229,16 +563,34 @@ def printer_is_idle() -> bool:
         with urllib.request.urlopen(request, timeout=3) as response_obj:
             payload = json.load(response_obj)
     except Exception:
-        return False
+        return None
     state = payload.get("result", {}).get("status", {}).get("print_stats", {}).get("state")
+    return state.strip().lower() if isinstance(state, str) else None
+
+
+def printer_is_idle() -> bool:
+    state = printer_job_state()
     # Источник допуска — текущее задание, а не остаточные флаги PAUSE/CANCEL.
-    return isinstance(state, str) and state.strip().lower() in {"standby", "complete", "cancelled", "error"}
+    return state in {"standby", "complete", "cancelled", "error"}
 
 
 def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -> None:
     stamp = now()
+    failure_phase = state.get("phase", state.get("status"))
+    if status == "error" and state.get("targetId") == "printer-core":
+        state["lastFailurePhase"] = failure_phase
+    state["status"] = status
     if status != "error" or result_code not in {"provisioning_failed", "provisioning_interrupted", "core_update_failed"}:
         state.pop("resumeCore", None)
+    state["resultCode"] = result_code
+    if status == "error":
+        retryable = retryable_core_error(state)
+        if retryable:
+            schedule_retry(state)
+        else:
+            state.pop("retry", None)
+    else:
+        state.pop("retry", None)
     # Блок 3: Второй шаг сохраняется под тем же lock до публикации terminal state.
     # Перезапуск Moonraker/UI не теряет очередь; после ошибки core UI не запускается.
     if status == "applied" and state.get("targetId") == "printer-core" and state.get("pendingUiTag"):
@@ -254,6 +606,7 @@ def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -
                  busy=False, progress=100 if status == "applied" else None,
                  resultCode=result_code, message=message,
                  updatedAt=stamp, finishedAt=stamp)
+    add_supersede_status(state)
     append_history(state)
     write_state(state)
 
@@ -262,8 +615,9 @@ def complete_loader() -> int:
     # Блок 3.1: Проверенный standalone loader заменяет прерванный core-переход.
     if os.geteuid() != 0:
         raise RuntimeError("loader completion must run as root")
-    lock = acquire()
-    if lock is None:
+    borrowed_fd = inherited_lock_fd()
+    lock = None if borrowed_fd is not None else acquire()
+    if borrowed_fd is None and lock is None:
         raise RuntimeError("Нельзя завершить loader во время активного обновления")
     try:
         state = read_state()
@@ -296,8 +650,9 @@ def complete_loader() -> int:
             subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
         return 0
     finally:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        lock.close()
+        if lock is not None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
 
 
 def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
@@ -310,8 +665,10 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
             log.write(f"{now()} core {'recovery' if recovery else 'apply'} {state['operationId']}\n")
             log.flush()
             # Внешний systemd timeout останавливает всю cgroup, включая дочерний loader.
+            context = dict(os.environ, TREED_UPDATE_OPERATION_ID=str(state["operationId"]),
+                           TREED_UPDATE_ATTEMPT_GENERATION=str(state.get("attemptGeneration", 0)))
             result = subprocess.run(command, stdout=subprocess.PIPE, stderr=log, text=True,
-                                    check=False)
+                                    check=False, env=context)
             log.write(result.stdout + "\n")
         payload = json.loads(result.stdout)
         if not isinstance(payload, dict):
@@ -322,10 +679,20 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
     except (OSError, ValueError, subprocess.SubprocessError):
         payload = {"status": "error", "resultCode": "core_update_failed",
                    "message": "Не удалось подтвердить результат core updater; проверьте журнал службы."}
-    journal = Path(os.environ.get("TREED_CORE_STATE_DIR", "/var/lib/treed-update/core")) / state["operationId"] / "journal.json"
+    journal = core_journal(state)
     if payload.get("resultCode") == "core_update_failed" and not journal.exists():
         payload["resultCode"] = "core_validation_failed"
-    finish(read_state(), payload["status"], str(payload.get("resultCode", "core_update_failed")),
+    current = read_state()
+    if current.get("operationId") != state.get("operationId") or current.get("attemptGeneration", 0) != state.get("attemptGeneration", 0):
+        return 1
+    if (payload.get("resultCode") == "core_not_ready" and not journal.exists()
+            and not journal.is_symlink() and not journal.parent.is_symlink()):
+        current["resultCode"] = "core_not_ready"
+        if automatic_fresh_retry_context(current):
+            current["retry"]["lastResultCode"] = "core_not_ready"
+            defer_fresh_retry(current)
+            return 1
+    finish(current, payload["status"], str(payload.get("resultCode", "core_update_failed")),
            str(payload.get("message", "Обновление TreeD Core завершено.")))
     return 0 if payload["status"] == "applied" or recovery and payload["status"] == "rolled_back" else 1
 
@@ -354,9 +721,27 @@ def run_current() -> int:
         return 0
     if state.get("targetId") == "printer-core" and (state.get("status") != "queued" or state.get("resumeCore")):
         return run_core(state, recovery=True)
+    automatic_fresh_retry = (state.get("status") == "queued"
+                             and automatic_fresh_retry_context(state))
+    corrective_replacement = (state.get("status") == "queued"
+                              and corrective_replacement_context(state))
+    if corrective_replacement:
+        job_state = printer_job_state()
+        idle = job_state in {"standby", "complete", "cancelled", "error"}
+    else:
+        job_state = None
+        idle = printer_is_idle() if automatic_fresh_retry else None
+    if automatic_fresh_retry and not corrective_replacement and not idle:
+        defer_fresh_retry(state)
+        return 0
+    if corrective_replacement and not (idle or corrective_admission_for_job(job_state)):
+        defer_corrective_replacement(state)
+        return 0
     state.update(status="validating", phase="validating", message="Проверяем состояние принтера.", updatedAt=now())
     write_state(state)
-    if not printer_is_idle():
+    if idle is None:
+        idle = printer_is_idle()
+    if not idle and not corrective_replacement:
         finish(state, "rejected", "printer_not_idle", "Принтер печатает или его состояние недоступно.")
         return 1
     loading_screen("start")
@@ -365,7 +750,8 @@ def run_current() -> int:
     transition("downloading", "Загружаем и проверяем UI bundle.")
     state = read_state()
     env = dict(os.environ, TREED_UPDATE_MANAGED="1",
-               TREED_UPDATE_OPERATION_ID=str(state.get("operationId", "")))
+               TREED_UPDATE_OPERATION_ID=str(state.get("operationId", "")),
+               TREED_UPDATE_ATTEMPT_GENERATION=str(state.get("attemptGeneration", 0)))
     process = subprocess.run([APPLY, state["targetId"], state["targetTag"]], env=env, check=False)
     state = read_state()
     if process.returncode == 0:
@@ -394,6 +780,8 @@ def main(argv: list[str]) -> int:
         return run_worker()
     if command == "recover" and len(argv) == 2:
         return recover()
+    if command == "retry-due" and len(argv) == 2:
+        return retry_due()
     if command == "complete-loader" and len(argv) == 2:
         return complete_loader()
     if command == "phase" and len(argv) == 4:
@@ -408,6 +796,9 @@ def recover() -> int:
     lock = acquire(blocking=True)
     try:
         state = read_state()
+        if automatic_fresh_retry_pre_mutation(state):
+            defer_fresh_retry(state)
+            return 0
         if state.get("targetId") == "printer-core" and state.get("status") != "queued" and (
             state.get("busy") is True or state.get("status") in ACTIVE
         ):
@@ -424,12 +815,78 @@ def recover() -> int:
                 return 0
             finish(state, "error", "operation_interrupted",
                    "Обновление прервано до записи результата; проверьте текущую версию перед повтором.")
+        else:
+            state = read_state()
+            if state.get("status") == "error" and retryable_core_error(state):
+                retry = state.get("retry")
+                if "retry" not in state:
+                    if schedule_retry(state):
+                        write_state(state)
+                elif retry_is_due(retry):
+                    queue_retry(state)
         return 0
     finally:
         loading_screen("stop")
         if lock is not None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
+
+
+def queue_retry(state: Dict[str, Any]) -> None:
+    retry = state.get("retry")
+    generation = state.get("attemptGeneration", 0)
+    if (not retry_is_due(retry) or not retryable_core_error(state)
+            or not isinstance(generation, int) or isinstance(generation, bool) or generation < 0):
+        return
+    if printer_job_state() in {"printing", "paused"}:
+        return
+    state.update(status="queued", phase="queued", busy=True, progress=0,
+                 attemptGeneration=generation + 1,
+                 message="Повтор TreeD Core поставлен в очередь.", updatedAt=now(), finishedAt=None)
+    state.pop("canSupersedeCore", None)
+    state["retry"].update(nextAttemptAt=None, lastResultCode=state.get("resultCode"))
+    state["resumeCore"] = (
+        False if state.get("resultCode") == "corrective_precondition_deferred"
+        else state.get("resultCode") not in FRESH_CORE_RETRY_CODES or core_journal(state).is_file()
+    )
+    write_state(state)
+    subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
+
+
+def defer_fresh_retry(state: Dict[str, Any]) -> None:
+    retry = state.get("retry")
+    if not automatic_fresh_retry_context(state):
+        return
+    stamp = datetime.now(timezone.utc)
+    retry["scheduledAt"] = stamp.isoformat().replace("+00:00", "Z")
+    retry["nextAttemptAt"] = datetime.fromtimestamp(
+        stamp.timestamp() + RETRY_DELAYS[0], timezone.utc).isoformat().replace("+00:00", "Z")
+    retry["lastResultCode"] = state.get("resultCode")
+    state.update(status="error", phase="error", busy=False, progress=None,
+                 message="Автоматический повтор TreeD отложен до подтверждения состояния принтера.",
+                 updatedAt=retry["scheduledAt"], finishedAt=retry["scheduledAt"])
+    write_state(state)
+
+
+def retry_due() -> int:
+    if os.geteuid() != 0:
+        raise RuntimeError("retry scheduler must run as root")
+    lock = acquire()
+    if lock is None:
+        return 0
+    try:
+        state = read_state()
+        previous_marker = state.get("canSupersedeCore")
+        add_supersede_status(state)
+        if state.get("canSupersedeCore") != previous_marker:
+            write_state(state)
+        if state.get("status") != "error" or not retry_is_due(state.get("retry")):
+            return 0
+        queue_retry(state)
+        return 0
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
 
 
 def loading_screen(action: str) -> None:

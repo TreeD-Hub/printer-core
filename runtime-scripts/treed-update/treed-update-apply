@@ -12,6 +12,7 @@ STATE_FILE="${TREED_UPDATE_STATE_FILE:-/var/lib/treed-update/state.json}"
 LOG_FILE="${TREED_UPDATE_LOG_FILE:-/var/log/treed-update/worker.log}"
 LOCK_FILE="${TREED_UPDATE_LOCK_FILE:-/run/lock/treed-update.lock}"
 
+# Блок 1.1: Проверяем запрошенную цель до чтения локальной конфигурации.
 case "${TARGET_ID}" in
   printer-ui|treed-shell)
     [[ "${TARGET_TAG}" =~ ^ui-main-[0-9]+-[0-9]+$ ]] || {
@@ -31,9 +32,49 @@ case "${TARGET_ID}" in
     ;;
 esac
 
+# Блок 1.2: EnvironmentFile разбирается как данные по контракту key=value, без shell execution.
+load_treed_update_environment() {
+  local parsed_settings setting name
+  parsed_settings="$(mktemp)"
+  if ! python3 - "${ENV_FILE}" >"${parsed_settings}" <<'PY'
+import re
+import shlex
+import sys
+from pathlib import Path
+
+try:
+    for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+        name, separator, value = line.partition("=")
+        if not name.startswith("TREED_"):
+            continue
+        if not separator or re.fullmatch(r"TREED_[A-Z0-9_]+", name) is None:
+            raise ValueError("invalid TreeD updater environment setting")
+        values = shlex.split(value)
+        if len(values) != 1 or "\n" in values[0] or "\r" in values[0] or "\0" in values[0]:
+            raise ValueError("invalid TreeD updater environment value")
+        sys.stdout.write(f"{name}={values[0]}\n")
+except (OSError, UnicodeError, ValueError) as error:
+    print(f"treed-update: cannot read updater environment: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  then
+    rm -f "${parsed_settings}"
+    return 1
+  fi
+  while IFS= read -r setting || [[ -n "${setting}" ]]; do
+    name="${setting%%=*}"
+    [[ "${name}" =~ ^TREED_[A-Z0-9_]+$ && "${setting}" == *=* ]] || {
+      rm -f "${parsed_settings}"
+      echo "treed-update: invalid parsed updater environment" >&2
+      return 1
+    }
+    export "${setting}"
+  done <"${parsed_settings}"
+  rm -f "${parsed_settings}"
+}
+
 if [ -f "${ENV_FILE}" ]; then
-  # shellcheck disable=SC1090
-  . "${ENV_FILE}"
+  load_treed_update_environment || exit 1
 fi
 
 REPO_DIR="${TREED_UPDATE_REPO_DIR:-/home/pi/treed/printer-core}"

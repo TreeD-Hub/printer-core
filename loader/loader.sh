@@ -47,6 +47,58 @@ case "${TREED_LOADER_MODE}" in
     ;;
 esac
 
+# Блок 1.1: Захват существующего update lock для standalone provisioning.
+acquire_standalone_update_lock() {
+  local configured_lock_file=""
+  local python_bin="python3"
+  if ! command -v "${python_bin}" >/dev/null 2>&1 || ! "${python_bin}" -c 'import shlex' >/dev/null 2>&1; then
+    python_bin="python"
+  fi
+  if ! configured_lock_file="$("${python_bin}" - "${TREED_UPDATE_ENV_FILE:-/etc/default/treed-update}" <<'PY'
+import shlex
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if path.is_file():
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, separator, value = line.partition("=")
+        if separator and name == "TREED_UPDATE_LOCK_FILE":
+            values = shlex.split(value)
+            if len(values) != 1 or not values[0]:
+                raise SystemExit(1)
+            print(values[0])
+PY
+)"; then
+    echo "[loader] ERROR: cannot read update lock setting" >&2
+    exit 1
+  fi
+  TREED_UPDATE_LOCK_FILE="${TREED_UPDATE_LOCK_FILE:-${configured_lock_file:-/run/lock/treed-update.lock}}"
+  lock_directory="$(dirname "${TREED_UPDATE_LOCK_FILE}")"
+  if [ ! -d "${lock_directory}" ] || [ -L "${TREED_UPDATE_LOCK_FILE}" ]; then
+    echo "[loader] ERROR: update lock path is unavailable or unsafe" >&2
+    exit 1
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "[loader] ERROR: flock is required to serialize standalone provisioning" >&2
+    exit 1
+  fi
+  if ! exec {TREED_UPDATE_LOCK_FD}>>"${TREED_UPDATE_LOCK_FILE}"; then
+    echo "[loader] ERROR: cannot open update lock" >&2
+    exit 1
+  fi
+  if ! flock -n "${TREED_UPDATE_LOCK_FD}"; then
+    echo "[loader] ERROR: another TreeD update is active" >&2
+    exit 1
+  fi
+  export TREED_UPDATE_LOCK_FD TREED_UPDATE_LOCK_FILE
+}
+
+# Блок 1.2: Standalone loader сериализуется с timer recovery на весь provisioning.
+if [ "${TREED_LOADER_MODE}" = "apply" ] && [ "${TREED_UPDATE_MANAGED_LOADER}" != "1" ]; then
+  acquire_standalone_update_lock
+fi
+
 # Блок 2: Нормализация shell-скриптов loader после Windows checkout.
 # - Убираем CRLF для *.sh в loader/**,
 # - Восстанавливаем executable-бит для entrypoint и step-скриптов.
@@ -593,17 +645,67 @@ STEPS=(
   "maintenance-start"        # Запуск required/best-effort сервисов после provisioning.
   "verify"                   # Финальная валидация всего контура (must-pass).
 )
+load_managed_steps() {
+  local plan_root="$1"
+  local python_bin="python3"
+  if ! command -v "${python_bin}" >/dev/null 2>&1 || ! "${python_bin}" -c 'import json' >/dev/null 2>&1; then
+    python_bin="python"
+  fi
+  "${python_bin}" - "${plan_root}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+registry = root / "loader/managed-runtime.json"
+if registry.is_symlink() or not registry.is_file():
+    raise SystemExit("managed runtime registry отсутствует или является ссылкой")
+plan = json.loads(registry.read_text(encoding="utf-8"))
+required = {"check-env", "update-recovery-bootstrap", "maintenance-stop", "maintenance-start", "verify"}
+steps = plan.get("steps") if isinstance(plan, dict) and plan.get("schema") == 1 else None
+guards = plan.get("requiredSteps") if isinstance(plan, dict) else None
+inputs = plan.get("inputs") if isinstance(plan, dict) else None
+if (set(plan) != {"schema", "steps", "requiredSteps", "inputs"} or
+        not isinstance(steps, list) or not steps or any(not isinstance(step, str) or
+        re.fullmatch(r"[a-z][a-z0-9-]*", step) is None for step in steps) or
+        len(steps) != len(set(steps)) or not isinstance(guards, list) or
+        len(guards) != len(set(guards)) or not isinstance(inputs, list) or
+        any(not isinstance(path, str) for path in inputs) or len(inputs) != len(set(inputs)) or
+        not required <= set(guards) or
+        not set(guards) <= set(steps)):
+    raise SystemExit("managed runtime registry некорректен")
+positions = [steps.index(step) for step in guards]
+if positions != sorted(positions):
+    raise SystemExit("managed safety steps стоят в неверном порядке")
+for step in steps:
+    source = root / "loader/steps" / (step + ".sh")
+    if source.is_symlink() or not source.is_file():
+        raise SystemExit("managed step отсутствует или является ссылкой: " + step)
+for relative in inputs:
+    path = Path(relative)
+    valid = (relative in {"loader/loader.sh", "runtime-versions.env",
+                          "runtime-scripts/treed-vision/models.json"} or
+             len(path.parts) == 3 and path.parts[:2] == ("loader", "lib") and path.suffix == ".sh" or
+             len(path.parts) == 3 and path.parts[:2] == ("runtime-scripts", "treed-update") and
+             path.suffix in {".service", ".path", ".timer"})
+    if (not valid or path.as_posix() != relative or path.is_absolute() or
+            "\\" in relative or ".." in path.parts):
+        raise SystemExit("managed runtime input path некорректен: " + relative)
+    source = root.joinpath(*path.parts)
+    if source.is_symlink() or not source.is_file():
+        raise SystemExit("managed runtime input отсутствует или является ссылкой: " + relative)
+print("\n".join(steps), end="")
+PY
+}
+
 if [ "${TREED_UPDATE_MANAGED_LOADER}" = "1" ]; then
-  STEPS=(
-    "check-env"
-    "maintenance-stop"
-    "packages-core"
-    "runtime-bootstrap"
-    "moonraker-config"
-    "treed-cam"
-    "maintenance-start"
-    "verify"
-  )
+  # Блок 15.1: План managed-loader читается из release source как данные.
+  if ! managed_steps="$(load_managed_steps "${REPO_DIR}")"; then
+    log_error "Managed runtime plan cannot be loaded"
+    exit 1
+  fi
+  mapfile -t STEPS <<< "${managed_steps}"
 fi
 
 # Блок 16: Явный список optional-шагов (не прерывают provisioning при ошибке).

@@ -1,0 +1,13 @@
+# Назначение: периодически будит короткую root-only проверку TreeD Core retry.
+# Контур: required; monotonic-планирование действует в пределах текущей загрузки.
+[Unit]
+Description=Schedule TreeD update retry checks
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=treed-update-retry.service
+
+[Install]
+WantedBy=timers.target

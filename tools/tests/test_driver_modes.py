@@ -86,7 +86,7 @@ class Printer:
                                                      inline_comment_prefixes=('#', ';'))
         profile = ROOT / 'klipper/profiles/treed_v2_corexy_v1'
         self.fileconfig.read([profile / 'printer_base.cfg', profile / 'steppers.cfg',
-                              profile / 'driver_mode.cfg'], encoding='utf-8')
+                              profile / 'driver_mode.cfg', profile / 'ui.cfg'], encoding='utf-8')
         self.fileconfig.read_dict(self.overrides)
         self.commands = {}
         self.callbacks = []
@@ -240,6 +240,17 @@ class Command:
     error = staticmethod(ValueError)
 
 
+class ServiceCommand(Command):
+    def __init__(self, **params):
+        self.params = params
+
+    def get(self, key):
+        return self.params[key]
+
+    def get_command_parameters(self):
+        return self.params
+
+
 class DriverModesTest(unittest.TestCase):
     # Блок 2: Полный профиль, перезапуск, допуск и восстановление после отказа.
     def setUp(self):
@@ -333,15 +344,17 @@ class DriverModesTest(unittest.TestCase):
     def test_quiet_caps_commands_and_normal_reloads_original_config(self):
         self.quiet()
         toolhead = self.driver.toolhead
-        self.assertEqual(self.driver.motion_limits(), (200., 50000., 9., .5))
+        self.assertEqual(self.driver.motion_limits(), (180., 25000., 9., .5))
         # SET_VELOCITY_LIMIT / сервис задают все поля, M204 — только ACCEL.
         toolhead.set_max_velocities(900., 70000., 500., None)
-        self.assertEqual(self.driver.motion_limits(), (200., 50000., 500., .5))
+        self.assertEqual(self.driver.motion_limits(), (180., 25000., 500., .5))
         toolhead.set_max_velocities(None, 30000., None, None)
-        self.assertEqual(toolhead.max_accel, 30000.)
+        self.assertEqual(toolhead.max_accel, 25000.)
+        toolhead.set_max_velocities(None, 15000., None, None)
+        self.assertEqual(toolhead.max_accel, 15000.)
         self.driver.cmd_set(Command())
         self.assertFalse(self.printer.restart_requested)
-        self.assertEqual(self.driver.motion_limits(), (200., 30000., 500., .5))
+        self.assertEqual(self.driver.motion_limits(), (180., 15000., 500., .5))
         self.driver.cmd_set(Command('normal'))
         self.reboot()
         self.assertEqual(self.driver.motion_limits(), (600., 25000., 9., .5))
@@ -369,7 +382,7 @@ class DriverModesTest(unittest.TestCase):
         for fails in (False, True):
             with self.subTest(fails=fails):
                 def homing(script):
-                    self.assertEqual(self.driver.motion_limits(), (200., 700., 9., .5))
+                    self.assertEqual(self.driver.motion_limits(), (180., 700., 9., .5))
                     if fails:
                         raise RuntimeError('homing failed')
                 gcode.run_script_from_command = homing
@@ -381,19 +394,101 @@ class DriverModesTest(unittest.TestCase):
                         guard.cmd_run(cmd)
                 finally:
                     gcode.run_script_from_command = self.printer.save
-                self.assertEqual(self.driver.motion_limits(), (200., 50000., 9., .5))
+                self.assertEqual(self.driver.motion_limits(), (180., 25000., 9., .5))
 
     def test_saved_quiet_on_startup_caps_motion(self):
         printer = Printer({'driver_mode': 'quiet'})
         driver = boot_driver(printer)
-        self.assertEqual(driver.motion_limits(), (200., 50000., 9., .5))
-        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 50.)
+        self.assertEqual(driver.motion_limits(), (180., 25000., 9., .5))
+        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 180.)
+        self.assertEqual(driver.get_status(1)['motion'], {
+            'park_velocity': 100., 'resume_wipe_velocity': 150.,
+            'start_wipe_velocity': 300., 'start_wipe_accel': 12500.,
+            'travel_velocity': 200., 'z_travel_velocity': 25., 'cancel_z_velocity': 5.,
+            'resume_velocity': 150.})
         driver.cmd_set(Command('normal'))
         self.assertTrue(printer.restart_requested)
         printer = Printer(printer.disk_variables)
         driver = boot_driver(printer)
         self.assertEqual(driver.motion_limits(), (600., 25000., 9., .5))
-        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 350.)
+        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 600.)
+
+    def test_service_helper_caps_after_m220_and_preserves_lower_requests(self):
+        self.quiet()
+        self.printer.objects['treed_driver_mode'] = self.driver
+        self.printer.objects['gcode_move'] = NS(speed_factor=2. / 60.)
+        self.printer.objects['gcode_macro _TREED_START_PURGE_CFG'] = NS(
+            variables={'state_saved': 0, 'saved_accel': 0.})
+        guard = load('treed_motor_guard').load_config(Config(self.printer))
+        gcode = self.printer.objects['gcode']
+        scripts = []
+        gcode.run_script_from_command = scripts.append
+
+        guard.cmd_service_move(ServiceCommand(KIND='TRAVEL', X='12', Y='34'))
+        self.assertEqual(scripts, ['SAVE_GCODE_STATE NAME=TREED_SERVICE_MOVE_STATE',
+                                   'G1 X12.0 Y34.0 F5400',
+                                   'RESTORE_GCODE_STATE NAME=TREED_SERVICE_MOVE_STATE MOVE=0'])
+        scripts.clear()
+        guard.cmd_service_move(ServiceCommand(KIND='PARK', X='12', SPEED='20'))
+        self.assertEqual(scripts[1], 'G1 X12.0 F1200')
+        scripts.clear()
+        self.printer.objects['gcode_move'].speed_factor = .5 / 60.
+        guard.cmd_service_move(ServiceCommand(KIND='TRAVEL', X='12'))
+        self.assertEqual(scripts[1], 'G1 X12.0 F12000')
+        scripts.clear()
+
+        guard.cmd_service_move(ServiceCommand(KIND='PARK', X='0.000001', SPEED='0.000000001'))
+        # Обычный парсер Klipper выделяет букву E как отдельную ось.
+        parts = re.split(r'([A-Z_]+|[A-Z*])', scripts[1].upper())
+        parsed = {parts[i]: parts[i + 1].strip() for i in range(1, len(parts), 2)}
+        self.assertNotIn('E', parsed)
+        self.assertEqual(float(parsed['X']), 1e-6)
+        self.assertAlmostEqual(float(parsed['F']), 6e-8)
+        scripts.clear()
+
+        for params in ({'KIND': 'TRAVEL', 'E': '1'}, {'KIND': 'TRAVEL'},
+                       {'KIND': 'OTHER', 'X': '1'},
+                       {'KIND': 'TRAVEL', 'X': 'nan'},
+                       {'KIND': 'TRAVEL', 'X': '1', 'SPEED': '0'}):
+            with self.subTest(params=params), self.assertRaises(ValueError):
+                guard.cmd_service_move(ServiceCommand(**params))
+            self.assertEqual(scripts, [])
+
+    def test_service_state_restore_failure_shuts_down(self):
+        self.quiet()
+        self.printer.objects['treed_driver_mode'] = self.driver
+        self.printer.objects['gcode_move'] = NS(speed_factor=1. / 60.)
+        guard = load('treed_motor_guard').load_config(Config(self.printer))
+        def failed_restore(script):
+            if script.startswith('RESTORE_GCODE_STATE '):
+                raise ValueError('restore failed')
+        self.printer.objects['gcode'].run_script_from_command = failed_restore
+        with self.assertRaisesRegex(ValueError, 'restore failed'):
+            guard.cmd_service_move(ServiceCommand(KIND='PARK', X='12'))
+        self.assertTrue(self.printer.shutdown)
+
+    def test_invalid_motion_nominal_rejected_before_registration(self):
+        for value in ('nan', 'inf', '-1', '0'):
+            with self.subTest(value=value):
+                printer = Printer(overrides={'treed_driver_mode': {'park_velocity': value}})
+                with self.assertRaisesRegex(ValueError, 'Номиналы'):
+                    load('treed_driver_mode').load_config(Config(printer))
+                self.assertNotIn('TREED_DRIVER_MODE_SET', printer.commands)
+
+    def test_service_resume_uses_native_speed_without_m220_or_raising_lower_request(self):
+        self.quiet()
+        self.printer.objects['treed_driver_mode'] = self.driver
+        self.printer.objects['gcode_move'] = NS(speed_factor=2. / 60.)
+        guard = load('treed_motor_guard').load_config(Config(self.printer))
+        scripts = []
+        self.printer.objects['gcode'].run_script_from_command = scripts.append
+        guard.cmd_service_resume(ServiceCommand())
+        self.assertEqual(scripts.pop(), 'RESUME_BASE VELOCITY=150.0')
+        guard.cmd_service_resume(ServiceCommand(VELOCITY='30'))
+        self.assertEqual(scripts.pop(), 'RESUME_BASE VELOCITY=30.0')
+        self.driver.toolhead.set_max_velocities(40., None, None, None)
+        guard.cmd_service_resume(ServiceCommand(VELOCITY='100'))
+        self.assertEqual(scripts.pop(), 'RESUME_BASE VELOCITY=40.0')
 
     def test_save_failure_restores_previous_selection_and_other_variables(self):
         self.printer.saved.allVariables['user_value'] = {'keep': 42}

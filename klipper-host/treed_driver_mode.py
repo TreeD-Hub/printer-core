@@ -4,6 +4,7 @@
 Токи, удержание и файлы пользовательских настроек остаются исходными.
 """
 import logging
+import math
 
 
 QUIET_STEPPER = dict(microsteps=128, step_pulse_duration=.000000100)
@@ -15,7 +16,11 @@ QUIET_TMC = dict(
     driver_PWM_OFS=30, driver_PWM_GRAD=0, driver_PWM_FREQ=0,
     driver_PWM_AUTOSCALE=True, driver_PWM_AUTOGRAD=True,
     driver_FREEWHEEL=0, driver_PWM_REG=4, driver_PWM_LIM=12)
-QUIET_LIMITS = dict(max_velocity=200., max_accel=50000.)
+QUIET_LIMITS = dict(max_velocity=180., max_accel=25000.)
+MOTION_DEFAULTS = dict(park_velocity=100., resume_wipe_velocity=150.,
+                       start_wipe_velocity=300., start_wipe_accel=12500.,
+                       travel_velocity=200., z_travel_velocity=25.,
+                       cancel_z_velocity=5.)
 
 
 class TreedDriverMode:
@@ -24,6 +29,13 @@ class TreedDriverMode:
         self.printer = config.get_printer()
         self.gcode = self.printer.lookup_object('gcode')
         self.saved = self.printer.load_object(config, 'save_variables')
+        self.motion = {name: config.getfloat(name, default)
+                       for name, default in MOTION_DEFAULTS.items()}
+        pause_resume = config.getsection('pause_resume')
+        self.motion['resume_velocity'] = pause_resume.getfloat('recover_velocity', 50.)
+        if not all(math.isfinite(value) and value > 0.
+                   for value in self.motion.values()):
+            raise config.error('Номиналы сервисного движения должны быть конечными и положительными')
         self.loaded_mode = self.saved.allVariables.get('driver_mode', 'normal')
         if self.loaded_mode not in ('quiet', 'normal'):
             logging.warning('Режим XYZ: неверное сохранённое значение')
@@ -89,7 +101,9 @@ class TreedDriverMode:
                                else 'quiet' if threshold == 0 else None)
         return dict(contract_version='1.0', mode=self.mode, state=self.state,
                     available_modes=['normal', 'quiet'], effective_modes=effective,
-                    service_velocity_limit=50. if self.mode == 'quiet' else 350.,
+                    motion=dict(self.motion),
+                    service_velocity_limit=(self.toolhead.max_velocity
+                                            if hasattr(self, 'toolhead') else None),
                     needs_restart=self.needs_restart, message=self.message)
 
     # Блок 2: Повторный допуск после ожидания очереди, включая ручной сервис.

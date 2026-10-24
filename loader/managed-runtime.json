@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "steps": [
+    "check-env",
+    "update-recovery-bootstrap",
+    "maintenance-stop",
+    "packages-core",
+    "runtime-bootstrap",
+    "moonraker-config",
+    "treed-cam",
+    "maintenance-start",
+    "verify"
+  ],
+  "requiredSteps": [
+    "check-env",
+    "update-recovery-bootstrap",
+    "maintenance-stop",
+    "maintenance-start",
+    "verify"
+  ],
+  "inputs": [
+    "loader/loader.sh",
+    "loader/lib/common.sh",
+    "loader/lib/boot-env.sh",
+    "loader/lib/runtime-manifest.sh",
+    "loader/lib/runtime-repo.sh",
+    "loader/lib/plymouth.sh",
+    "loader/lib/progress.sh",
+    "runtime-versions.env",
+    "runtime-scripts/treed-vision/models.json",
+    "runtime-scripts/treed-update/treed-update.service",
+    "runtime-scripts/treed-update/treed-update.path",
+    "runtime-scripts/treed-update/treed-update-recover.service",
+    "runtime-scripts/treed-update/treed-update-retry.service",
+    "runtime-scripts/treed-update/treed-update-retry.timer"
+  ]
+}

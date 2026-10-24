@@ -202,6 +202,39 @@ install_update_file() {
   sync -f "$(dirname "${target}")"
 }
 
+write_treed_update_environment() {
+  local env_file="$1"
+  local lock_file="${TREED_UPDATE_LOCK_FILE:-/run/lock/treed-update.lock}"
+  local escaped_lock_file=""
+  case "${lock_file}" in
+    *$'\n'*|*$'\r'*)
+      log_error "treed update lock path cannot contain line breaks"
+      return 1
+      ;;
+  esac
+  escaped_lock_file="${lock_file//\\/\\\\}"
+  escaped_lock_file="${escaped_lock_file//\"/\\\"}"
+  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ] || [ ! -e "${env_file}" ]; then
+    cat > "${env_file}" <<EOF
+TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/printer-core"
+TREED_UPDATE_PI_USER="${PI_USER}"
+TREED_UPDATE_PI_HOME="${PI_HOME}"
+TREED_UPDATE_PI_GROUP="${PI_GROUP}"
+TREED_UPDATE_STATE_FILE="/var/lib/treed-update/state.json"
+TREED_UPDATE_LOG_FILE="/var/log/treed-update/worker.log"
+TREED_UPDATE_LOCK_FILE="${escaped_lock_file}"
+TREED_UPDATE_UNIT="treed-update.service"
+TREED_CORE_KLIPPER_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
+TREED_CORE_MOONRAKER_DIR="${MOONRAKER_RUNTIME_DIR}"
+TREED_SHELL_RUNTIME_DIR="${PI_HOME}/treed/treed-shell-runtime"
+TREED_SHELL_SERVICE="treed-shell.service"
+EOF
+    chmod 0644 "${env_file}"
+  else
+    log_info "moonraker-config: preserving existing updater environment ${env_file}"
+  fi
+}
+
 deploy_treed_update_command() {
   local apply_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-apply"
   local service_src="${REPO_DIR}/runtime-scripts/treed-update/treed-update-service"
@@ -252,25 +285,7 @@ deploy_treed_update_command() {
   systemctl enable treed-update-recover.service
   systemctl enable --now treed-update.path
 
-  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ] || [ ! -e "${env_file}" ]; then
-  cat > "${env_file}" <<EOF
-TREED_UPDATE_REPO_DIR="${PI_HOME}/treed/printer-core"
-TREED_UPDATE_PI_USER="${PI_USER}"
-TREED_UPDATE_PI_HOME="${PI_HOME}"
-TREED_UPDATE_PI_GROUP="${PI_GROUP}"
-TREED_UPDATE_STATE_FILE="/var/lib/treed-update/state.json"
-TREED_UPDATE_LOG_FILE="/var/log/treed-update/worker.log"
-TREED_UPDATE_LOCK_FILE="/run/lock/treed-update.lock"
-TREED_UPDATE_UNIT="treed-update.service"
-TREED_CORE_KLIPPER_DIR="${TREED_KLIPPER_SRC_DIR:-${PI_HOME}/klipper}"
-TREED_CORE_MOONRAKER_DIR="${MOONRAKER_RUNTIME_DIR}"
-TREED_SHELL_RUNTIME_DIR="${PI_HOME}/treed/treed-shell-runtime"
-TREED_SHELL_SERVICE="treed-shell.service"
-EOF
-  chmod 0644 "${env_file}"
-  else
-    log_info "moonraker-config: preserving existing updater environment ${env_file}"
-  fi
+  write_treed_update_environment "${env_file}"
 
   cat > "${sudoers_file}" <<EOF
 ${PI_USER} ALL=(root) NOPASSWD: /usr/local/sbin/treed-update-service submit *
@@ -649,6 +664,7 @@ ensure_moonraker_allowed_service "treed-shell"
 ensure_generated_fragments_dir
 deploy_treed_moonraker_components
 deploy_treed_update_command
+bash "${REPO_DIR}/loader/steps/update-recovery-bootstrap.sh"
 
 restart_and_verify_moonraker_components
 

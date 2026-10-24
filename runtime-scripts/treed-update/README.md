@@ -9,6 +9,7 @@
 - `treed-core-update` — TreeD runtime package build, inspection, installation and recovery.
 - `treed-loading-screen` — best-effort splash start/stop around a managed update; it does not change persistent display mode.
 - `treed-update.service`, `treed-update.path`, `treed-update-recover.service` — systemd worker, queue activation and boot recovery.
+- `treed-update-retry.service`, `treed-update-retry.timer` — periodic nonblocking checks for a persisted, due core retry.
 
 ## Contract
 
@@ -29,6 +30,11 @@
 - A normal core update runs the already installed updater. It installs the target updater and admission macros in the same runtime transaction before restarting Klipper; the next update uses the new admission protocol. Existing installations do not need a manual loader run just to introduce this gate. Copying only the new updater onto an old running configuration is unsupported and fails closed. The first transition still uses the old updater's safety checks; a new package cannot retroactively change that running code.
 - The source archive is extracted through bounded path checks into the operation journal directory. Source version, pinned upstream refs, provisioning revision, and runtime mapped files must match the verified target package. Downloads and extracted files are flushed before runtime mutation. Recovery rechecks the retained source against the archive, validates installed files, and repeats the managed loader for the same operation. It never runtime-rolls back after provisioning begins. Readiness and upstream compatibility must pass before committing the manifest.
 - A new request after interrupted provisioning resumes the saved operation, target release, reset consent and pending UI step. Moonraker can submit this recovery while Klipper is unavailable; the root worker still enforces gate/systemd safety. A validation error before journal creation permits an ordinary fresh attempt. The loader log is appended on retry. Worker/recovery time budgets cover the 25-minute loader limit; the outer systemd timeout kills the whole cgroup, rather than only the parent updater.
+- A newer core release may replace a failed provisioning target through the normal apply request. Root validates the retained journal and generates the linkage; the client cannot choose an arbitrary installation base. The new operation retains the confirmed baseline separately from the physical installation base, old archives and reset-consent history. It validates all prepared files and source before effects, preserves current `SAVE_CONFIG`, and recovers partial writes forward without a file-only rollback over changed dependencies. New reset consent applies only to the current file hashes.
+- A corrective request that fails download, validation or service start before creating its own journal retains the same physical anchor for another strictly newer release. Validation failure additionally requires a root-recorded `queued`, `validating` or `downloading` phase and absence of a new journal or symlink. Both the previous logical target and physical base must be older than the next target. An existing forward-only journal in `validated` or `installing` must recover the same operation; replacement becomes eligible again after provisioning starts. Confirmed printing/paused always blocks mutation, and unknown active Klipper is never accepted as idle.
+- Recoverable core failures retain the same operation and schedule bounded automatic retries. Retry metadata is durable across worker and system restarts; the timer only checks whether work is due and releases the lock before asking systemd to run it. A future retry is not an active queued operation, so state-file changes and `ExecStopPost` do not create an immediate restart loop. Integrity, authorization and validation failures do not become automatic retries. Exhaustion preserves the target and diagnosis without claiming installation succeeded.
+- The managed source installs retry units through `update-recovery-bootstrap` before dependency provisioning. This also covers a running legacy updater that has already delivered the new commands but cannot change its own in-memory control flow. The old process retains the lock and phase CLI; the new recovery takes over only after the lock is released. A device still running an older failed cached package cannot acquire this mechanism merely because a newer release was published.
+- `loader/managed-runtime.json` declares the managed steps and their source inputs. New manifests carry an additional managed revision and step list; the legacy schema-1 provisioning revision remains unchanged for old source validators. Runtime file hashes, exact upstream requirements and stable readiness remain separate mandatory checks. Installer-only OS, boot, firmware and UI steps are not silently claimed as applied core requirements.
 - The managed loader leaves runtime files prepared by the invoking updater unchanged. Old updaters can therefore install the new package without invalidating their recorded hashes. Inert legacy AutoPrinter flags can remain after this first transition; the new updater removes them during preparation of the next package. Full loader configuration merge also removes them. New rendering accepts both `:` and `=` separators while preserving device identity and credential paths. Managed provisioning does not reinstall updater commands already delivered by the core transaction; standalone command installation and updater unit replacement use a flushed temporary file and rename.
 - An AutoPrinter payload must contain all seven `treed_autoprinter*.py` modules. Readiness, recovery and rollback require `treed_autoprinter` when the relevant manifest includes it, and reject required names in `failed_components`. A legacy runtime without AutoPrinter can still be upgraded. Credentials, account files, the local store and external model weights stay outside the payload; ML dependencies are not installed automatically.
 - Local overrides, variables, sensor settings, generated configs and the complete `SAVE_CONFIG` block are preserved. Modified managed files without explicit per-file reset consent and unknown files occupying new destinations reject the update.
@@ -37,10 +43,13 @@
 - The first loader run with this updater writes a baseline after successful hardware-ready verification. Without the command and baseline, core capability remains unavailable.
 - A standalone Git checkout records the highest semantic release tag pointing exactly to its commit; without such a tag it uses `VERSION`. Package builds keep using the CI-stamped `VERSION`, so the bootstrap version committed in Git cannot mislabel a tagged loader installation.
 - After a successful standalone loader run, `treed-update-service complete-loader` closes an earlier failed core transition under the worker lock. It accepts only the same or a newer installed release after `treed-core-update verify` checks managed file hashes, pinned upstream compatibility and stable readiness. Active operations and failed verification remain unchanged; a pending UI step stays queued. This lets a repository-delivered loader repair an interrupted older release without editing its cached archive or manually changing update status.
+- Standalone `apply` holds the same update lock for its entire run. Its baseline and completion commands borrow the validated inherited `TREED_UPDATE_LOCK_FD`; they must not unlock the shell owner's descriptor. The retry timer therefore cannot execute an older recovery concurrently with a standalone installation.
 
 ## State fields
 
 The API exposes `operationId`, `requestId`, `status`, `phase`, `progress`, `resultCode`, `message`, `targetId`, `targetTag`, `startedAt`, `updatedAt`, and `finishedAt`. Terminal statuses are `applied`, `rolled_back`, `error`, and `rejected`; phases are `queued`, `validating`, `downloading`, `installing`, `restarting`, `verifying`, `rolling_back`, and `complete`.
+
+Additive fields include persisted `retry` timing/budget and root-derived `canSupersedeCore` eligibility. Internal `attemptGeneration` rejects stale child results; `lastFailurePhase` preserves the phase before a terminal error. The trusted operation stores `supersedesOperationId`, `supersedesTargetTag` and `supersededResetConfigs` for corrective lineage and audit. These fields do not authorize skipping package, ownership or printer admission checks.
 
 ## Installed files
 
@@ -51,6 +60,8 @@ The API exposes `operationId`, `requestId`, `status`, `phase`, `progress`, `resu
 - `/etc/systemd/system/treed-update.service`
 - `/etc/systemd/system/treed-update.path`
 - `/etc/systemd/system/treed-update-recover.service`
+- `/etc/systemd/system/treed-update-retry.service`
+- `/etc/systemd/system/treed-update-retry.timer`
 - `/var/lib/treed-update/state.json`
 - `/var/log/treed-update/worker.log`
 - `/var/lib/treed-update/core-manifest.json` (confirmed installed version/ownership)
@@ -73,7 +84,7 @@ Addressed checks: `python -B tools/tests/test_treed_core_update.py`,
 `python -B tools/tests/test_treed_update_service.py`,
 `python -B tools/tests/test_treed_update_component.py`, `python -B tools/tests/test_managed_loader.py`,
 and `python -B tools/tests/test_klipper_preserve.py`. Upgrade fixtures execute the historical updaters
-from `0f7d771` and `4c3e11d`, then perform the next update with the new updater. Filesystem transitions
+from `0f7d771`, `4c3e11d`, `f1472b6` (v0.33.1) and `de76ff5` (v0.34.1), then perform the next update with the new updater. Filesystem transitions
 are real; network, systemd and hardware readiness are isolated. Device smoke testing must
 cover real stop/start, readiness failure and interrupted installation.
 

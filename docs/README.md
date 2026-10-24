@@ -63,4 +63,7 @@ curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/boo
 
 [Архитектура обновлений](update-architecture.md): служба обновления, целевой A/B-контур, сохранение данных и условия аппаратной приёмки.
 
+[Автономное обновление](update-convergence.md): целевой контракт рабочего состояния
+новой версии, автоматическое восстановление, переход со старого updater и приёмка выпуска.
+
 Программные проверки и требования к среде: [`tools/tests`](../tools/tests/README.md).
