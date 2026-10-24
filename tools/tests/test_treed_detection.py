@@ -478,7 +478,10 @@ class DetectionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(observed, {"paused": True, "active": True, "idle_timeout": 43200})
 
         resume = source.split("[gcode_macro RESUME]", 1)[1].split("\n[", 1)[0]
-        self.assertLess(resume.index("action_raise_error"), resume.rindex("RESUME_BASE"))
+        resume_commands = resume.split("gcode:", 1)[1]
+        self.assertLess(resume_commands.index("action_raise_error"),
+                        resume_commands.index("TREED_SERVICE_RESUME"))
+        self.assertNotIn("RESUME_BASE", resume_commands)
 
 
 # Блок 4: Единственная адресная команда; success-маркер только после всех проверок.

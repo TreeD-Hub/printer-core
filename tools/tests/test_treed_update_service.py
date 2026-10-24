@@ -729,8 +729,8 @@ class UpdateServiceTests(unittest.TestCase):
                      "pendingUiTag": "ui-main-123-1"}
         service.write_state(operation)
         with patch.dict(service.os.environ, {"TREED_CORE_STATE_DIR": str(core_dir)}), \
-             patch.object(service, "printer_is_idle", return_value=False), \
-             patch.object(service, "corrective_admission_safe", return_value=False):
+             patch.object(service, "printer_job_state", return_value=None), \
+             patch.object(service, "klipper_confirmed_inactive", return_value=False):
             self.assertEqual(0, service.run_current())
         deferred = service.read_state()
         self.assertEqual((deferred["operationId"], deferred["targetTag"], deferred["status"]),
