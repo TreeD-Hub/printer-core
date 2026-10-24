@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -373,7 +374,113 @@ class ManagedLoaderTests(unittest.TestCase):
             self.assertEqual((after.st_mode, after.st_uid, after.st_gid), (before.st_mode, before.st_uid, before.st_gid))
             self.assertNotIn("-R", calls.read_text(encoding="utf-8"))
 
-    def test_managed_verify_does_not_record_baseline(self) -> None:
+    def test_camera_waits_for_print_status_without_allowing_active_prints(self) -> None:
+        source = (ROOT / "loader/steps/treed-cam.sh").read_text(encoding="utf-8")
+        check = source[source.index("# Блок 4:"):source.index("VISION_WAS_ACTIVE=0")]
+        fixture = r'''
+set -euo pipefail
+log_error(){ printf '%s\n' "$*" >&2; }
+sleep(){ :; }
+systemctl(){ [[ "$*" = "is-active --quiet moonraker.service" ]]; }
+python3(){ "$FIXTURE_PYTHON" "$@"; }
+curl(){
+  local attempt
+  attempt=$(cat "$FIXTURE_DIR/attempts")
+  attempt=$((attempt+1))
+  printf '%s' "$attempt" > "$FIXTURE_DIR/attempts"
+  if [ "$attempt" -le "$FIXTURE_HTTP_FAILURES" ]; then return 22; fi
+  printf '{"result":{"status":{"print_stats":{"state":"%s"}}}}' "$FIXTURE_PRINT_STATE"
+}
+'''
+        for failures, state, allowed, attempts in (
+            (1, "standby", True, 2),
+            (3, "standby", False, 3),
+            (0, "printing", False, 1),
+            (0, "paused", False, 1),
+            (0, "complete", True, 1),
+        ):
+            with self.subTest(failures=failures, state=state), tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
+                counter = Path(directory) / "attempts"
+                counter.write_text("0", encoding="utf-8")
+                script = Path(directory) / "camera-idle.sh"
+                script.write_text(fixture + check + '\nprintf "allowed"\n', encoding="utf-8", newline="\n")
+                result = self.run_shell(
+                    f'. "{script.as_posix()}"',
+                    {
+                        "FIXTURE_DIR": Path(directory).as_posix(),
+                        "FIXTURE_PYTHON": Path(sys.executable).as_posix(),
+                        "FIXTURE_HTTP_FAILURES": str(failures),
+                        "FIXTURE_PRINT_STATE": state,
+                        "TREED_MOONRAKER_HTTP_RETRIES": "3",
+                    },
+                )
+                self.assertEqual(result.returncode, 0 if allowed else 1, result.stderr)
+                self.assertEqual(result.stdout, "allowed" if allowed else "")
+                self.assertEqual(counter.read_text(encoding="utf-8"), str(attempts))
+
+    def test_verify_waits_for_klipper_startup(self) -> None:
+        source = (ROOT / "loader/steps/verify.sh").read_text(encoding="utf-8")
+        functions = "\n".join(
+            re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.MULTILINE | re.DOTALL).group(0)
+            for name in (
+                "pass", "failf", "diagnostic_failf", "hardware_failf", "is_true",
+                "json_string_value", "printer_info_check",
+            )
+        )
+        fixture = r'''
+set -euo pipefail
+ok=0; fail=0; VERIFY_DIAGNOSTIC_FAILS=0
+log_info(){ :; }
+log_warn(){ :; }
+sleep(){ :; }
+mktemp(){ command mktemp "$FIXTURE_DIR/info.XXXXXX"; }
+curl(){
+  local output="" attempt index
+  local states=($FIXTURE_STATES)
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-o" ]; then output="$2"; shift; fi
+    shift
+  done
+  attempt=$(cat "$FIXTURE_DIR/attempts")
+  attempt=$((attempt+1))
+  printf '%s' "$attempt" > "$FIXTURE_DIR/attempts"
+  index=$((attempt-1))
+  if [ "$index" -ge "${#states[@]}" ]; then index=$((${#states[@]}-1)); fi
+  printf '{"result":{"state":"%s","state_message":"fixture"}}' "${states[$index]}" > "$output"
+  printf '200'
+}
+'''
+        cases = (
+            ("ready", "ready", 0, 1, 1),
+            ("startup startup ready", "ready", 0, 1, 3),
+            ("startup", "startup", 1, 0, 3),
+            ("startup error ready", "error", 1, 0, 2),
+            ("shutdown ready", "shutdown", 1, 0, 1),
+        )
+        for states, state, failures, ready, attempts in cases:
+            with self.subTest(states=states), tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
+                counter = Path(directory) / "attempts"
+                counter.write_text("0", encoding="utf-8")
+                script = Path(directory) / "readiness.sh"
+                script.write_text(
+                    fixture + functions + '\nprinter_info_check "Klipper" "http://fixture"\n'
+                    'printf "%s|%s|%s" "$KLIPPER_STATE" "$fail" "$MOONRAKER_READY_OK"',
+                    encoding="utf-8", newline="\n",
+                )
+                result = self.run_shell(
+                    f'. "{script.as_posix()}"',
+                    {
+                        "FIXTURE_DIR": Path(directory).as_posix(),
+                        "FIXTURE_STATES": states,
+                        "TREED_MOONRAKER_HTTP_RETRIES": "3",
+                        "TREED_ALLOW_HARDWARE_NOT_READY": "0",
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, f"{state}|{failures}|{ready}", result.stderr)
+                self.assertEqual(counter.read_text(encoding="utf-8"), str(attempts))
+
+    def test_verify_records_baseline_and_completion_only_for_standalone_loader(self) -> None:
         source = (ROOT / "loader/steps/verify.sh").read_text(encoding="utf-8")
         marker = 'if [ "${fail}" -eq 0 ]; then'
         final_block = source[source.rfind(marker) :]
@@ -381,18 +488,24 @@ class ManagedLoaderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
             sentinel = Path(directory) / "baseline-called"
             stub = Path(directory) / "core-update"
-            stub.write_text(f"#!/bin/sh\nprintf called > '{sentinel}'\n", encoding="utf-8")
+            stub.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{sentinel}'\n", encoding="utf-8")
             stub.chmod(0o755)
             final_block = final_block.replace(
                 "/usr/local/sbin/treed-core-update", str(stub)
+            ).replace(
+                "/usr/local/sbin/treed-update-service", str(stub)
             )
-            result = self.run_shell(
-                "fail=0; ok=1; VERIFY_DIAGNOSTIC_FAILS=0; "
-                "log_info(){ :; }; log_warn(){ :; }; " + final_block,
-                {"TREED_UPDATE_MANAGED_LOADER": "1", "TREED_ALLOW_HARDWARE_NOT_READY": "0"},
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse(sentinel.exists())
+            for managed in ("1", "0"):
+                result = self.run_shell(
+                    "fail=0; ok=1; VERIFY_DIAGNOSTIC_FAILS=0; "
+                    "log_info(){ :; }; log_warn(){ :; }; " + final_block,
+                    {"TREED_UPDATE_MANAGED_LOADER": managed, "TREED_ALLOW_HARDWARE_NOT_READY": "0"},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if managed == "1":
+                    self.assertFalse(sentinel.exists())
+                else:
+                    self.assertEqual(sentinel.read_text().splitlines(), ["baseline", "complete-loader"])
 
     def test_verify_pins_only_updated_runtimes_in_managed_mode(self) -> None:
         source = (ROOT / "loader/steps/verify.sh").read_text(encoding="utf-8")

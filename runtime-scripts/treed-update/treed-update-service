@@ -258,6 +258,48 @@ def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -
     write_state(state)
 
 
+def complete_loader() -> int:
+    # Блок 3.1: Проверенный standalone loader заменяет прерванный core-переход.
+    if os.geteuid() != 0:
+        raise RuntimeError("loader completion must run as root")
+    lock = acquire()
+    if lock is None:
+        raise RuntimeError("Нельзя завершить loader во время активного обновления")
+    try:
+        state = read_state()
+        if state.get("busy") or state.get("status") in ACTIVE:
+            raise RuntimeError("Нельзя заменить активную операцию обновления")
+        if state.get("targetId") != "printer-core" or state.get("status") != "error" or not (
+            state.get("resumeCore") or state.get("resultCode") in {
+                "provisioning_failed", "provisioning_interrupted", "core_update_failed"}
+        ):
+            return 0
+        try:
+            verified = subprocess.run([CORE_APPLY, "verify"], capture_output=True,
+                                      text=True, check=False, timeout=90)
+        except subprocess.SubprocessError as error:
+            raise RuntimeError("Не удалось проверить установленный loader runtime") from error
+        if verified.returncode:
+            raise RuntimeError("Установленный loader runtime не прошёл проверку")
+        payload = json.loads(verified.stdout)
+        tag = payload.get("tag") if isinstance(payload, dict) else None
+        previous_tag = state.get("targetTag")
+        if not all(isinstance(value, str) and TARGET_RE["printer-core"].fullmatch(value)
+                   for value in (tag, previous_tag)):
+            raise ValueError("Некорректная версия при завершении loader")
+        if tuple(map(int, tag[1:].split("."))) < tuple(map(int, previous_tag[1:].split("."))):
+            raise ValueError("Loader установил более раннюю версию, чем незавершённое обновление")
+        state["targetTag"] = tag
+        finish(state, "applied", "core_updated_via_loader",
+               f"Loader завершил установку TreeD Core {tag}; готовность проверена.")
+        if state.get("status") == "queued":
+            subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
+        return 0
+    finally:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        lock.close()
+
+
 def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
     # Блок 3.1: Core сам выбирает runtime/provisioning; A/B adapter не вызывается.
     command = [CORE_APPLY, "recover", state["operationId"]] if recovery else [
@@ -352,6 +394,8 @@ def main(argv: list[str]) -> int:
         return run_worker()
     if command == "recover" and len(argv) == 2:
         return recover()
+    if command == "complete-loader" and len(argv) == 2:
+        return complete_loader()
     if command == "phase" and len(argv) == 4:
         transition(argv[2], argv[3])
         return 0
