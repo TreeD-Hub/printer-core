@@ -43,11 +43,20 @@ done
 
 # Блок 4: Запрещаем замену файлов/моделей во время печати и останавливаем IPC-контур.
 if systemctl is-active --quiet moonraker.service; then
-  print_state="$(curl --noproxy '*' -fsS --max-time 4 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["status"]["print_stats"]["state"])' 2>/dev/null)" || {
-      log_error "Не удалось проверить состояние печати перед обновлением vision runtime"
-      exit 1
-    }
+  # Moonraker может запуститься раньше Klipper и временно отвечать HTTP 404.
+  print_state=""
+  for attempt in $(seq 1 "${TREED_MOONRAKER_HTTP_RETRIES:-30}"); do
+    if print_state="$(curl --noproxy '*' -fsS --max-time 4 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' |
+      python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["status"]["print_stats"]["state"])' 2>/dev/null)"; then
+      break
+    fi
+    print_state=""
+    sleep 1
+  done
+  if [[ -z "${print_state}" ]]; then
+    log_error "Не удалось проверить состояние печати перед обновлением vision runtime"
+    exit 1
+  fi
   case "${print_state,,}" in
     standby|complete|cancelled|error) ;;
     *) log_error "Обновление vision runtime/модели запрещено при состоянии принтера ${print_state}"; exit 1 ;;
