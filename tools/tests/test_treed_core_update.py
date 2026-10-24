@@ -1018,19 +1018,21 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertIn(b"credentials_path: /private/device.json", path.read_bytes())
 
         self.services.reset_mock()
-        self.manifest = dict(target_manifest, version="0.3.0", tag="v0.3.0")
+        version_prefix, patch_version = target_manifest["version"].rsplit(".", 1)
+        next_version = f"{version_prefix}.{int(patch_version) + 1}"
+        self.manifest = dict(target_manifest, version=next_version, tag="v" + next_version)
         self.payload = target_payload
         next_update_pins = itertools.cycle([target_manifest["requires"]["klipper"],
                                             target_manifest["requires"]["moonraker"]])
         with patch.object(core, "check_upstream_clean"), patch.object(
                 core, "git_head", side_effect=lambda _path: next(next_update_pins)):
-            result = core.apply("v0.3.0", "22222222-2222-4222-8222-222222222222", self.env)
+            result = core.apply(self.manifest["tag"], "22222222-2222-4222-8222-222222222222", self.env)
         self.assertEqual(result["status"], "applied")
         self.admission.assert_called_once_with("BEGIN")
         if os.name != "nt":
             chown.assert_any_call(ANY, 0, 0)
         self.services.assert_has_calls([call("stop"), call("start")])
-        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.3.0")
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], next_version)
         self.assertNotIn(b"enabled", path.read_bytes())
         self.assertIn(b"credentials_path: /private/device.json", path.read_bytes())
         self.assertEqual(variables.read_bytes(), saved_variables)

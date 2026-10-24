@@ -81,6 +81,10 @@ jobs:
           git -C "${RUNNER_TEMP}/moonraker" checkout --detach FETCH_HEAD
           python3 -m pip install -r "${RUNNER_TEMP}/moonraker/scripts/moonraker-requirements.txt"
 
+      - name: Use release-style version for tests
+        shell: bash
+        run: printf '0.%s.%s\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT" > VERSION
+
       - name: Full offline regression
         run: |
           python3 -B tools/tests/run_offline.py
