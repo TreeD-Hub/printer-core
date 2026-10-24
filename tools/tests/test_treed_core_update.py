@@ -81,6 +81,24 @@ class CoreUpdateTests(unittest.TestCase):
     def apply(self):
         return core.apply("v0.2.0", OPERATION, self.env)
 
+    def test_verify_cli_requires_matching_files_and_stable_readiness(self):
+        installed = dict(self.previous, tag="v0.1.0")
+        core.write_json(core.manifest_path(self.env), installed)
+        with patch.object(core.os, "geteuid", return_value=0, create=True), \
+             patch.object(core, "settings", return_value=self.env):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(core.main(["treed-core-update", "verify"]), 0)
+            self.assertEqual(json.loads(output.getvalue()), {"tag": "v0.1.0"})
+            self.wait.return_value = False
+            with self.assertRaisesRegex(RuntimeError, "readiness"):
+                core.main(["treed-core-update", "verify"])
+            self.wait.return_value = True
+            (self.locations["klipper"] / "treed_driver_mode.py").write_bytes(b"modified")
+            with self.assertRaisesRegex(RuntimeError, "Runtime файл отличается"):
+                core.main(["treed-core-update", "verify"])
+        self.assertEqual(core.read_json(core.manifest_path(self.env)), installed)
+
     def test_managed_loader_receives_fixed_preservation_environment(self):
         self.manifest.update(requires={"klipper": "a" * 40, "moonraker": "b" * 40},
                              provisioning={"schema": 1, "revision": "c" * 64})

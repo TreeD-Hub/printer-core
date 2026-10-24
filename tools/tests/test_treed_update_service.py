@@ -168,6 +168,61 @@ class UpdateServiceTests(unittest.TestCase):
         self.loading_screen.start()
         self.addCleanup(self.loading_screen.stop)
 
+    def test_loader_completion_closes_failure_and_preserves_pending_ui(self):
+        for pending_ui in (None, "ui-main-124-1"):
+            with self.subTest(pending_ui=pending_ui):
+                state = dict(operationId="operation-loader", requestId="request-loader", targetId="printer-core",
+                             targetTag="v0.34.1", status="error", busy=False, resumeCore=True,
+                             resultCode="provisioning_failed", history=[])
+                if pending_ui:
+                    state["pendingUiTag"] = pending_ui
+                service.write_state(state)
+                with patch.object(service.os, "geteuid", return_value=0, create=True), \
+                     patch.object(service, "acquire", return_value=FakeLock()), \
+                     patch.object(service.subprocess, "run", return_value=types.SimpleNamespace(
+                         returncode=0, stdout='{"tag":"v0.35.1"}', stderr="")):
+                    self.assertEqual(service.main(["treed-update-service", "complete-loader"]), 0)
+                result = service.read_state()
+                self.assertEqual(result["operationId"], state["operationId"])
+                self.assertNotIn("resumeCore", result)
+                self.assertEqual(result["targetTag"], pending_ui or "v0.35.1")
+                self.assertEqual(result["status"], "queued" if pending_ui else "applied")
+                self.assertEqual(result["busy"], bool(pending_ui))
+                if not pending_ui:
+                    self.assertEqual(result["history"][-1]["resultCode"], "core_updated_via_loader")
+
+    def test_loader_completion_cannot_override_busy_or_unverified_state(self):
+        state = dict(operationId="operation-loader", targetId="printer-core", targetTag="v0.34.1",
+                     status="error", busy=False, resultCode="provisioning_failed")
+        cases = (
+            ({**state, "busy": True, "status": "installing"}, 0, '{"tag":"v0.35.1"}'),
+            (state, 1, '{"tag":"v0.35.1"}'),
+            (state, 0, '{"tag":"v0.33.1"}'),
+            (state, 0, '{}'),
+        )
+        for original, code, payload in cases:
+            with self.subTest(original=original, code=code, payload=payload):
+                service.write_state(original)
+                with patch.object(service.os, "geteuid", return_value=0, create=True), \
+                     patch.object(service, "acquire", return_value=FakeLock()), \
+                     patch.object(service.subprocess, "run", return_value=types.SimpleNamespace(
+                         returncode=code, stdout=payload, stderr="verification failed")):
+                    with self.assertRaises((RuntimeError, ValueError)):
+                        service.main(["treed-update-service", "complete-loader"])
+                self.assertEqual(service.read_state(), original)
+
+    def test_loader_completion_requires_root_and_exclusive_lock(self):
+        state = {"targetId": "printer-core", "status": "error", "resultCode": "provisioning_failed"}
+        service.write_state(state)
+        with patch.object(service.os, "geteuid", return_value=1000, create=True):
+            with self.assertRaisesRegex(RuntimeError, "root"):
+                service.complete_loader()
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "активного обновления"):
+                service.complete_loader()
+        self.assertEqual(service.read_state(), state)
+
     def test_submit_is_idempotent_and_does_not_replace_active_operation(self):
         command = ["11111111-1111-4111-8111-111111111111", "printer-ui", "ui-main-123-1"]
         output = io.StringIO()

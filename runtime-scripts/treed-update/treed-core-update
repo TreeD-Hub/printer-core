@@ -1166,6 +1166,18 @@ def main(argv):
     if os.geteuid() != 0:
         raise RuntimeError("Core updater требует root")
     env = settings()
+    if len(argv) == 2 and argv[1] == "verify":
+        manifest = read_json(manifest_path(env))
+        if (not isinstance(manifest, dict) or manifest.get("kind") != KIND
+                or manifest.get("schema") != 1 or not manifest.get("files")
+                or manifest.get("tag") != f"v{manifest.get('version')}"):
+            raise ValueError("Установленный runtime baseline повреждён")
+        verify_runtime_files(manifest, env)
+        check_compatibility(manifest, env, manifest)
+        if not wait_ready(manifest):
+            raise RuntimeError("Установленный TreeD Core не прошёл readiness")
+        print(json.dumps({"tag": manifest["tag"]}))
+        return 0
     if len(argv) == 3 and argv[1] == "baseline":
         import fcntl
         lock_path = Path(env.get("TREED_UPDATE_LOCK_FILE", "/run/lock/treed-update.lock"))
@@ -1186,7 +1198,7 @@ def main(argv):
     elif len(argv) == 3 and argv[1] == "recover":
         result = recover(env, argv[2])
     else:
-        raise ValueError("usage: treed-core-update build repo zip | build-source repo zip | inspect | baseline repo | apply tag operationId | recover operationId")
+        raise ValueError("usage: treed-core-update build repo zip | build-source repo zip | inspect | verify | baseline repo | apply tag operationId | recover operationId")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "applied" or argv[1] == "recover" and result["status"] == "rolled_back" else 1
 

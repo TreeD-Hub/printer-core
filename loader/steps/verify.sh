@@ -424,7 +424,10 @@ printer_info_check() {
       if printf '%s\n' "${KLIPPER_STATE} ${KLIPPER_STATE_MESSAGE}" | grep -Eiq 'shutdown|thermal|heater|temperature|adc'; then
         KLIPPER_STATE_CLASS="shutdown"
       fi
-      break
+      # HTTP API отвечает до завершения запуска Klipper; startup требует ожидания.
+      if [ "${KLIPPER_STATE_CLASS}" != "startup" ]; then
+        break
+      fi
     fi
     sleep 1
   done
@@ -1450,6 +1453,7 @@ if [ "${fail}" -eq 0 ]; then
     log_info "verify: updater will record the managed runtime manifest after verification"
   elif [ "${TREED_ALLOW_HARDWARE_NOT_READY:-0}" = "0" ]; then
     /usr/local/sbin/treed-core-update baseline "${REPO_DIR}"
+    /usr/local/sbin/treed-update-service complete-loader
   else
     log_warn "verify: core update baseline skipped without hardware readiness"
   fi
