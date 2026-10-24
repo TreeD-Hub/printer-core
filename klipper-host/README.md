@@ -6,6 +6,23 @@
 
 ## Модули и контракты
 
+`treed_light_control.py` подключается `[treed_light_control]` в `service_fans.cfg`.
+Webhook `treed/light/set` доступен через Moonraker как
+`POST /printer/treed/light/set` с JSON `{"value": 0}` или `{"value": 1}`.
+Другие значения и типы отклоняются; Klipper должен быть `ready`.
+Модуль использует существующий `output_pin chamber_light` и его
+`gcrq.send_async_request`, обходя G-code mutex. Макросы `LIGHT_ON`/`LIGHT_OFF`
+вызывают `TREED_LIGHT_SET VALUE=0|1` через ту же очередь: автоматический `LIGHT_ON`
+из `START_PRINT` не оставляет отложенного lookahead-запроса после ручного off.
+Последний принятый запрос определяет заданный свет; последующее автоматическое
+событие может снова включить его согласно сохранённым флагам.
+Поле `requested_value` в ответе подтверждает принятие команды, а
+`output_pin.value` отражает заданное значение, не физическую обратную связь.
+При обновлении Klipper сверять `PrinterOutputPin.gcrq`, `GCodeRequestQueue`,
+`send_async_request` и `WebRequest.get_int` с закреплённым исходником.
+Capability `light_async` опубликована в `_TREED_UI_CONTRACT`; UI без этого флага
+сохраняет вызовы макросов. Сеть, MCU и shutdown по-прежнему ограничивают управление.
+
 `treed_hotend_limit.py` подключается `[treed_hotend_limit]` в `ebb42_can.cfg`.
 `max_target: 285` ограничивает цели хотэнда для `M104`, `M109`,
 `SET_HEATER_TEMPERATURE`, API и `PID_CALIBRATE`: запрос 390 °C становится 285 °C.
@@ -37,7 +54,13 @@ hash новой кривой и XY. Следующий ready снимает за
 При обновлении Klipper сверять status configfile/manual_probe/temperature_probe,
 extruder_stepper.stepper и stock SET_EXTRUDER_ROTATION_DISTANCE.
 
-`treed_driver_mode.py` управляет режимом TMC5160 XYZ, с допуском и групповым откатом.
+`treed_driver_mode.py` выбирает полный профиль XYZ до создания TMC/шаговых осей:
+`quiet` задаёт 128 микрошагов, интерполяцию, 100 нс, явные TMC/PWM
+и лимиты 200 мм/с и 50 000 мм/с²;
+`normal` читает исходные конфиги. Смена сохраняет выбор и выполняет
+`FIRMWARE_RESTART`, после которого нужен homing. Пользовательские конфиги
+не переписываются; отказ сохранения/перезапуска имеет восстановление выбора,
+а стартовая групповая запись TMC — проверку MRES и откат.
 `treed_driver_fan_mode.py` включает обдув по нагрузке и защитному таймеру
 только на 100%: подключённые вентиляторы не вращаются при меньшем PWM.
 Пин и timer принадлежат controller_fan;

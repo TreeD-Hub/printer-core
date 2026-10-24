@@ -25,6 +25,9 @@ exec(compile(PATH.read_text(encoding="utf-8"), str(PATH), "exec"), core.__dict__
 core_update_admission = core.update_admission
 core_services_inactive = core.services_inactive
 OPERATION = "11111111-1111-4111-8111-111111111111"
+LIGHT_KEYS = ("klipper/treed_light_control.py",
+              "config/profiles/treed_v2_corexy_v1/service_fans.cfg",
+              "config/profiles/treed_v2_corexy_v1/macros_ui_contract.cfg")
 
 
 class CoreUpdateTests(unittest.TestCase):
@@ -47,6 +50,7 @@ class CoreUpdateTests(unittest.TestCase):
         self.payload.update({"config/printer.cfg": b"# new release\n[include profiles/treed_v2_corexy_v1/macros.cfg]\n",
                              "klipper/treed_driver_mode.py": b"version = 2\n",
                              "moonraker/treed_update.py": b"version = 2\n"})
+        self.payload.update({key: core.sources(ROOT)[key].read_bytes() for key in LIGHT_KEYS})
         for name in self.locations.values():
             name.mkdir()
         for key, data in self.old.items():
@@ -162,6 +166,9 @@ class CoreUpdateTests(unittest.TestCase):
         for key, data in self.old.items():
             self.assertEqual(core.destination(key, self.locations).read_bytes(), data, key)
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.1.0")
+        for key in LIGHT_KEYS:
+            if key not in self.old:
+                self.assertFalse(core.destination(key, self.locations).exists(), key)
 
     def seed_autoprinter_update(self):
         private = {
@@ -438,6 +445,20 @@ class CoreUpdateTests(unittest.TestCase):
         self.previous["files"].append({"path": account_key, "runtimeSha256": core.content_hash(account_key, account)})
         core.write_json(core.manifest_path(self.env), self.previous)
         self.payload[account_key] = b"[treed_autoprinter]\ncredentials_path:\n"
+        # Подлинные конфиги установленного выпуска; новый код не подменяет старый updater.
+        for key in LIGHT_KEYS[1:]:
+            relative = key.replace('config/', 'klipper/', 1)
+            old_config = subprocess.check_output(['git', '-C', str(ROOT), 'show',
+                                                  f'{revision}:{relative}'], timeout=10)
+            self.old[key] = old_config
+            destination = core.destination(key, self.locations)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(old_config)
+            self.previous['files'].append({'path': key, 'runtimeSha256': core.content_hash(key, old_config)})
+        variables = self.locations['config'] / 'treed_variables.cfg'
+        variables.write_bytes(b'[Variables]\nlight_on_startup = 1\nlight_on_print_start = 0\n')
+        saved_variables = variables.read_bytes()
+        core.write_json(core.manifest_path(self.env), self.previous)
         # Подменяются только границы окружения; install/journal/restore настоящие.
         for name in ("roots", "download", "load_package", "vision_units_installed",
                      "check_compatibility", "phase", "services", "idle",
@@ -446,7 +467,7 @@ class CoreUpdateTests(unittest.TestCase):
 
         def service(action):
             if action == "start":
-                for key in (gate_key, "sbin/treed-core-update"):
+                for key in (gate_key, "sbin/treed-core-update", *LIGHT_KEYS):
                     self.assertEqual(core.destination(key, self.locations).read_bytes(),
                                      self.payload[key])
         self.services.side_effect = service
@@ -474,6 +495,9 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.3.0")
         self.assertNotIn(b"enabled", path.read_bytes())
         self.assertIn(b"credentials_path: /private/device.json", path.read_bytes())
+        self.assertEqual(variables.read_bytes(), saved_variables)
+        for key in LIGHT_KEYS:
+            self.assertEqual(core.destination(key, self.locations).read_bytes(), self.payload[key])
 
     def test_admission_sends_the_private_begin_and_end_gcode(self):
         with patch.object(core, "request_json") as request:
@@ -799,6 +823,9 @@ class CoreUpdateTests(unittest.TestCase):
         self.services.assert_not_called()
 
     def test_power_loss_after_partial_install_recovers_idempotently(self):
+        variables = self.locations['config'] / 'treed_variables.cfg'
+        saved = b'[Variables]\nlight_on_startup = 1\nlight_on_print_start = 0\n'
+        variables.write_bytes(saved)
         original = core.write_file
         def write(path, data, *args, **kwargs):
             if path == self.locations["moonraker"] / "treed_update.py":
@@ -812,6 +839,11 @@ class CoreUpdateTests(unittest.TestCase):
         self.services.reset_mock()
         self.assertEqual(core.recover(self.env, OPERATION)["status"], "rolled_back")
         self.services.assert_not_called()
+        self.assertEqual(variables.read_bytes(), saved)
+        self.assertEqual(core.apply('v0.2.0', '22222222-2222-4222-8222-222222222222', self.env)['status'], 'applied')
+        for key in LIGHT_KEYS:
+            self.assertEqual(core.destination(key, self.locations).read_bytes(), self.payload[key])
+        self.assertEqual(variables.read_bytes(), saved)
 
     def test_committed_operation_recovers_as_applied(self):
         self.apply()
@@ -979,6 +1011,8 @@ print("DELIVERED_IMPORT_OK")
         self.assertEqual(payload["sbin/treed-loading-screen"],
                          core.sources(ROOT)["sbin/treed-loading-screen"].read_bytes())
         self.assertIn("klipper/treed_driver_mode.py", payload)
+        for key in LIGHT_KEYS:
+            self.assertEqual(payload[key], core.sources(ROOT)[key].read_bytes())
         self.assertTrue({"vision/service.py", "vision/models.json", "camera/stream_detect.py",
                          "moonraker/treed_vision_client.py"} <= payload.keys())
         self.assertTrue(core.AUTOPRINTER_MODULES <= payload.keys())

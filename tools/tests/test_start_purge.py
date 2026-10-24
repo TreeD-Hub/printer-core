@@ -724,5 +724,58 @@ class PurgeTests(unittest.TestCase):
                     self.assertEqual(h.commands, [])
 
 
+class XYMotionTest(unittest.TestCase):
+    def test_all_segments_avoid_front_right_camera(self):
+        template = ENV.from_string(CFG.get("gcode_macro _TREED_XY_MOTION_TEST_RUN", "gcode"))
+        printer = {
+            "toolhead": {"homed_axes": "xyz", "square_corner_velocity": 9,
+                         "position": {"x": 125, "y": 158.5, "z": 10}},
+            "print_stats": {"state": "standby"},
+            "pause_resume": {"is_paused": False},
+            "configfile": {"settings": {
+                "stepper_x": {"position_min": 0, "position_max": 250},
+                "stepper_y": {"position_min": 0, "position_max": 257},
+                "stepper_z": {"position_min": -5, "position_max": 196}}},
+        }
+
+        def intersects_camera(start, end):
+            low, high = 0.0, 1.0
+            for a, b, minimum, maximum in zip(start, end, (220, 0), (250, 30)):
+                delta = b - a
+                if delta == 0:
+                    if not minimum <= a <= maximum:
+                        return False
+                    continue
+                entry, exit_ = sorted(((minimum - a) / delta, (maximum - a) / delta))
+                low, high = max(low, entry), min(high, exit_)
+                if low > high:
+                    return False
+            return True
+
+        for extra in ({}, {"MARGIN": "1"},
+                      {"CIRCLE_RADIUS": "109", "SMALL_STEP": "105", "ZIGZAG_STEPS": "40"}):
+            with self.subTest(extra=extra):
+                rendered = template.render(printer=printer, params={"SPEED": "600", **extra},
+                                           action_raise_error=fail, action_respond_info=lambda message: "")
+                previous = (125, 158.5)
+                points = []
+                for line in rendered.splitlines():
+                    tokens = line.split()
+                    if not tokens or tokens[0] != "G1":
+                        continue
+                    axes = {token[0]: float(token[1:]) for token in tokens[1:]}
+                    self.assertNotIn("E", axes)
+                    if "X" not in axes and "Y" not in axes:
+                        continue
+                    point = (axes.get("X", previous[0]), axes.get("Y", previous[1]))
+                    self.assertTrue(0 <= point[0] <= 250 and 0 <= point[1] <= 257)
+                    self.assertFalse(intersects_camera(previous, point), (previous, point))
+                    self.assertEqual(axes["F"], 36000)
+                    points.append(point)
+                    previous = point
+                self.assertTrue(any(x > 220 and y > 30 for x, y in points))
+                self.assertTrue(any(x < 220 and y < 30 for x, y in points))
+
+
 if __name__ == "__main__":
     unittest.main()

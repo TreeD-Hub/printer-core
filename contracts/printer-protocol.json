@@ -6,6 +6,7 @@
     "motion": 1,
     "thermal": 1,
     "fan": 1,
+    "light_async": 1,
     "driver_mode": 1,
     "driver_fan_mode": 1,
     "filament": 1,
