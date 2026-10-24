@@ -764,6 +764,37 @@ class CoreUpdateTests(unittest.TestCase):
             core.baseline(self.root, self.env)
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.2.0")
 
+    def test_loader_baseline_uses_release_tag_of_its_checkout(self):
+        repo = self.root / "loader-source"
+        repo.mkdir()
+        (repo / "VERSION").write_text("0.2.0\n", encoding="utf-8")
+        (repo / "runtime-versions.env").write_text(
+            'TREED_KLIPPER_REF="' + "a" * 40 + '"\nTREED_MOONRAKER_REF="' + "b" * 40 + '"\n',
+            encoding="utf-8",
+        )
+        source = repo / "source-driver.py"
+        source.write_bytes(self.old["klipper/treed_driver_mode.py"])
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                 "-C", str(repo), *args], text=True, stderr=subprocess.DEVNULL).strip()
+        git("init")
+        git("add", ".")
+        git("commit", "-m", "bootstrap")
+        git("tag", "v9.0.0")
+        git("commit", "--allow-empty", "-m", "release")
+        with patch.object(core, "sources", return_value={"klipper/treed_driver_mode.py": source}):
+            core.baseline(repo, self.env)
+            self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.2.0")
+            git("tag", "v0.35.1")
+            git("tag", "v0.35.2")
+            core.baseline(repo, self.env)
+        recorded = core.read_json(core.manifest_path(self.env))
+        self.assertEqual((recorded["version"], recorded["tag"], recorded["sha"]),
+                         ("0.35.2", "v0.35.2", git("rev-parse", "HEAD")))
+        self.assertEqual(core.package_manifest(repo)["version"], "0.2.0")
+        self.assertEqual(core.config_conflicts(self.env), [])
+
     def test_only_previous_manifest_owned_files_can_be_removed(self):
         self.payload.pop("config/profiles/treed_v2_corexy_v1/macros.cfg")
         unrelated = self.locations["config"] / "profiles/treed_v2_corexy_v1/user.cfg"

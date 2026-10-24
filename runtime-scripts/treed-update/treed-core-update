@@ -111,10 +111,19 @@ def git_head(path):
                                    text=True, timeout=10).strip()
 
 
-def package_manifest(repo):
+def package_manifest(repo, *, use_release_tag=False):
     version = (repo / "VERSION").read_text(encoding="utf-8").strip()
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
         raise ValueError("VERSION должен быть x.y.z")
+    commit = git_head(repo)
+    if use_release_tag:
+        # CI ставит VERSION только в артефакте; Git checkout узнаёт выпуск по своему тегу.
+        tags = subprocess.check_output(
+            ["git", "-c", f"safe.directory={repo.resolve().as_posix()}", "-C", str(repo),
+             "tag", "--points-at", commit], text=True, timeout=10).splitlines()
+        versions = [tag[1:] for tag in tags if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)]
+        if versions:
+            version = max(versions, key=lambda value: tuple(map(int, value.split("."))))
     runtime = (repo / "runtime-versions.env").read_text(encoding="utf-8")
     requirements = {}
     for component in ("KLIPPER", "MOONRAKER"):
@@ -123,7 +132,7 @@ def package_manifest(repo):
             raise ValueError(f"Отсутствует закреплённый SHA {component}")
         requirements[component.lower()] = match[1]
     return {"kind": KIND, "schema": 1, "version": version, "tag": f"v{version}",
-            "sha": git_head(repo), "requires": requirements,
+            "sha": commit, "requires": requirements,
             "provisioning": {"schema": 1, "revision": provisioning_revision(repo)}, "files": []}
 
 
@@ -822,7 +831,7 @@ def verify_runtime_files(manifest, env):
 
 
 def baseline(repo, env):
-    manifest = package_manifest(repo)
+    manifest = package_manifest(repo, use_release_tag=True)
     runtime_sources = sources(repo)
     managed = {"files": [{"path": key, "runtimeSha256": content_hash(key, source.read_bytes())}
                          for key, source in runtime_sources.items()
