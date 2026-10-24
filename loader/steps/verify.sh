@@ -1172,6 +1172,17 @@ else
 fi
 
 # Блок 7: Проверки сервисов, Moonraker API и CAN-интерфейса.
+if [ -e "${REPO_DIR}/loader/managed-runtime.json" ] || [ -L "${REPO_DIR}/loader/managed-runtime.json" ]; then
+  if [ -f "${REPO_DIR}/loader/steps/update-recovery-bootstrap.sh" ] \
+    && systemctl cat treed-update-retry.service >/dev/null 2>&1 \
+    && systemctl cat treed-update-retry.timer >/dev/null 2>&1 \
+    && systemctl is-enabled --quiet treed-update-retry.timer \
+    && systemctl is-active --quiet treed-update-retry.timer; then
+    pass "core update recovery timer installed, enabled and active"
+  else
+    failf "core update recovery timer installed, enabled and active"
+  fi
+fi
 check_required_service_active "klipper.service"
 check_required_service_active "moonraker.service"
 check_required_service_active "nginx.service"

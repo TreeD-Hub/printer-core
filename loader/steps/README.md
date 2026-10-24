@@ -2,6 +2,11 @@
 
 Каталог `loader/steps/` содержит атомарные этапы provisioning. Порядок и тип шага (`required`/`optional`) задаются в `loader/loader.sh`.
 
+Managed-порядок задаётся в [`managed-runtime.json`](../managed-runtime.json).
+Required-помощник `update-recovery-bootstrap.sh` устанавливает retry service/timer:
+в managed-контуре он выполняется после `check-env`, до обновления зависимостей;
+в standalone его вызывает `moonraker-config` после установки updater-команд.
+
 `runtime-bootstrap.sh` обязательно доставляет `treed_driver_mode.py` и
 `treed_driver_fan_mode.py`. `klipper-core.sh` сохраняет `treed_variables.cfg`
 в режиме `preserve` с fail-fast при ошибке копирования; `clean` сбрасывает его.
@@ -62,6 +67,8 @@
 - `EXTLINUX_FILE` (для `extlinux` backend)
 - `TREED_LOADER_MODE` (`apply|check`, default `apply`; `check` не запускает step-скрипты и только сверяет runtime-состояние)
 - `TREED_UPDATE_MANAGED_LOADER` (`0|1`, default `0`; внутренний режим updater; значение `1` требует root, `TREED_UPDATE_MANAGED=1` и UUID `TREED_UPDATE_OPERATION_ID`, после чего запускает ограниченный preserve-контур)
+- `TREED_UPDATE_LOCK_FD` — внутренний унаследованный файловый дескриптор общей блокировки standalone loader. Root-команды сверяют его с настроенным lock-файлом и не снимают блокировку владельца. Вручную задавать эту переменную для клиентского обновления не требуется.
+- `TREED_UPDATE_OPERATION_ID` и `TREED_UPDATE_ATTEMPT_GENERATION` — внутренний контекст worker для команд фаз и результата core. Поколение отделяет повторные попытки одной операции; запоздавший ответ прежней попытки не меняет её новое состояние.
 - `TREED_LOADER_PROGRESS` (`auto|plain|off`, default `auto`; шкала со спиннером в TTY, текстовый прогресс при перенаправлении, `off` отключает индикатор; только `apply`)
 - `TREED_DEPLOY_MODE` (`auto|clean|preserve`, default `auto`)
 - `TREED_DEPLOY_MODE_EFFECTIVE` (`clean|preserve`)
@@ -281,7 +288,7 @@ treed-ui status
 - `moonraker-config.sh` включает updater Mainsail только при наличии валидного локального пути (с `release_info.json`); при типовом порядке шагов путь уже существует после `mainsail-web.sh`.
 - `moonraker-config.sh` включает updater Crowsnest только при наличии валидного git checkout с updater-метаданными (legacy `tools/pkglist.sh` или v5 `system-dependencies.json` + `requirements.txt`); updater KlipperScreen генерируется позже шагом `klipperscreen-install.sh`, когда checkout уже существует.
 - `moonraker-config.sh` деплоит компонент `[treed_update]`, валидированный root-submit `/usr/local/sbin/treed-update-service`, UI worker и fixed systemd/recovery units; operation state/history хранится в `/var/lib/treed-update/state.json`.
-- `moonraker-config.sh` развёртывает `treed-core-update` и root-worker. Core обновляет только пакет TreeD с journal/rollback, без provisioning; системный `treed-ab` остаётся disabled. `verify` фиксирует baseline только после успешной аппаратной готовности.
+- `moonraker-config.sh` развёртывает `treed-core-update`, root-worker и retry service/timer через общий bootstrap-помощник. Core обновляет пакет TreeD с journal/rollback и при необходимости вызывает managed loader для зависимостей и служб; системный `treed-ab` остаётся disabled. `verify` фиксирует baseline только после успешной аппаратной готовности.
 - `/etc/default/treed-update` содержит `TREED_UPDATE_PI_HOME`, `TREED_CORE_KLIPPER_DIR`, `TREED_CORE_MOONRAKER_DIR` — реальные paths установки. Core использует `TREED_CORE_MANIFEST_FILE` (default `/var/lib/treed-update/core-manifest.json`), `TREED_CORE_STATE_DIR` (default `/var/lib/treed-update/core`), `TREED_CORE_RELEASE_API_URL` (default GitHub releases `TreeD-Hub/printer-core`); worker использует `TREED_CORE_UPDATE_COMMAND` (default `/usr/local/sbin/treed-core-update`). Override этих root-owned параметров нужен только при нестандартной установке/тестах.
 - `moonraker-config.sh` идемпотентно добавляет `treed-shell` в `moonraker.asvc`, чтобы UI мог перезапустить только `treed-shell.service` через штатный Moonraker service endpoint.
 - `verify.sh` production-default fail-closed: `Klippy state=ready`, main MCU, EBBCan, Eddy и свежий MCU journal обязательны; `TREED_ALLOW_HARDWARE_NOT_READY=1` явно включает service/install mode.

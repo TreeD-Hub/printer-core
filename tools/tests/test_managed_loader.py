@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import re
 import shutil
@@ -9,7 +10,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BASH = shutil.which("bash")
+GIT_BASH = Path(r"C:\Program Files\Git\bin\bash.exe")
+BASH = str(GIT_BASH) if GIT_BASH.is_file() else shutil.which("bash")
 
 
 @unittest.skipUnless(BASH, "bash is required for managed loader shell fixtures")
@@ -52,29 +54,75 @@ class ManagedLoaderTests(unittest.TestCase):
 
     def test_managed_registry_is_fixed_and_excludes_full_provisioning(self) -> None:
         source = (ROOT / "loader/loader.sh").read_text(encoding="utf-8")
-        managed = re.search(
-            r'if \[ "\$\{TREED_UPDATE_MANAGED_LOADER\}" = "1" \]; then\s*STEPS=\((.*?)\n  \)\nfi',
-            source,
-            re.DOTALL,
-        )
-        self.assertIsNotNone(managed)
-        steps = re.findall(r'"([^"]+)"', managed.group(1))
-        self.assertEqual(
-            steps,
-            [
-                "check-env",
-                "maintenance-stop",
-                "packages-core",
-                "runtime-bootstrap",
-                "moonraker-config",
-                "treed-cam",
-                "maintenance-start",
-                "verify",
-            ],
-        )
+        registry = json.loads((ROOT / "loader/managed-runtime.json").read_text(encoding="utf-8"))
+        steps = registry["steps"]
         self.assertNotIn("firmware-build", steps)
         self.assertNotIn("klipper-core", steps)
         self.assertNotIn("klipper-sync", steps)
+
+    def test_managed_registry_rejects_malformed_and_missing_steps(self) -> None:
+        source = (ROOT / "loader/loader.sh").read_text(encoding="utf-8")
+        start = source.index("load_managed_steps() {")
+        end = source.index("\n}\n\nif ", start) + 2
+        function = source[start:end]
+        original = json.loads((ROOT / "loader/managed-runtime.json").read_text(encoding="utf-8"))
+        fixture = self.temp_root / "managed-plan-invalid"
+        (fixture / "loader/steps").mkdir(parents=True)
+        for relative in original["inputs"]:
+            destination = fixture / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, destination)
+        for step in original["steps"]:
+            (fixture / "loader/steps" / f"{step}.sh").write_text("# fixture\n", encoding="utf-8")
+        script = function + '\nload_managed_steps "$1"'
+        for mutate in (
+            lambda plan: plan["steps"].append(plan["steps"][0]),
+            lambda plan: plan["steps"].__setitem__(1, "../escape"),
+            lambda plan: plan["requiredSteps"].remove("verify"),
+        ):
+            plan = json.loads(json.dumps(original))
+            mutate(plan)
+            (fixture / "loader/managed-runtime.json").write_text(json.dumps(plan), encoding="utf-8")
+            result = subprocess.run([BASH, "-c", script, "bash", str(fixture)],
+                                    cwd=ROOT, capture_output=True, text=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+        (fixture / "loader/managed-runtime.json").write_text(json.dumps(original), encoding="utf-8")
+        (fixture / "loader/steps" / f"{original['steps'][1]}.sh").unlink()
+        result = subprocess.run([BASH, "-c", script, "bash", str(fixture)],
+                                cwd=ROOT, capture_output=True, text=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+
+    @unittest.skipIf(os.name == "nt", "flock inheritance requires Linux")
+    def test_standalone_lock_uses_core_setting_and_rejects_concurrent_loader(self) -> None:
+        source = (ROOT / "loader/loader.sh").read_text(encoding="utf-8")
+        start = source.index("acquire_standalone_update_lock() {")
+        end = source.index("\n}\n\n", start) + 2
+        function = source[start:end]
+        with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
+            root = Path(directory)
+            lock_from_file, lock_from_env = root / "configured.lock", root / "shell.lock"
+            env_file = root / "treed-update.env"
+            env_file.write_text(f"TREED_UPDATE_LOCK_FILE={lock_from_file}\n", encoding="utf-8")
+            script = function + '\nacquire_standalone_update_lock\n' + (
+                'python - <<\'PY\'\n'
+                'import fcntl, os\n'
+                'fd = int(os.environ["TREED_UPDATE_LOCK_FD"])\n'
+                'os.fstat(fd)\n'
+                'with open(os.environ["TREED_UPDATE_LOCK_FILE"], "a") as lock:\n'
+                '    try:\n'
+                '        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n'
+                '    except BlockingIOError:\n'
+                '        raise SystemExit(0)\n'
+                'raise SystemExit(9)\n'
+                'PY\n'
+            )
+            result = self.run_shell(script, {"TREED_UPDATE_ENV_FILE": str(env_file)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            override = self.run_shell(
+                script,
+                {"TREED_UPDATE_ENV_FILE": str(env_file), "TREED_UPDATE_LOCK_FILE": str(lock_from_env)},
+            )
+            self.assertEqual(override.returncode, 0, override.stderr)
 
     def test_full_registry_includes_klipperscreen_only_for_selected_ks(self) -> None:
         source = (ROOT / "loader/loader.sh").read_text(encoding="utf-8")
@@ -98,21 +146,13 @@ class ManagedLoaderTests(unittest.TestCase):
 
         managed = self.run_shell(
             script,
-            {"TREED_UI_MODE": "ks", "TREED_UPDATE_MANAGED_LOADER": "1"},
+            {"TREED_UI_MODE": "ks", "TREED_UPDATE_MANAGED_LOADER": "1",
+             "REPO_DIR": str(ROOT)},
         )
         self.assertEqual(managed.returncode, 0, managed.stderr)
         self.assertEqual(
             managed.stdout.splitlines(),
-            [
-                "check-env",
-                "maintenance-stop",
-                "packages-core",
-                "runtime-bootstrap",
-                "moonraker-config",
-                "treed-cam",
-                "maintenance-start",
-                "verify",
-            ],
+            json.loads((ROOT / "loader/managed-runtime.json").read_text(encoding="utf-8"))["steps"],
         )
 
     def test_treed_shell_configures_xwrapper_idempotently(self) -> None:
@@ -488,12 +528,12 @@ curl(){
         with tempfile.TemporaryDirectory(dir=self.temp_root) as directory:
             sentinel = Path(directory) / "baseline-called"
             stub = Path(directory) / "core-update"
-            stub.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{sentinel}'\n", encoding="utf-8")
+            stub.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{sentinel.as_posix()}'\n", encoding="utf-8")
             stub.chmod(0o755)
             final_block = final_block.replace(
-                "/usr/local/sbin/treed-core-update", str(stub)
+                "/usr/local/sbin/treed-core-update", stub.as_posix()
             ).replace(
-                "/usr/local/sbin/treed-update-service", str(stub)
+                "/usr/local/sbin/treed-update-service", stub.as_posix()
             )
             for managed in ("1", "0"):
                 result = self.run_shell(

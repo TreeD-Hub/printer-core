@@ -22,6 +22,8 @@
 runtime-scripts/treed-update/treed-* text eol=lf
 runtime-scripts/treed-ui/treed-ui text eol=lf
 runtime-scripts/treed-vision/service.py text eol=lf
+*.timer text eol=lf
+runtime-versions.env text eol=lf
 
 # Treat common binaries as binary (no EOL conversions)
 *.png     binary

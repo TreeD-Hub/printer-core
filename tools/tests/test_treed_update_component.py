@@ -81,6 +81,100 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
                 await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.3.0"))
         self.api.run_gcode.assert_not_awaited()
 
+    async def test_core_not_ready_remains_resumable_after_retry_budget_exhaustion(self):
+        state = {"operationId": "not-ready-op", "targetId": "printer-core", "targetTag": "v0.2.0",
+                 "status": "error", "busy": False, "resultCode": "core_not_ready",
+                 "retry": {"attempts": 3, "nextAttemptAt": None, "exhausted": True,
+                           "lastResultCode": "core_not_ready"}}
+        with patch.object(self.component, "_read_state", return_value=state), \
+                patch.object(self.component, "_core_capability", return_value={"supported": True}):
+            self.assertEqual(self.component._core_resume_state(), state)
+            status = self.component._status_payload([
+                {"id": "printer-core", "status": "available", "latestTag": "v0.3.0"}], None)
+        core = status["releaseResults"][0]
+        self.assertEqual(core["latestTag"], "v0.2.0")
+        self.assertTrue(core["canApply"])
+
+    async def test_scheduled_retry_is_exposed_and_blocks_manual_apply_until_exhausted(self):
+        retry = {"attempts": 1, "nextAttemptAt": "2030-01-01T00:00:30Z",
+                 "exhausted": False, "lastResultCode": "provisioning_failed"}
+        state = {"operationId": "retry-op", "targetId": "printer-core", "targetTag": "v0.2.0", "status": "error",
+                 "resultCode": "provisioning_failed", "busy": False, "retry": retry,
+                 "pendingUiTag": "ui-main-123-1", "message": "Исходная ошибка core."}
+        with patch.object(self.component, "_read_state", return_value=state), \
+                patch.object(self.component, "_core_capability", return_value={"supported": True}):
+            status = self.component._status_payload([
+                {"id": "printer-core", "status": "available", "latestTag": "v0.3.0"},
+                {"id": "printer-ui", "status": "available", "latestTag": "ui-main-124-1"}], None)
+        core = status["releaseResults"][0]
+        ui = status["releaseResults"][1]
+        self.assertEqual(status["retry"], retry)
+        self.assertEqual(core["latestTag"], "v0.2.0")
+        self.assertFalse(core["canApply"])
+        self.assertFalse(ui["canApply"])
+        self.assertFalse(status["canApply"])
+        self.assertIn("автоматический повтор", status["message"].casefold())
+        self.assertIn("автоматический повтор", core["message"].casefold())
+        self.assertEqual(status["operation"]["message"], "Исходная ошибка core.")
+
+        state["retry"] = {"attempts": 3, "nextAttemptAt": None,
+                           "exhausted": True, "lastResultCode": "provisioning_failed"}
+        with patch.object(self.component, "_read_state", return_value=state), \
+                patch.object(self.component, "_core_capability", return_value={"supported": True}):
+            status = self.component._status_payload([
+                {"id": "printer-core", "status": "available", "latestTag": "v0.3.0"}], None)
+        self.assertTrue(status["releaseResults"][0]["canApply"])
+        self.assertEqual(status["targetTag"], "v0.2.0")
+
+    async def test_supersedable_core_keeps_newer_release_visible_and_allows_explicit_apply(self):
+        retry = {"attempts": 3, "nextAttemptAt": "2030-01-01T00:00:30Z",
+                 "exhausted": False, "lastResultCode": "provisioning_failed"}
+        state = {"operationId": "old-op", "targetId": "printer-core", "targetTag": "v0.2.0",
+                 "status": "error", "busy": False, "resultCode": "validation_failed",
+                 "retry": retry, "canSupersedeCore": True, "pendingUiTag": "ui-main-123-1"}
+        process = NS(returncode=0, communicate=AsyncMock(return_value=(b'{"accepted":true,"status":"queued"}', b"")))
+        launch = AsyncMock(return_value=process)
+        self.api.query_objects.side_effect = RuntimeError("Klippy API offline")
+        with patch.object(self.component, "_read_state", return_value=state), \
+             patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=launch):
+            status = self.component._status_payload([
+                {"id": "printer-core", "status": "available", "latestTag": "v0.3.0"},
+                {"id": "printer-ui", "status": "available", "latestTag": "ui-main-124-1"}], None)
+            self.assertEqual(status["releaseResults"][0]["latestTag"], "v0.3.0")
+            self.assertTrue(status["releaseResults"][0]["canApply"])
+            self.assertFalse(status["releaseResults"][1]["canApply"])
+            self.assertEqual(status["retry"], retry)
+            result = await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.3.0"))
+        self.assertTrue(result["busy"])
+        self.api.query_objects.assert_awaited()
+        self.assertIn("v0.3.0", launch.await_args.args)
+        self.api.query_objects.side_effect = None
+        self.api.query_objects.return_value = {"print_stats": {"state": "paused"}}
+        with patch.object(self.component, "_read_state", return_value=state), \
+             patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock()) as blocked_launch:
+            with self.assertRaises(ApiError):
+                await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.3.0"))
+        blocked_launch.assert_not_awaited()
+
+    async def test_late_supersede_marker_uses_cached_newer_release_without_mutating_cache(self):
+        state = {"operationId": "old-op", "targetId": "printer-core", "targetTag": "v0.2.0",
+                 "status": "error", "busy": False, "resultCode": "provisioning_failed"}
+        raw_release = {"id": "printer-core", "status": "available", "latestTag": "v0.4.0",
+                       "latestVersion": "0.4.0"}
+        self.component.last_release_results = [raw_release]
+        with patch.object(self.component, "_read_state", return_value=state), \
+             patch.object(self.component, "_core_capability", return_value={"supported": True}):
+            first = self.component._build_status(None)
+            self.assertEqual(first["releaseResults"][0]["latestTag"], "v0.2.0")
+            self.assertEqual(raw_release["latestTag"], "v0.4.0")
+            state["canSupersedeCore"] = True
+            second = self.component._build_status(None)
+        self.assertEqual(second["releaseResults"][0]["latestTag"], "v0.4.0")
+        self.assertTrue(second["releaseResults"][0]["canApply"])
+        self.assertEqual(raw_release["latestTag"], "v0.4.0")
+
     async def test_cancelled_job_is_allowed_despite_stale_pause_flags(self):
         self.api.query_objects.return_value = {
             "print_stats": {"state": " CANCELLED "},
