@@ -24,8 +24,8 @@ Capability `light_async` опубликована в `_TREED_UI_CONTRACT`; UI б
 сохраняет вызовы макросов. Сеть, MCU и shutdown по-прежнему ограничивают управление.
 
 `treed_hotend_limit.py` подключается `[treed_hotend_limit]` в `ebb42_can.cfg`.
-`max_target: 285` ограничивает цели хотэнда для `M104`, `M109`,
-`SET_HEATER_TEMPERATURE`, API и `PID_CALIBRATE`: запрос 390 °C становится 285 °C.
+`max_target: 280` ограничивает цели хотэнда для `M104`, `M109`,
+`SET_HEATER_TEMPERATURE`, API и `PID_CALIBRATE`: запрос 390 °C становится 280 °C.
 Аварийный предел датчика задаётся отдельно через `[extruder] max_temp: 300`.
 Модуль сохраняет штатный PID, выключение нагрева и проверку нижнего предела;
 неконечные числа отклоняет. При обновлении Klipper сверять `Heater.set_temp`,

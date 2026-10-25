@@ -46,14 +46,14 @@ class HotendLimitTests(unittest.TestCase):
             lookup_object=lambda name: self.objects[name],
             register_event_handler=Mock(), command_error=ValueError)
         self.config = SimpleNamespace(get_printer=lambda: self.printer,
-                                      getfloat=lambda *args, **kwargs: 285., error=ValueError)
+                                      getfloat=lambda *args, **kwargs: 280., error=ValueError)
         self.limit = module.load_config(self.config)
         self.limit._connect()
 
     # Блок 2: Нормализация, выключение и сохранение штатной валидации.
     def test_targets_and_internal_updates_are_bounded(self):
         for setter in (self.heater.set_temp, self.heater.alter_target):
-            for requested, expected in ((250, 250), (285, 285), (285.1, 285), (390, 285), (0, 0)):
+            for requested, expected in ((250, 250), (280, 280), (280.1, 280), (390, 280), (0, 0)):
                 with self.subTest(setter=setter.__name__, requested=requested):
                     setter(requested)
                     self.assertEqual(self.heater.target_temp, expected)
@@ -68,7 +68,7 @@ class HotendLimitTests(unittest.TestCase):
             self.assertEqual(self.heater.target_temp, 250)
 
     def test_pid_target_is_normalized_before_stock_handler(self):
-        for heater, expected in (('extruder', '285.0'), ('heater_bed', '390')):
+        for heater, expected in (('extruder', '280.0'), ('heater_bed', '390')):
             params = {'HEATER': heater, 'TARGET': '390', 'WRITE_FILE': '1'}
             command = SimpleNamespace(get=lambda name: params[name],
                                       get_float=lambda name: float(params[name]),
@@ -99,9 +99,10 @@ class HotendLimitTests(unittest.TestCase):
         profile = ROOT / 'klipper/profiles/treed_v2_corexy_v1'
         ebb = (profile / 'ebb42_can.cfg').read_text(encoding='utf-8')
         contract = (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8')
+        self.assertRegex(ebb, r'(?m)^sensor_type: Generic 3950$')
         self.assertRegex(ebb, r'(?m)^max_temp: 300$')
-        self.assertRegex(ebb, r'(?m)^\[treed_hotend_limit\]\nmax_target: 285$')
-        self.assertRegex(contract, r'(?m)^variable_nozzle_max_c: 285\.0$')
+        self.assertRegex(ebb, r'(?m)^\[treed_hotend_limit\]\nmax_target: 280$')
+        self.assertRegex(contract, r'(?m)^variable_nozzle_max_c: 280\.0$')
         loader = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
         self.assertEqual(loader.count("'/klippy/extras/treed_hotend_limit.py'"), 2)
         self.assertEqual(loader.count("'/klippy/extras/__pycache__/treed_hotend_limit.*.pyc'"), 2)
@@ -152,7 +153,7 @@ class StockKlipperTests(HotendLimitTests):
                         self.heater.cmd_SET_HEATER_TEMPERATURE):
             with self.subTest(handler=handler.__name__):
                 handler(command)
-                self.assertEqual(self.heater.target_temp, 285)
+                self.assertEqual(self.heater.target_temp, 280)
         self.heaters._wait_for_temperature.assert_called_once_with(self.heater)
         self.heaters.turn_off_all_heaters()
         self.assertEqual(self.heater.target_temp, 0)
@@ -178,7 +179,7 @@ class StockKlipperTests(HotendLimitTests):
                                   get_int=lambda name, default: int(params.get(name, default)),
                                   get_command_parameters=lambda: params, respond_info=Mock())
         self.limit._pid_calibrate(command)
-        tune.assert_called_once_with(self.heater, 285)
+        tune.assert_called_once_with(self.heater, 280)
         self.heaters._wait_for_temperature.assert_called_once_with(self.heater)
         self.objects['configfile'].set.assert_any_call('extruder', 'control', 'pid')
 

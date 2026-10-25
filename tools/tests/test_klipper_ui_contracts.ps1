@@ -66,7 +66,7 @@ foreach ($name in $fixtureCapabilities) {
 Assert-Contains $contract "(?m)^variable_required_macros:\s*`"$([regex]::Escape($protocol.requiredMacros))`"\s*$" "protocol required macros must match active profile"
 
 # Блок 3: Аппаратные лимиты и capability активного профиля.
-Assert-Contains $contract '(?m)^variable_nozzle_max_c:\s*285\.0\s*$' "contract must publish nozzle max temperature"
+Assert-Contains $contract '(?m)^variable_nozzle_max_c:\s*280\.0\s*$' "contract must publish nozzle max temperature"
 Assert-Contains $contract '(?m)^variable_bed_max_c:\s*120\.0\s*$' "contract must publish bed max temperature"
 foreach ($axis in @("x", "y", "z")) {
   Assert-Contains $contract "(?m)^variable_axis_${axis}_min:" "contract must publish $axis minimum"
