@@ -297,9 +297,9 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(self.driver.state, 'applying')
         self.assertTrue(self.driver.needs_restart)
         self.assertEqual(self.driver.get_status(1)['effective_modes'],
-                         dict(X='normal', Y='normal', Z='normal'))
+                         dict(X='normal', Y='normal', Z='quiet'))
         self.assertEqual([d.mcu_tmc.hardware for d in self.driver.drivers], before)
-        self.assertEqual(self.driver.motion_limits(), (600., 25000., 9., .5))
+        self.assertEqual(self.driver.motion_limits(), (300., 100000., 9., .5))
         self.reboot()
         self.assertEqual(self.driver.get_status(1)['effective_modes'],
                          dict(X='quiet', Y='quiet', Z='quiet'))
@@ -323,6 +323,7 @@ class DriverModesTest(unittest.TestCase):
             self.assertEqual(cfg.getint('stepper_' + axis, 'microsteps'), 128)
             self.assertEqual(cfg.getfloat('stepper_' + axis, 'step_pulse_duration'), 1e-7)
             tmc = 'tmc5160 stepper_' + axis
+            self.assertEqual(cfg.getint(tmc, 'driver_SGT'), 0 if axis in 'xy' else 1)
             self.assertTrue(cfg.getboolean(tmc, 'interpolate'))
             self.assertEqual(cfg.getint(tmc, 'driver_HSTRT'), 5)
             self.assertEqual(cfg.getint(tmc, 'driver_TPFD'), 4)
@@ -334,22 +335,44 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(cfg.getfloat('tmc5160 stepper_x', 'run_current'), .8)
         self.assertEqual(cfg.getfloat('tmc5160 stepper_z', 'run_current'), .9)
         self.assertEqual(driver.microsteps, dict(x=128, y=128, z=128))
-        # Новый normal читает исходный конфиг, а не изменённый объект quiet.
+        # Новый normal читает исходный XY; Z сохраняет профиль №8.
         normal = Printer(overrides=printer.overrides)
         boot_driver(normal)
         self.assertEqual(normal.fileconfig.getint('stepper_x', 'microsteps'), 64)
         self.assertEqual(normal.fileconfig.getint('tmc5160 stepper_x', 'driver_PWM_REG'), 7)
-        self.assertFalse(normal.fileconfig.getboolean('tmc5160 stepper_z', 'interpolate'))
+        self.assertTrue(normal.fileconfig.getboolean('tmc5160 stepper_z', 'interpolate'))
+
+    def test_z_profile_is_fixed_before_motion_objects_in_all_modes(self):
+        for mode in (None, 'normal', 'quiet'):
+            with self.subTest(mode=mode):
+                printer = Printer({} if mode is None else {'driver_mode': mode}, overrides={
+                    'stepper_z': {'microsteps': '16', 'step_pulse_duration': '.000002'},
+                    'tmc5160 stepper_z': {'interpolate': 'False', 'stealthchop_threshold': '0',
+                                         'driver_PWM_REG': '7', 'run_current': '.7',
+                                         'driver_SGT': '-2'}})
+                load('treed_driver_mode').load_config(Config(printer))
+                self.assertNotIn('toolhead', printer.objects)
+                self.assertNotIn('tmc5160 stepper_z', printer.objects)
+                cfg = printer.fileconfig
+                self.assertEqual(cfg.getint('stepper_z', 'microsteps'), 128)
+                self.assertEqual(cfg.getfloat('stepper_z', 'step_pulse_duration'), 1e-7)
+                self.assertTrue(cfg.getboolean('tmc5160 stepper_z', 'interpolate'))
+                self.assertEqual(cfg.getfloat('tmc5160 stepper_z', 'stealthchop_threshold'), 999999.)
+                self.assertEqual(cfg.getint('tmc5160 stepper_z', 'driver_HSTRT'), 5)
+                self.assertEqual(cfg.getint('tmc5160 stepper_z', 'driver_TPFD'), 4)
+                self.assertEqual(cfg.getint('tmc5160 stepper_z', 'driver_PWM_REG'), 4)
+                self.assertEqual(cfg.getfloat('tmc5160 stepper_z', 'run_current'), .7)
+                self.assertEqual(cfg.getint('tmc5160 stepper_z', 'driver_SGT'), -2)
 
     def test_quiet_caps_commands_and_normal_reloads_original_config(self):
         self.quiet()
         toolhead = self.driver.toolhead
-        self.assertEqual(self.driver.motion_limits(), (180., 25000., 9., .5))
+        self.assertEqual(self.driver.motion_limits(), (180., 20000., 9., .5))
         # SET_VELOCITY_LIMIT / сервис задают все поля, M204 — только ACCEL.
         toolhead.set_max_velocities(900., 70000., 500., None)
-        self.assertEqual(self.driver.motion_limits(), (180., 25000., 500., .5))
+        self.assertEqual(self.driver.motion_limits(), (180., 20000., 500., .5))
         toolhead.set_max_velocities(None, 30000., None, None)
-        self.assertEqual(toolhead.max_accel, 25000.)
+        self.assertEqual(toolhead.max_accel, 20000.)
         toolhead.set_max_velocities(None, 15000., None, None)
         self.assertEqual(toolhead.max_accel, 15000.)
         self.driver.cmd_set(Command())
@@ -357,8 +380,10 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(self.driver.motion_limits(), (180., 15000., 500., .5))
         self.driver.cmd_set(Command('normal'))
         self.reboot()
-        self.assertEqual(self.driver.motion_limits(), (600., 25000., 9., .5))
-        self.assertEqual(self.driver.microsteps, dict(x=16, y=16, z=16))
+        self.assertEqual(self.driver.motion_limits(), (300., 100000., 9., .5))
+        self.assertEqual(self.driver.microsteps, dict(x=16, y=16, z=128))
+        self.assertEqual(self.driver.get_status(1)['effective_modes'],
+                         dict(X='normal', Y='normal', Z='quiet'))
         self.assertEqual(self.printer.fileconfig.getfloat('stepper_x', 'step_pulse_duration'), 2e-6)
         self.driver.toolhead.set_max_velocities(900., 70000., None, None)
         self.assertEqual(self.driver.motion_limits()[:2], (900., 70000.))
@@ -394,12 +419,12 @@ class DriverModesTest(unittest.TestCase):
                         guard.cmd_run(cmd)
                 finally:
                     gcode.run_script_from_command = self.printer.save
-                self.assertEqual(self.driver.motion_limits(), (180., 25000., 9., .5))
+                self.assertEqual(self.driver.motion_limits(), (180., 20000., 9., .5))
 
     def test_saved_quiet_on_startup_caps_motion(self):
         printer = Printer({'driver_mode': 'quiet'})
         driver = boot_driver(printer)
-        self.assertEqual(driver.motion_limits(), (180., 25000., 9., .5))
+        self.assertEqual(driver.motion_limits(), (180., 20000., 9., .5))
         self.assertEqual(driver.get_status(1)['service_velocity_limit'], 180.)
         self.assertEqual(driver.get_status(1)['motion'], {
             'park_velocity': 100., 'resume_wipe_velocity': 150.,
@@ -410,8 +435,8 @@ class DriverModesTest(unittest.TestCase):
         self.assertTrue(printer.restart_requested)
         printer = Printer(printer.disk_variables)
         driver = boot_driver(printer)
-        self.assertEqual(driver.motion_limits(), (600., 25000., 9., .5))
-        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 600.)
+        self.assertEqual(driver.motion_limits(), (300., 100000., 9., .5))
+        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 300.)
 
     def test_service_helper_caps_after_m220_and_preserves_lower_requests(self):
         self.quiet()
@@ -495,7 +520,7 @@ class DriverModesTest(unittest.TestCase):
         self.printer.save_failures = 1
         with self.assertRaises(ValueError):
             self.driver.cmd_set(Command())
-        self.assertEqual(self.driver.motion_limits(), (600., 25000., 9., .5))
+        self.assertEqual(self.driver.motion_limits(), (300., 100000., 9., .5))
         self.assertEqual(self.printer.disk_variables['user_value'], {'keep': 42})
         self.assertEqual(self.printer.disk_variables['driver_mode'], 'normal')
         self.assertFalse(self.printer.shutdown)
@@ -515,7 +540,8 @@ class DriverModesTest(unittest.TestCase):
                 self.assertEqual(driver.mode, mode)
                 self.assertEqual(driver.state, 'ready')
                 self.assertFalse(driver.needs_restart)
-                self.assertTrue(all(d.fields.get_field('mres') == mres for d in driver.drivers))
+                self.assertEqual([d.fields.get_field('mres') for d in driver.drivers],
+                                 [mres, mres, 1])
 
     def test_failed_restore_after_restart_error_stays_faulted(self):
         self.printer.restart_fails = True
@@ -553,13 +579,15 @@ class DriverModesTest(unittest.TestCase):
             self.assertEqual(printer.fileconfig.getint('stepper_x', 'microsteps'), 16)
 
     def test_wrong_mres_readback_prevents_ready(self):
-        printer = Printer({'driver_mode': 'quiet'})
-        driver = boot_driver(printer, ready=False)
-        driver.drivers[0].mcu_tmc.hardware['CHOPCONF'] = 4 << 24
-        with self.assertLogs(level='ERROR'):
-            printer.run_callbacks()
-        self.assertTrue(printer.shutdown)
-        self.assertEqual(driver.state, 'fault')
+        for mode, axis in (('quiet', 0), ('normal', 2), ('quiet', 2)):
+            with self.subTest(mode=mode, axis=axis):
+                printer = Printer({'driver_mode': mode})
+                driver = boot_driver(printer, ready=False)
+                driver.drivers[axis].mcu_tmc.hardware['CHOPCONF'] = 4 << 24
+                with self.assertLogs(level='ERROR'):
+                    printer.run_callbacks()
+                self.assertTrue(printer.shutdown)
+                self.assertEqual(driver.state, 'fault')
 
     def test_printing_paused_and_service_are_blocked(self):
         for state in ('printing', 'paused', 'error'):
