@@ -21,7 +21,7 @@ UI не должен слать raw `M220`, `M221`, `SET_VELOCITY_LIMIT`, `SET_P
 | --- | --- | --- | --- | --- | --- |
 | `TREED_UI_SET_SPEED_FACTOR` | `PERCENT` | `10..300` | да | да | `gcode_move.speed_factor` |
 | `TREED_UI_SET_FLOW_FACTOR` | `PERCENT` | `50..150` | да | да | `gcode_move.extrude_factor` |
-| `TREED_UI_SET_ACCEL` | `ACCEL` | `500..printer.max_accel` (`25000` в профиле) | да | да | `toolhead.max_accel`, `toolhead.max_velocity` |
+| `TREED_UI_SET_ACCEL` | `ACCEL` | `500..printer.max_accel` (`50000` в режиме `normal`, `25000` в `quiet`) | да | да | `toolhead.max_accel`, `toolhead.max_velocity` |
 | `TREED_UI_SET_PRESSURE_ADVANCE` | `ADVANCE` | `0..0.20` | да | да | `extruder.pressure_advance` |
 | `TREED_UI_SET_RETRACTION` | `RETRACT_LENGTH` | `0..5.0` мм | да | да | `firmware_retraction.retract_length` |
 | `TREED_UI_ADJUST_Z_OFFSET` | `DELTA` | `-0.05..0.05` мм за команду, `-1.0..1.0` мм суммарно | да | да | `gcode_move.homing_origin.z`, `gcode_macro _TREED_UI_TUNE_STATE.applied_babystep` |

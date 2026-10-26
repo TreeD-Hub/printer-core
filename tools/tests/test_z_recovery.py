@@ -640,7 +640,7 @@ class RecoveryTests(unittest.TestCase):
         z_axis = steppers.split('[stepper_z]')[1].split('[tmc5160 stepper_z]')[0]
         z_driver = steppers.split('[tmc5160 stepper_z]')[1]
         self.assertIn('homing_speed: 20', z_axis)
-        self.assertIn('driver_SGT: 1', z_driver)
+        self.assertIn('driver_SGT: 0', z_driver)
         self.assertIn('run_current: 0.9', z_driver)
         self.assertIn('[force_move]', (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8'))
         recovery = (profile / 'z_recovery.cfg').read_text(encoding='utf-8')
