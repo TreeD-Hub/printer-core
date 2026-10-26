@@ -299,7 +299,7 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(self.driver.get_status(1)['effective_modes'],
                          dict(X='normal', Y='normal', Z='quiet'))
         self.assertEqual([d.mcu_tmc.hardware for d in self.driver.drivers], before)
-        self.assertEqual(self.driver.motion_limits(), (500., 20000., 9., .5))
+        self.assertEqual(self.driver.motion_limits(), (300., 100000., 9., .5))
         self.reboot()
         self.assertEqual(self.driver.get_status(1)['effective_modes'],
                          dict(X='quiet', Y='quiet', Z='quiet'))
@@ -380,7 +380,7 @@ class DriverModesTest(unittest.TestCase):
         self.assertEqual(self.driver.motion_limits(), (180., 15000., 500., .5))
         self.driver.cmd_set(Command('normal'))
         self.reboot()
-        self.assertEqual(self.driver.motion_limits(), (500., 20000., 9., .5))
+        self.assertEqual(self.driver.motion_limits(), (300., 100000., 9., .5))
         self.assertEqual(self.driver.microsteps, dict(x=16, y=16, z=128))
         self.assertEqual(self.driver.get_status(1)['effective_modes'],
                          dict(X='normal', Y='normal', Z='quiet'))
@@ -435,8 +435,8 @@ class DriverModesTest(unittest.TestCase):
         self.assertTrue(printer.restart_requested)
         printer = Printer(printer.disk_variables)
         driver = boot_driver(printer)
-        self.assertEqual(driver.motion_limits(), (500., 20000., 9., .5))
-        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 500.)
+        self.assertEqual(driver.motion_limits(), (300., 100000., 9., .5))
+        self.assertEqual(driver.get_status(1)['service_velocity_limit'], 300.)
 
     def test_service_helper_caps_after_m220_and_preserves_lower_requests(self):
         self.quiet()
@@ -520,7 +520,7 @@ class DriverModesTest(unittest.TestCase):
         self.printer.save_failures = 1
         with self.assertRaises(ValueError):
             self.driver.cmd_set(Command())
-        self.assertEqual(self.driver.motion_limits(), (500., 20000., 9., .5))
+        self.assertEqual(self.driver.motion_limits(), (300., 100000., 9., .5))
         self.assertEqual(self.printer.disk_variables['user_value'], {'keep': 42})
         self.assertEqual(self.printer.disk_variables['driver_mode'], 'normal')
         self.assertFalse(self.printer.shutdown)
