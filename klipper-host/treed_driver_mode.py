@@ -1,7 +1,6 @@
 """Режим TMC5160 XYZ; required, runtime API Klipper ce7002bed.
 
-Профиль XY выбирается до создания шаговых осей; Z всегда использует тихий №8.
-Смена режима требует FIRMWARE_RESTART.
+Профиль выбирается до создания шаговых осей; смена требует FIRMWARE_RESTART.
 Токи, удержание и файлы пользовательских настроек остаются исходными.
 """
 import logging
@@ -17,8 +16,7 @@ QUIET_TMC = dict(
     driver_PWM_OFS=30, driver_PWM_GRAD=0, driver_PWM_FREQ=0,
     driver_PWM_AUTOSCALE=True, driver_PWM_AUTOGRAD=True,
     driver_FREEWHEEL=0, driver_PWM_REG=4, driver_PWM_LIM=12)
-# shortcut: временное ускорение новых двигателей; вернуть 25000 после их замены или проверки.
-QUIET_LIMITS = dict(max_velocity=180., max_accel=20000.)
+QUIET_LIMITS = dict(max_velocity=180., max_accel=25000.)
 MOTION_DEFAULTS = dict(park_velocity=100., resume_wipe_velocity=150.,
                        start_wipe_velocity=300., start_wipe_accel=12500.,
                        travel_velocity=200., z_travel_velocity=25.,
@@ -46,13 +44,13 @@ class TreedDriverMode:
                 or any(self.printer.lookup_object('tmc5160 stepper_' + axis, None)
                        is not None for axis in ('x', 'y', 'z'))):
             raise config.error('driver_mode.cfg должен подключаться до TMC и toolhead')
-        # Z всегда использует профиль №8; меняется только конфиг в памяти.
-        for axis in (('x', 'y', 'z') if self.loaded_mode == 'quiet' else ('z',)):
-            for prefix, values in (('stepper_', QUIET_STEPPER),
-                                   ('tmc5160 stepper_', QUIET_TMC)):
-                for name, value in values.items():
-                    config.fileconfig.set(prefix + axis, name, str(value))
         if self.loaded_mode == 'quiet':
+            # Это разобранный конфиг в памяти, исходные файлы не записываются.
+            for axis in ('x', 'y', 'z'):
+                for prefix, values in (('stepper_', QUIET_STEPPER),
+                                       ('tmc5160 stepper_', QUIET_TMC)):
+                    for name, value in values.items():
+                        config.fileconfig.set(prefix + axis, name, str(value))
             for name, value in QUIET_LIMITS.items():
                 config.fileconfig.set('printer', name, str(value))
         self.microsteps = {}
@@ -222,8 +220,8 @@ class TreedDriverMode:
             if mode == 'quiet':
                 # Сначала ограничиваем движение, затем включаем stealthChop.
                 self.limit_velocities(None, None, None, None)
-            self.write_fields([dict(en_pwm_mode=int(mode == 'quiet' or axis == 'z'),
-                                    tpwmthrs=0) for axis in ('x', 'y', 'z')])
+            self.write_fields([dict(en_pwm_mode=int(mode == 'quiet'), tpwmthrs=0)
+                               for _ in self.drivers])
         except Exception as exc:
             self.message = str(exc)
             try:
