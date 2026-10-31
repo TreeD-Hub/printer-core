@@ -1,11 +1,13 @@
 # Назначение: проверить границу целей хотэнда, PID и доставку расширения.
 # Контур: read-only, без устройства; HOTEND_KLIPPER_SOURCE включает настоящие
-# обработчики закреплённого Klipper с заменой аппаратных объектов.
+# обработчики проверяемой версии Klipper с заменой аппаратных объектов.
 import ast
 import importlib.util
 import logging
 import os
 from pathlib import Path
+import re
+import shlex
 import threading
 from types import SimpleNamespace
 import unittest
@@ -40,11 +42,15 @@ class HotendLimitTests(unittest.TestCase):
         self.pid = Mock()
         self.gcode = Mock()
         self.gcode.register_command.side_effect = lambda name, callback, **kw: self.pid if callback is None else None
+        self.gcode.create_gcode_command.side_effect = lambda name, line, params: SimpleNamespace(
+            get=lambda key: params[key], get_float=lambda key: float(params[key]),
+            get_int=lambda key, default: int(params.get(key, default)),
+            get_command_parameters=lambda: params, respond_info=Mock())
         self.heaters = SimpleNamespace(lookup_heater=lambda name: self.heater)
         self.objects = {'gcode': self.gcode, 'heaters': self.heaters}
         self.printer = SimpleNamespace(
             lookup_object=lambda name: self.objects[name],
-            register_event_handler=Mock(), command_error=ValueError)
+            load_object=Mock(), register_event_handler=Mock(), command_error=ValueError)
         self.config = SimpleNamespace(get_printer=lambda: self.printer,
                                       getfloat=lambda *args, **kwargs: 280., error=ValueError)
         self.limit = module.load_config(self.config)
@@ -77,7 +83,38 @@ class HotendLimitTests(unittest.TestCase):
             self.gcode.register_command.call_args.args[1](command)
             self.assertEqual(params['TARGET'], expected)
             self.assertEqual(params['WRITE_FILE'], '1')
-            self.pid.assert_called_with(command)
+            forwarded = self.pid.call_args.args[0]
+            self.assertEqual(forwarded.get('TARGET'), expected)
+            self.assertEqual(forwarded.get('WRITE_FILE'), '1')
+
+    def test_late_pid_registration_completes_before_limit_connects(self):
+        callbacks, commands = [], {}
+        self.printer.register_event_handler.side_effect = lambda event, callback: callbacks.append(callback)
+
+        def load_pid(config, name):
+            if name not in self.objects:
+                self.objects[name] = self.pid
+                callbacks.append(lambda: commands.update(PID_CALIBRATE=self.pid))
+            return self.objects[name]
+
+        def register_command(name, callback, **kwargs):
+            if callback is None:
+                return commands.pop(name, None)
+            commands[name] = callback
+
+        self.printer.load_object = load_pid
+        self.gcode.register_command.side_effect = register_command
+        module.load_config(self.config)
+        load_pid(self.config, 'pid_calibrate')
+        for callback in callbacks:
+            callback()
+        self.assertTrue(callable(commands['PID_CALIBRATE']))
+
+    def test_missing_pid_command_remains_a_configuration_error(self):
+        self.gcode.register_command.side_effect = None
+        self.gcode.register_command.return_value = None
+        with self.assertRaisesRegex(ValueError, 'нет PID_CALIBRATE'):
+            self.limit._connect()
 
     def test_invalid_pid_target_never_starts_calibration(self):
         command = SimpleNamespace(get=lambda name: 'extruder',
@@ -115,7 +152,7 @@ class HotendLimitTests(unittest.TestCase):
 
 
 # Блок 4: Штатные G-code и PID обработчики; движение и ожидания заменены.
-@unittest.skipUnless(os.environ.get('HOTEND_KLIPPER_SOURCE'), 'Нет исходников закреплённого Klipper')
+@unittest.skipUnless(os.environ.get('HOTEND_KLIPPER_SOURCE'), 'Нет исходников Klipper')
 class StockKlipperTests(HotendLimitTests):
     def stock_class(self, filename, name, namespace=None):
         path = Path(os.environ['HOTEND_KLIPPER_SOURCE']) / filename
@@ -164,24 +201,60 @@ class StockKlipperTests(HotendLimitTests):
         tune.return_value.calc_final_pid.return_value = (10., 1., 80.)
         pid_class = self.stock_class('pid_calibrate.py', 'PIDCalibrate',
                                      {'ControlAutoTune': tune, 'logging': logging})
-        pid = pid_class.__new__(pid_class)
-        pid.printer = self.printer
-        self.objects['toolhead'] = SimpleNamespace(get_last_move_time=Mock(),
-                                                 register_lookahead_callback=Mock())
-        self.objects['configfile'] = Mock()
-        self.printer.config_error = ValueError
-        self.heater.control = object()
-        self.heater.name = 'extruder'
-        self.limit.pid_calibrate = pid.cmd_PID_CALIBRATE
-        params = {'HEATER': 'extruder', 'TARGET': '390', 'WRITE_FILE': '0'}
-        command = SimpleNamespace(get=lambda name: params[name],
-                                  get_float=lambda name: float(params[name]),
-                                  get_int=lambda name, default: int(params.get(name, default)),
-                                  get_command_parameters=lambda: params, respond_info=Mock())
-        self.limit._pid_calibrate(command)
-        tune.assert_called_once_with(self.heater, 280)
-        self.heaters._wait_for_temperature.assert_called_once_with(self.heater)
-        self.objects['configfile'].set.assert_any_call('extruder', 'control', 'pid')
+        context = {'CommandError': ValueError, 'Coord': tuple,
+                   're': re, 'shlex': shlex, 'logging': logging}
+        context['GCodeCommand'] = self.stock_class('gcode.py', 'GCodeCommand', context)
+        dispatch_class = self.stock_class('gcode.py', 'GCodeDispatch', context)
+        events, objects = {}, {}
+        printer = SimpleNamespace(
+            lookup_object=lambda name: objects[name], command_error=ValueError,
+            config_error=ValueError, get_start_args=lambda: {}, get_reactor=Mock(),
+            register_event_handler=lambda event, callback: events.setdefault(event, []).append(callback),
+            send_event=Mock(), invoke_shutdown=Mock())
+        config = SimpleNamespace(get_printer=lambda: printer,
+                                 getfloat=lambda *args, **kwargs: 280., error=ValueError)
+        gcode = objects['gcode'] = dispatch_class(printer)
+        heaters = objects['heaters'] = self.heaters
+        heaters.printer = printer
+        heaters.heaters = {}
+        heaters.available_heaters = ['extruder', 'heater_bed']
+        for name in heaters.available_heaters:
+            heater = type(self.heater).__new__(type(self.heater))
+            heater.printer, heater.name = printer, name
+            heater.min_temp, heater.max_temp = 0., 300.
+            heater.lock, heater.control = threading.Lock(), object()
+            heater.target_temp = 0.
+            heaters.heaters[name] = heater
+        objects['toolhead'] = SimpleNamespace(get_last_move_time=Mock(),
+                                              register_lookahead_callback=Mock())
+        objects['configfile'] = Mock()
+
+        def load_pid(config, name):
+            if name not in objects:
+                objects[name] = pid_class(config)
+            return objects[name]
+
+        printer.load_object = load_pid
+        module.load_config(config)
+        load_pid(config, 'pid_calibrate')
+        for callback in events['klippy:connect']:
+            callback()
+        gcode._handle_ready()
+        for name, target, expected in (('extruder', 390, 280), ('extruder', 250, 250),
+                                        ('heater_bed', 95, 95)):
+            tune.reset_mock()
+            heaters._wait_for_temperature.reset_mock()
+            gcode.run_script_from_command(
+                f'PID_CALIBRATE HEATER={name} TARGET={target} WRITE_FILE=0')
+            tune.assert_called_once_with(heaters.heaters[name], expected)
+            heaters._wait_for_temperature.assert_called_once_with(heaters.heaters[name])
+            objects['configfile'].set.assert_any_call(name, 'control', 'pid')
+        for params in ('HEATER=missing TARGET=200', 'HEATER=extruder TARGET=nan'):
+            tune.reset_mock()
+            with self.assertRaises(ValueError):
+                gcode.run_script_from_command('PID_CALIBRATE ' + params)
+            tune.assert_not_called()
+        printer.invoke_shutdown.assert_not_called()
 
 
 if __name__ == '__main__':

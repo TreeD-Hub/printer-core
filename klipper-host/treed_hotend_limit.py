@@ -1,14 +1,17 @@
 # Назначение: ограничить цель хотэнда независимо от аварийного предела датчика.
 # Контур: required; действует для G-code, API и штатной PID-калибровки.
 import math
+import shlex
 
 
 class TreedHotendLimit:
-    # Блок 1: Подключение к закреплённому Klipper после загрузки нагревателей.
+    # Блок 1: Подключение после штатной регистрации PID и загрузки нагревателей.
     def __init__(self, config):
         self.printer = config.get_printer()
         self.config_error = config.error
         self.max_target = config.getfloat('max_target', above=0.)
+        # Новые версии Klipper регистрируют PID в собственном connect-обработчике.
+        self.printer.load_object(config, 'pid_calibrate')
         self.printer.register_event_handler('klippy:connect', self._connect)
 
     def _connect(self):
@@ -52,7 +55,12 @@ class TreedHotendLimit:
             bounded = self._bounded_target(target)
             if bounded != target:
                 gcmd.respond_info('Цель PID хотэнда ограничена до %.1f °C' % bounded)
-                gcmd.get_command_parameters()['TARGET'] = str(bounded)
+                params = gcmd.get_command_parameters()
+                params['TARGET'] = str(bounded)
+                # Снятый обработчик заново разбирает исходную строку команды.
+                commandline = 'PID_CALIBRATE ' + ' '.join(
+                    '%s=%s' % (key, shlex.quote(value)) for key, value in params.items())
+                gcmd = self.gcode.create_gcode_command('PID_CALIBRATE', commandline, params)
         return self.pid_calibrate(gcmd)
 
 
