@@ -38,6 +38,12 @@ class Request:
 
 
 class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_state_is_delegated_only_for_update_submission(self):
+        self.component.klippy_apis.query_objects = AsyncMock(return_value={})
+        await self.component._ensure_apply_allowed(allow_unknown=True)
+        with self.assertRaises(ApiError):
+            await self.component._ensure_apply_allowed()
+
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

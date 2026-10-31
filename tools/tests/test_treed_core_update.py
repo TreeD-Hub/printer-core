@@ -91,6 +91,8 @@ class CoreUpdateTests(unittest.TestCase):
         self.services = self.stack.enter_context(patch.object(core, "services"))
         self.services_inactive = self.stack.enter_context(patch.object(core, "services_inactive", return_value=True))
         self.admission = self.stack.enter_context(patch.object(core, "update_admission"))
+        self.request_json = self.stack.enter_context(patch.object(
+            core, "request_json", side_effect=OSError("No API fixture")))
         self.stack.enter_context(patch.object(core, "idle", return_value=True))
         self.stop_heating = self.stack.enter_context(patch.object(core, "stop_heating"))
         self.wait = self.stack.enter_context(patch.object(core, "wait_ready", return_value=True))
@@ -863,6 +865,182 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual(events[:3], ["BEGIN", "heaters", "stop"])
         self.assertEqual(events[-1], "start")
 
+    def test_failed_klipper_startup_can_install_repair_and_preserve_calibration(self):
+        _before, calibrated = self.seed_pid_calibration()
+        self.request_json.side_effect = None
+        self.request_json.return_value = {"state": "error"}
+        self.admission.side_effect = RuntimeError("Klipper is halted")
+        self.assertEqual(self.apply()["status"], "applied")
+        self.stop_heating.assert_not_called()
+        self.services.assert_has_calls([call("stop"), call("start")])
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.2.0")
+        installed = (self.locations["config"] / "printer.cfg").read_bytes()
+        self.assertEqual(installed.split(core.MARKER, 1)[1], calibrated.split(core.MARKER, 1)[1])
+
+    def test_failed_startup_repair_requires_confirmed_service_stop(self):
+        self.request_json.side_effect = None
+        self.request_json.return_value = {"state": "error"}
+        self.admission.side_effect = RuntimeError("Klipper is halted")
+        self.services_inactive.return_value = False
+        with self.assertRaises(RuntimeError):
+            self.apply()
+        self.services.assert_any_call("stop")
+        self.stop_heating.assert_not_called()
+        self.assert_restored()
+
+    def prepare_package_execution(self, version="0.2.0", operation=OPERATION, context=None):
+        service_path = ROOT / "runtime-scripts/treed-update/treed-update-service"
+        launcher = types.ModuleType("package_launcher")
+        launcher.__file__ = str(service_path)
+        exec(compile(service_path.read_text(encoding="utf-8"), str(service_path), "exec"), launcher.__dict__)
+        launcher.STATE = self.root / "state/worker.json"
+        launcher.LOG = self.root / "state/worker.log"
+        launcher.CORE_APPLY = "/installed-updater-must-not-run"
+        self.payload.setdefault("config/moonraker.conf", b"[server]\n")
+        self.payload.setdefault("config/moonraker/base/00-core.conf", b"[treed_update]\n")
+        self.payload["sbin/treed-core-update"] = PATH.read_bytes()
+        manifest = dict(self.manifest, version=version, tag="v" + version, sha="a" * 40,
+                        files=[{"path": name, "sha256": core.sha(data)} for name, data in self.payload.items()],
+                        updater={"protocol": 1, "entrypoint": "payload/sbin/treed-core-update",
+                                 "sha256": core.sha(PATH.read_bytes())})
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as bundle:
+            bundle.writestr("manifest.json", json.dumps(manifest))
+            for name, data in self.payload.items():
+                bundle.writestr("payload/" + name, data)
+        package = buffer.getvalue()
+        state = dict(operationId=operation, targetId="printer-core", targetTag=manifest["tag"],
+                     status="queued", phase="queued", busy=True, history=[], attemptGeneration=0)
+        state.update(context or {})
+        launcher.write_state(state)
+        release = {"tag_name": manifest["tag"], "assets": [{"name": core.ASSET,
+                   "digest": "sha256:" + core.sha(package),
+                   "browser_download_url": f"https://github.com/test/printer-core/releases/download/{manifest['tag']}/{core.ASSET}"}]}
+
+        def response(request, **kwargs):
+            url = getattr(request, "full_url", request)
+            return io.BytesIO(json.dumps(release).encode() if url.startswith("https://api.github.com/") else package)
+
+        with patch.dict(os.environ, {"TREED_CORE_RELEASE_API_URL": "https://api.github.com/repos/test/printer-core/releases"}), \
+             patch.object(launcher.urllib.request, "urlopen", side_effect=response):
+            execution = launcher.package_execution(state)
+        return launcher, execution
+
+    def execute_core_package(self, launcher, execution, crash=False):
+        command, package_environment = execution
+        target = types.ModuleType("release_updater")
+        target.__file__ = command[1]
+        exec(compile(Path(command[1]).read_bytes(), command[1], "exec"), target.__dict__)
+        environment = dict(self.env, **package_environment, TREED_UPDATE_STATE_FILE=str(launcher.STATE))
+        gate = {"active": 0}
+        self.package_gcode = []
+
+        def api(path, body=None):
+            if path == "/server/info":
+                return {"klippy_state": "ready", "failed_components": [],
+                        "components": ["treed_update", "treed_recovery", "treed_detection", "treed_host_network",
+                                       "treed_filament_sensor", "treed_shell_command", "treed_autoprinter"]}
+            if path == "/printer/gcode/script":
+                self.package_gcode.append(body["script"])
+                if "_TREED_UPDATE_GATE" in body["script"]:
+                    gate["active"] = int("BEGIN" in body["script"])
+                return "ok"
+            return {"status": {"print_stats": {"state": "standby"}, "extruder": {"target": 0},
+                               "heater_bed": {"target": 0}, "gcode_macro _TREED_UPDATE_ADMISSION_STATE": gate.copy()}}
+
+        stdout = io.StringIO()
+        uid = getattr(os, "getuid", lambda: 0)()
+        gid = getattr(os, "getgid", lambda: 0)()
+        with contextlib.ExitStack() as stack:
+            for name, replacement in (("settings", lambda: environment), ("roots", lambda env: self.locations),
+                                      ("request_json", api), ("owner", lambda env: (uid, gid)),
+                                      ("phase", lambda phase, message: launcher.transition(phase, message))):
+                stack.enter_context(patch.object(target, name, side_effect=replacement))
+            stack.enter_context(patch.object(target, "services", side_effect=self.services))
+            stack.enter_context(patch.object(target, "services_inactive", return_value=True))
+            stack.enter_context(patch.object(target, "vision_units_installed", return_value=True))
+            stack.enter_context(patch.object(target, "check_compatibility"))
+            stack.enter_context(patch.object(target, "check_upstream_clean"))
+            requirements = core.read_json(core.manifest_path(self.env)).get("requires", {})
+            pins = itertools.cycle([requirements.get("klipper"), requirements.get("moonraker")])
+            stack.enter_context(patch.object(target, "git_head", side_effect=lambda path: next(pins)))
+            stack.enter_context(patch.object(target.os, "geteuid", return_value=0, create=True))
+            # CI не имеет root; системное назначение владельца — внешняя граница.
+            self.package_chown = stack.enter_context(patch.object(target.os, "fchown", create=True))
+            stack.enter_context(patch.object(target.time, "sleep"))
+            if crash:
+                install = target.install_entries
+
+                def power_loss(entries, *args):
+                    install(entries[:1], *args)
+                    raise KeyboardInterrupt("power loss after first real file write")
+
+                stack.enter_context(patch.object(target, "install_entries", side_effect=power_loss))
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(target.main(command[1:]), 0)
+        result = json.loads(stdout.getvalue())
+        if os.name != "nt" and result["status"] == "applied":
+            self.package_chown.assert_any_call(ANY, 0, 0)
+        return result
+
+    def test_package_updater_installs_and_next_release_ignores_installed_executor(self):
+        _before, calibrated = self.seed_pid_calibration()
+        launcher, execution = self.prepare_package_execution()
+        with patch.object(core, "apply", side_effect=AssertionError("installed updater must not execute")):
+            self.assertEqual(self.execute_core_package(launcher, execution)["status"], "applied")
+            self.payload["klipper/treed_driver_mode.py"] = b"version = 3\n"
+            launcher, execution = self.prepare_package_execution("0.3.0", "22222222-2222-4222-8222-222222222222")
+            self.assertEqual(self.execute_core_package(launcher, execution)["status"], "applied")
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.3.0")
+        self.assertEqual((self.locations["config"] / "printer.cfg").read_bytes().split(core.MARKER, 1)[1],
+                         calibrated.split(core.MARKER, 1)[1])
+
+    def test_cached_package_updater_recovers_partial_write_after_installed_code_changes(self):
+        launcher, execution = self.prepare_package_execution()
+        with self.assertRaises(KeyboardInterrupt):
+            self.execute_core_package(launcher, execution, crash=True)
+        with patch.object(launcher.urllib.request, "urlopen", side_effect=AssertionError("no recovery download")):
+            recovered = launcher.package_execution(launcher.read_state(), recovery=True)
+        self.assertEqual(self.execute_core_package(launcher, recovered)["status"], "rolled_back")
+        self.assert_restored()
+
+    def test_cached_updater_resumes_when_power_fails_before_journal(self):
+        launcher, execution = self.prepare_package_execution()
+        recovered = launcher.package_execution(launcher.read_state(), recovery=True)
+        self.assertEqual(self.execute_core_package(launcher, recovered)["status"], "applied")
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.2.0")
+
+    def test_newer_package_recovers_failed_predecessor_without_running_old_executor(self):
+        self.assert_newer_package_recovery(partial_write=True)
+
+    def test_newer_package_can_replace_failed_updater_before_old_journal(self):
+        self.assert_newer_package_recovery(partial_write=False)
+
+    def assert_newer_package_recovery(self, partial_write):
+        _before, calibrated = self.seed_pid_calibration()
+        launcher, execution = self.prepare_package_execution()
+        if partial_write:
+            with self.assertRaises(KeyboardInterrupt):
+                self.execute_core_package(launcher, execution, crash=True)
+        launcher.finish(launcher.read_state(), "error", "core_validation_failed", "broken updater")
+        with patch.dict(os.environ, {"TREED_CORE_STATE_DIR": self.env["TREED_CORE_STATE_DIR"]}), \
+             patch.object(launcher.os, "geteuid", return_value=0, create=True), \
+             patch.object(launcher, "fcntl", types.SimpleNamespace(flock=lambda *args: None, LOCK_UN=8)), \
+             patch.object(launcher, "acquire"), patch.object(launcher.subprocess, "run"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(launcher.submit(str(uuid.uuid4()), "printer-core", "v0.3.0"), 0)
+        queued = launcher.read_state()
+        context = {key: value for key, value in queued.items() if key.startswith("supersed")}
+        launcher, execution = self.prepare_package_execution("0.3.0", queued["operationId"], context)
+        # Recovery нового pin до его journal также обязана учесть старую операцию.
+        execution = launcher.package_execution(launcher.read_state(), recovery=True)
+        self.assertEqual(self.execute_core_package(launcher, execution)["status"], "applied")
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.3.0")
+        self.assertEqual((self.locations["config"] / "printer.cfg").read_bytes().split(core.MARKER, 1)[1],
+                         calibrated.split(core.MARKER, 1)[1])
+        if partial_write:
+            self.assertEqual(core.read_json(core.journal_path(self.env, OPERATION))["stage"], "rolled_back")
+
     def test_pre_gate_updater_installs_gate_and_next_update_uses_it(self):
         # Закреплённая версия до admission: переход выполняет старый процесс.
         self.assert_upgrade_from("0f7d77108cf57730e2bc0cfffc6d52e4fd9c654d", has_gate=False)
@@ -1022,15 +1200,13 @@ class CoreUpdateTests(unittest.TestCase):
         next_version = f"{version_prefix}.{int(patch_version) + 1}"
         self.manifest = dict(target_manifest, version=next_version, tag="v" + next_version)
         self.payload = target_payload
-        next_update_pins = itertools.cycle([target_manifest["requires"]["klipper"],
-                                            target_manifest["requires"]["moonraker"]])
-        with patch.object(core, "check_upstream_clean"), patch.object(
-                core, "git_head", side_effect=lambda _path: next(next_update_pins)):
-            result = core.apply(self.manifest["tag"], "22222222-2222-4222-8222-222222222222", self.env)
+        launcher, execution = self.prepare_package_execution(
+            next_version, "22222222-2222-4222-8222-222222222222")
+        result = self.execute_core_package(launcher, execution)
         self.assertEqual(result["status"], "applied")
-        self.admission.assert_called_once_with("BEGIN")
+        self.assertIn("_TREED_UPDATE_GATE ACTION=BEGIN", self.package_gcode)
         if os.name != "nt":
-            chown.assert_any_call(ANY, 0, 0)
+            self.package_chown.assert_any_call(ANY, os.getuid(), os.getgid())
         self.services.assert_has_calls([call("stop"), call("start")])
         self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], next_version)
         self.assertNotIn(b"enabled", path.read_bytes())
@@ -1122,6 +1298,17 @@ class CoreUpdateTests(unittest.TestCase):
         journal, transaction = self.prepared_install_transaction()
         self.admission.side_effect = RuntimeError("Klipper unavailable")
         self.assertEqual(core.rollback(self.env, journal, transaction)["status"], "rolled_back")
+        self.services.assert_has_calls([call("stop"), call("start")])
+        self.assert_restored()
+
+    def test_rollback_can_stop_failed_startup_before_restoring_files(self):
+        journal, transaction = self.prepared_install_transaction()
+        self.admission.side_effect = RuntimeError("Klipper is halted")
+        self.request_json.side_effect = None
+        self.request_json.return_value = {"state": "error"}
+        self.services_inactive.side_effect = [False, True]
+        self.assertEqual(core.rollback(self.env, journal, transaction)["status"], "rolled_back")
+        self.stop_heating.assert_not_called()
         self.services.assert_has_calls([call("stop"), call("start")])
         self.assert_restored()
 
@@ -1296,7 +1483,8 @@ class CoreUpdateTests(unittest.TestCase):
         )
         registry = json.loads((ROOT / core.MANAGED_RUNTIME).read_text(encoding="utf-8"))
         for relative in [core.MANAGED_RUNTIME, *registry["inputs"], *(
-                f"loader/steps/{name}.sh" for name in registry["steps"])]:
+                f"loader/steps/{name}.sh" for name in registry["steps"]),
+                "runtime-scripts/treed-update/treed-core-update"]:
             if relative == "runtime-versions.env":
                 continue
             target = repo / relative
@@ -1984,6 +2172,24 @@ class CoreGitOwnershipTests(unittest.TestCase):
 
 
 class PrinterUpdateGuardTests(unittest.TestCase):
+    def test_known_idle_job_does_not_require_successful_klipper_startup(self):
+        with patch.object(core, "ready", return_value=False), \
+             patch.object(core, "request_json", return_value={"status": {"print_stats": {"state": "standby"}}}):
+            self.assertTrue(core.idle())
+
+    def test_failed_startup_requires_explicit_error_and_confirmed_idle(self):
+        for klippy_state, print_state, expected in (
+            ("error", "standby", True), ("error", "cancelled", True),
+            ("error", "printing", False), ("error", "paused", False),
+            ("error", "unknown", False), ("error", None, False),
+            ("ready", "standby", False), ("startup", "standby", False),
+            ("shutdown", "standby", False), (None, "standby", False),
+        ):
+            with self.subTest(klippy_state=klippy_state, print_state=print_state), \
+                 patch.object(core, "request_json", side_effect=[
+                     {"state": klippy_state}, {"status": {"print_stats": {"state": print_state}}}]):
+                self.assertEqual(core.klipper_failed_startup(), expected)
+
     def test_readiness_requires_candidate_autoprinter_and_rejects_failed_components(self):
         loaded = ["treed_update", "treed_recovery", "treed_detection", "treed_host_network",
                   "treed_filament_sensor", "treed_shell_command"]

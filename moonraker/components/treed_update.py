@@ -298,6 +298,9 @@ class TreeDUpdate:
                           and _normalize_semver(target_tag) is not None
                           and _compare_semver(_normalize_semver(target_tag) or "0.0.0",
                                               (_normalize_semver(str(resume.get("targetTag", ""))) or "0.0.0")) > 0)
+        if (resume and target_id == "printer-core" and target_tag != resume.get("targetTag")
+                and not corrective):
+            raise self.server.error("Сначала восстановите текущую операцию обновления.", 409)
         if corrective:
             # Unknown API state is delegated only with a root-derived corrective marker;
             # the updater performs the final idle/inactive systemd admission check.
@@ -310,7 +313,7 @@ class TreeDUpdate:
             if print_state in {"printing", "paused"}:
                 raise self.server.error("Обновление недоступно во время печати или паузы.", 409)
         elif not (resume and target_id == "printer-core" and target_tag == resume.get("targetTag")):
-            await self._ensure_apply_allowed(cancel_paused_print=cancel_paused_print)
+            await self._ensure_apply_allowed(cancel_paused_print=cancel_paused_print, allow_unknown=True)
         # Recovery проверяет gate/systemd в root worker; недоступный Klipper не блокирует сам запрос.
 
         command = [*self.submit_command.split(), request_id, target_id, target_tag]
@@ -513,14 +516,17 @@ class TreeDUpdate:
             "mcus": mcus,
         }
 
-    async def _ensure_apply_allowed(self, *, cancel_paused_print: bool = False) -> None:
-        # Apply fail-closed: updater не запускается без достоверного print state.
+    async def _ensure_apply_allowed(self, *, cancel_paused_print: bool = False,
+                                    allow_unknown: bool = False) -> None:
+        # Запрос обновления можно доставить при ошибке Klipper; запись разрешает root updater выпуска.
         try:
             objects = await self.klippy_apis.query_objects(
                 UPDATE_RUNTIME_OBJECTS,
                 default={},
             )
         except Exception as error:
+            if allow_unknown:
+                return
             raise self.server.error(
                 "Состояние принтера недоступно; обновление заблокировано.",
                 503,
@@ -533,6 +539,8 @@ class TreeDUpdate:
             else ""
         )
         if print_state not in {"standby", "complete", "cancelled", "error", "printing", "paused"}:
+            if allow_unknown:
+                return
             raise self.server.error(
                 "Состояние принтера недоступно; обновление заблокировано.",
                 503,
