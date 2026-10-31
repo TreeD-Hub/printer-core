@@ -13,11 +13,13 @@
 - `test_treed_autoprinter_device.py` — fail-closed проверка runtime, безопасная подготовка G-code и штатные Klippy API на fake-компонентах. Запуск `python -B tools/tests/test_treed_autoprinter_device.py`; без устройства.
 
 - `test_hotend_limit.py` — нормализация целей хотэнда и PID, нижний предел,
-  выключение, неконечные числа, отдельный аварийный порог и доставка расширения.
+  выключение, неконечные числа, отдельный аварийный порог, порядок регистрации
+  PID при запуске и доставка расширения.
   Запуск `python -B tools/tests/test_hotend_limit.py`; без устройства.
-  `HOTEND_KLIPPER_SOURCE` с каталогом `heaters.py`, `pid_calibrate.py` и
-  `extruder.py` из закреплённого Klipper включает проверку штатных обработчиков;
-  аппаратные объекты и ожидание температуры заменены моделью.
+  `HOTEND_KLIPPER_SOURCE` с каталогом `heaters.py`, `pid_calibrate.py`, `gcode.py` и
+  `extruder.py` из проверяемой версии Klipper включает проверку настоящего
+  G-code-диспетчера, регистрации PID и цели `ControlAutoTune`.
+  Аппаратные объекты и ожидание температуры заменены моделью.
 
 - `test_treed_calibration.py` — XY geometry/idle guards, атомарная запись overrides,
   height stamp после restart, подача/cleanup и сохранение rotation_distance.
