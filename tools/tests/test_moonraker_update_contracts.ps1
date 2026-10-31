@@ -5,7 +5,8 @@ $ErrorActionPreference = "Stop"
 # ==========================================
 # Назначение:
 # - фиксирует fail-closed print guard update API;
-# - проверяет UI print guard и system fail-closed без запуска updater.
+# - проверяет запрет печати/паузы, передачу неизвестного состояния root worker
+#   и system fail-closed без установленного baseline; сам updater не запускается.
 # Контур:
 # - runnable: использует Python smoke-test с fake Klippy API.
 
@@ -148,8 +149,8 @@ async def assert_blocked(temp_dir, target_id, target_tag, print_state, status_co
     assert not component.state_file.exists()
 
 
-async def assert_allowed(temp_dir, target_id, target_tag):
-    component = await build_component(temp_dir, "standby")
+async def assert_allowed(temp_dir, target_id, target_tag, print_state="standby"):
+    component = await build_component(temp_dir, print_state)
     component.last_release_results = available_status()["releaseResults"]
     result = await component._handle_apply(FakeRequest(target_id, target_tag))
     assert component.server.klippy.queries == 1
@@ -178,7 +179,7 @@ async def main():
             target_id, target_tag = "printer-ui", "ui-main-10-1"
             for print_state in ("printing", "paused"):
                 await assert_blocked(root / f"blocked-{print_state}", target_id, target_tag, print_state, 409)
-            await assert_blocked(root / "unavailable", target_id, target_tag, None, 503)
+            await assert_allowed(root / "unavailable", target_id, target_tag, None)
             await assert_allowed(root / "allowed", target_id, target_tag)
             await assert_system_fail_closed(root / "system-blocked")
     finally:

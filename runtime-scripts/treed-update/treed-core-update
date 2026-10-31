@@ -143,6 +143,8 @@ def package_manifest(repo, *, use_release_tag=False):
     managed = managed_runtime_plan(repo)
     return {"kind": KIND, "schema": 1, "version": version, "tag": f"v{version}",
             "sha": commit, "requires": requirements,
+            "updater": {"protocol": 1, "entrypoint": "payload/sbin/treed-core-update",
+                        "sha256": sha((repo / "runtime-scripts/treed-update/treed-core-update").read_bytes())},
             "provisioning": {"schema": 1, "revision": provisioning_revision(repo),
                              "managedRevision": managed["revision"], "steps": managed["steps"]},
             "files": []}
@@ -383,13 +385,14 @@ def write_file(path, data, mode=0o644, uid=None, gid=None):
 
 
 def remove_file(path):
-    with parent_fd(path) as descriptor:
-        try:
+    try:
+        with parent_fd(path) as descriptor:
             os.unlink(path.name if descriptor is not None else path, dir_fd=descriptor)
-        except FileNotFoundError:
-            pass
-        if descriptor is not None:
-            os.fsync(descriptor)
+            if descriptor is not None:
+                os.fsync(descriptor)
+    except FileNotFoundError:
+        # Сбой мог произойти до создания каталога нового runtime-файла.
+        pass
 
 
 def clear_bytecode(entries, locations):
@@ -845,12 +848,19 @@ def ready(required_components=()):
 
 
 def idle():
-    if not ready():
-        return False
     try:
         status = request_json("/printer/objects/query?print_stats=state")["status"]
         state = status["print_stats"]["state"]
         return isinstance(state, str) and state.strip().lower() in {"standby", "complete", "cancelled", "error"}
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def klipper_failed_startup():
+    # Ошибка загрузки оставляет процесс active; допуск всё равно требует известного простоя.
+    try:
+        info = request_json("/printer/info")
+        return isinstance(info, dict) and info.get("state") == "error" and idle()
     except (OSError, ValueError, KeyError):
         return False
 
@@ -1228,16 +1238,32 @@ def replacement_context(state, operation, tag, env, check_confirmed=True):
     if old_journal.is_symlink() or old_journal.parent.is_symlink():
         raise ValueError("Superseded core journal небезопасен")
     transaction = read_json(old_journal)
+    if isinstance(transaction, dict):
+        if (transaction.get("operationId") is not None and transaction["operationId"] != old_operation
+                or transaction.get("targetTag") is not None and transaction["targetTag"] != old_tag):
+            raise ValueError("Superseded journal target не совпадает с root state")
+        if ("resetConfigs" in transaction
+                and validate_config_resets(transaction["resetConfigs"]) != validate_config_resets(audit_resets)):
+            raise ValueError("Superseded reset consent не совпадает с journal")
+    if state.get("supersedesPackagedUpdater") is True:
+        if transaction is None and state.get("supersededPhase") in {"queued", "validating", "downloading"}:
+            return None
+        if isinstance(transaction, dict) and type(transaction.get("schema")) is int and transaction["schema"] == 1:
+            if not (transaction.get("provisioningStarted") is True or transaction.get("forwardOnly") is True
+                    or transaction.get("stage") in {"provisioning", "provisioning_failed", "provisioned"}):
+                # Восстановление runtime выполняет новый целевой код, старый executor не нужен.
+                result = recover(env, old_operation)
+                if (result.get("status") not in {"applied", "rolled_back"}
+                        and result.get("resultCode") != "core_not_installed"):
+                    raise ValueError("Целевой updater не смог восстановить предыдущую операцию")
+                return None
+            if transaction.get("forwardOnly") is True:
+                validate_forward_only(old_journal, transaction, env)
     if (not isinstance(transaction, dict) or transaction.get("schema") != 1
             or transaction.get("stage") not in {"provisioning", "provisioning_failed", "provisioned"}
-            and transaction.get("provisioningStarted") is not True):
+            and transaction.get("provisioningStarted") is not True
+            and not (state.get("supersedesPackagedUpdater") is True and transaction.get("forwardOnly") is True)):
         raise ValueError("Superseded core journal не подтверждает начатый provisioning")
-    if (transaction.get("operationId") is not None and transaction["operationId"] != old_operation
-            or transaction.get("targetTag") is not None and transaction["targetTag"] != old_tag):
-        raise ValueError("Superseded journal target не совпадает с root state")
-    if ("resetConfigs" in transaction
-            and validate_config_resets(transaction["resetConfigs"]) != validate_config_resets(audit_resets)):
-        raise ValueError("Superseded reset consent не совпадает с journal")
     entries = transaction.get("entries")
     if not isinstance(entries, list) or not entries or len(entries) > 256:
         raise ValueError("Superseded core journal содержит неверный список файлов")
@@ -1358,7 +1384,7 @@ def stop_for_recovery():
         gate_ready = True
     except Exception:
         # Moonraker может работать при остановленном Klipper: печать невозможна.
-        if not services_inactive(("klipper.service",)):
+        if not services_inactive(("klipper.service",)) and not klipper_failed_startup():
             raise RuntimeError("Recovery остановлена: admission gate недоступен, а Klipper не подтверждён как остановленный")
     if gate_ready:
         try:
@@ -1640,6 +1666,14 @@ def recover(env, operation):
     journal = journal_path(env, operation)
     transaction = read_json(journal) if journal.parent.exists() else None
     if not transaction:
+        # Pin исполнителя сохраняется до первой записи journal: можно повторить тот же пакет.
+        if env.get("TREED_UPDATE_PACKAGE_FILE"):
+            state = read_json(Path(env.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json")))
+            if (isinstance(state, dict) and state.get("operationId") == operation
+                    and state.get("targetId") == "printer-core" and state.get("busy") is True
+                    and state.get("targetTag") == env.get("TREED_UPDATE_PACKAGE_TAG")):
+                replacement = replacement_context(state, operation, state["targetTag"], env)
+                return apply(state["targetTag"], operation, env, state.get("resetConfigs", []), replacement)
         return {"status": "error", "resultCode": "operation_interrupted",
                 "message": "Обновление core прервано до изменения файлов."}
     if transaction.get("schema") != 1:
@@ -1721,7 +1755,17 @@ def apply(tag, operation, env, reset_configs=None, replacement=None):
     phase("downloading", "Загружаем и проверяем пакет компонентов TreeD.")
     with tempfile.TemporaryDirectory(prefix="treed-core-") as temp:
         archive = Path(temp) / ASSET
-        download(tag, archive, env)
+        cached = env.get("TREED_UPDATE_PACKAGE_FILE")
+        if cached:
+            archive = Path(cached)
+            expected = env.get("TREED_UPDATE_PACKAGE_SHA256", "")
+            if (env.get("TREED_UPDATE_PACKAGE_TAG") != tag
+                    or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+                    or archive.is_symlink() or not archive.is_file()
+                    or sha(archive.read_bytes()) != expected):
+                raise ValueError("Закреплённый пакет updater повреждён или относится к другой версии")
+        else:
+            download(tag, archive, env)
         manifest, payload = load_package(archive, tag)
         previous = read_json(manifest_path(env))
         provision = "provisioning" in manifest or replacement is not None
@@ -1755,16 +1799,21 @@ def apply(tag, operation, env, reset_configs=None, replacement=None):
         stop_for_recovery()
     else:
         # BEGIN выполняется в последовательной очереди Klipper до остановки сервисов.
-        update_admission("BEGIN")
         try:
-            stop_heating()
-        except Exception as heater_error:
+            update_admission("BEGIN")
+        except Exception:
+            if not klipper_failed_startup():
+                raise
+        else:
             try:
-                update_admission("END")
-            except Exception as release_error:
-                print(f"Core update admission release failed: {release_error}", file=sys.stderr)
-                raise RuntimeError(f"{heater_error}; admission gate may remain active: {release_error}") from heater_error
-            raise
+                stop_heating()
+            except Exception as heater_error:
+                try:
+                    update_admission("END")
+                except Exception as release_error:
+                    print(f"Core update admission release failed: {release_error}", file=sys.stderr)
+                    raise RuntimeError(f"{heater_error}; admission gate may remain active: {release_error}") from heater_error
+                raise
     try:
         phase("installing", "Устанавливаем компоненты TreeD; локальные настройки сохраняются.")
         if replacement is None:

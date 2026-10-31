@@ -13,16 +13,20 @@ try:
 except ImportError:  # Windows test host; production service is Linux-only.
     fcntl = None
 import json
+import hashlib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -54,6 +58,12 @@ def core_journal(state: Dict[str, Any]) -> Path:
     return Path(os.environ.get("TREED_CORE_STATE_DIR", "/var/lib/treed-update/core")) / str(state.get("operationId", "")) / "journal.json"
 
 
+def packaged_operation(state: Dict[str, Any]) -> bool:
+    marker = state.get("packageUpdater")
+    return isinstance(marker, dict) and all(marker.get(key) == state.get(key)
+                                           for key in ("operationId", "targetId", "targetTag"))
+
+
 def core_supersede_eligible(state: Dict[str, Any], target_tag: str | None = None) -> bool:
     """Read-only root eligibility check; core updater repeats all transaction checks."""
     if (state.get("targetId") != "printer-core" or state.get("status") != "error"
@@ -68,6 +78,9 @@ def core_supersede_eligible(state: Dict[str, Any], target_tag: str | None = None
         uuid.UUID(str(state.get("operationId", "")))
     except (TypeError, ValueError):
         return False
+    if packaged_operation(state):
+        # Формат старого journal оценивает целевой updater, а не bootstrap.
+        return True
     journal = core_journal(state)
     if (journal.is_symlink() or journal.parent.is_symlink() or journal.parent.parent.is_symlink()
             or not journal.is_file()):
@@ -109,6 +122,8 @@ def add_supersede_status(state: Dict[str, Any]) -> None:
 
 
 def corrective_replacement_context(state: Dict[str, Any]) -> bool:
+    if state.get("supersedesPackagedUpdater") is True:
+        return False
     old_id = state.get("supersedesOperationId")
     old_tag = state.get("supersedesTargetTag")
     safe_error = (state.get("status") == "error" and state.get("busy") is not True
@@ -224,7 +239,7 @@ def automatic_fresh_retry_context(state: Dict[str, Any]) -> bool:
 
 
 def automatic_fresh_retry_pre_mutation(state: Dict[str, Any]) -> bool:
-    return (state.get("status") in {"queued", "validating", "downloading"}
+    return (not packaged_operation(state) and state.get("status") in {"queued", "validating", "downloading"}
             and state.get("phase") == state.get("status")
             and automatic_fresh_retry_context(state))
 
@@ -420,11 +435,15 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
         old_core_recoverable = core_supersede_eligible(state)
         existing_corrective = corrective_replacement_context(state)
         replacement_anchor: tuple[str, str] | None = None
+        packaged_anchor = packaged_operation(state)
         if target_id == "printer-core" and state.get("targetId") == "printer-core" \
                 and state.get("status") == "error" and state.get("busy") is not True \
                 and target_tag != state.get("targetTag"):
             if core_supersede_eligible(state, target_tag):
                 replacement_anchor = (str(state["operationId"]), state["targetTag"])
+                if (state.get("supersedesPackagedUpdater") is True and not core_journal(state).exists()
+                        and state.get("lastFailurePhase") in {"queued", "validating", "downloading"}):
+                    replacement_anchor = (state["supersedesOperationId"], state["supersedesTargetTag"])
             elif (existing_corrective and (
                     state.get("resultCode") in FRESH_CORE_RETRY_CODES | {
                         "service_start_failed", "corrective_precondition_deferred"}
@@ -487,6 +506,12 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
                     supersededResetConfigs=(state.get("supersededResetConfigs", [])
                                             if existing_corrective else state.get("resetConfigs", [])),
                 )
+                if packaged_anchor:
+                    reused = replacement_anchor[0] != state["operationId"]
+                    operation.update(supersedesPackagedUpdater=True,
+                                     supersededPhase=state.get("supersededPhase") if reused else state.get("lastFailurePhase"))
+                    if reused:
+                        operation["supersededResetConfigs"] = state.get("supersededResetConfigs", [])
             elif fresh_after_download_error:
                 pass
             elif target_id != "printer-core" or target_tag != state.get("targetTag"):
@@ -498,7 +523,7 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
                 if not isinstance(generation, int) or isinstance(generation, bool) or generation < 0:
                     raise ValueError("Некорректное поколение попытки обновления")
                 operation.update(operationId=state["operationId"], attemptGeneration=generation + 1,
-                                 resumeCore=core_journal(state).is_file())
+                                 resumeCore=packaged_operation(state) or core_journal(state).is_file())
                 operation.pop("retry", None)
                 if state.get("resetConfigs"):
                     operation["resetConfigs"] = state["resetConfigs"]
@@ -507,6 +532,12 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
                 if existing_corrective:
                     for key in ("supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs"):
                         operation[key] = state[key]
+                if packaged_operation(state):
+                    operation["packageUpdater"] = state["packageUpdater"]
+                    for key in ("supersedesOperationId", "supersedesTargetTag", "supersededResetConfigs",
+                                "supersedesPackagedUpdater", "supersededPhase"):
+                        if key in state:
+                            operation[key] = state[key]
         write_state(operation)
         try:
             subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
@@ -660,23 +691,12 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
     command = [CORE_APPLY, "recover", state["operationId"]] if recovery else [
         CORE_APPLY, "apply", state["targetTag"], state["operationId"]]
     try:
-        LOG.parent.mkdir(parents=True, exist_ok=True)
-        with LOG.open("a", encoding="utf-8") as log:
-            log.write(f"{now()} core {'recovery' if recovery else 'apply'} {state['operationId']}\n")
-            log.flush()
-            # Внешний systemd timeout останавливает всю cgroup, включая дочерний loader.
-            context = dict(os.environ, TREED_UPDATE_OPERATION_ID=str(state["operationId"]),
-                           TREED_UPDATE_ATTEMPT_GENERATION=str(state.get("attemptGeneration", 0)))
-            result = subprocess.run(command, stdout=subprocess.PIPE, stderr=log, text=True,
-                                    check=False, env=context)
-            log.write(result.stdout + "\n")
-        payload = json.loads(result.stdout)
-        if not isinstance(payload, dict):
-            raise ValueError("invalid core updater response")
-        status = payload.get("status")
-        if status not in {"applied", "rolled_back", "error"} or status == "applied" and result.returncode != 0:
-            raise ValueError("invalid core updater response")
-    except (OSError, ValueError, subprocess.SubprocessError):
+        execution = package_execution(state, recovery)
+        payload = execute_updater(state, execution or (command, {}))
+    except PackageDownloadError:
+        payload = {"status": "error", "resultCode": "core_download_failed",
+                   "message": "Не удалось загрузить пакет updater; повтор сохранит выбранный выпуск."}
+    except (OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile, subprocess.SubprocessError):
         payload = {"status": "error", "resultCode": "core_update_failed",
                    "message": "Не удалось подтвердить результат core updater; проверьте журнал службы."}
     journal = core_journal(state)
@@ -695,6 +715,203 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
     finish(current, payload["status"], str(payload.get("resultCode", "core_update_failed")),
            str(payload.get("message", "Обновление TreeD Core завершено.")))
     return 0 if payload["status"] == "applied" or recovery and payload["status"] == "rolled_back" else 1
+
+
+# Блок 3.2: Стабильный запускатель; формат установки и journal принадлежат выпуску.
+class PackageDownloadError(OSError):
+    pass
+
+
+def executor_directory(state: Dict[str, Any]) -> Path:
+    operation = state.get("operationId")
+    target, tag = state.get("targetId"), state.get("targetTag")
+    if (not isinstance(operation, str) or str(uuid.UUID(operation)) != operation.lower()
+            or target not in TARGET_RE or not isinstance(tag, str)
+            or TARGET_RE[target].fullmatch(tag) is None):
+        raise ValueError("Некорректная привязка updater к операции")
+    root = STATE.parent / "executors"
+    current = root
+    for part in (None, operation, target, tag):
+        if part is not None:
+            current /= part
+        current.mkdir(mode=0o700, exist_ok=True)
+        info = current.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or current.is_symlink()
+                or os.name != "nt" and (info.st_uid != os.geteuid() or info.st_mode & 0o022)):
+            raise ValueError("Каталог updater не принадлежит доверенному worker")
+    return current
+
+
+def sync_executor_directory(path: Path) -> None:
+    if os.name != "nt":
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def write_executor_file(path: Path, data: bytes) -> None:
+    # Pin публикуется последним, после durable archive и кода исполнителя.
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(temporary, path)
+        sync_executor_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def package_execution(state: Dict[str, Any], recovery: bool = False):
+    directory = executor_directory(state)
+    pin_path, archive, runner = (directory / name for name in ("executor.json", "package.zip", "updater.py"))
+    identity = {key: state[key] for key in ("operationId", "targetId", "targetTag")}
+    marker = state.get("packageUpdater")
+    if pin_path.exists() or pin_path.is_symlink():
+        if pin_path.is_symlink() or pin_path.stat().st_size > 8192:
+            raise ValueError("Некорректный pin updater")
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        if (not isinstance(pin, dict) or type(pin.get("protocol")) is not int or pin["protocol"] != 1
+                or any(pin.get(key) != value for key, value in identity.items())):
+            raise ValueError("Pin updater относится к другой операции")
+        for path, key in ((archive, "packageSha256"), (runner, "updaterSha256")):
+            expected = pin.get(key)
+            if (not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+                    or path.is_symlink() or not path.is_file()
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
+                raise ValueError("Закреплённый updater или его пакет повреждён")
+    else:
+        if isinstance(marker, dict) and all(marker.get(key) == value for key, value in identity.items()):
+            raise ValueError("У начатой операции утрачен закреплённый updater")
+        # Старые journal уже были начаты установленным исполнителем.
+        if recovery and (state["targetId"] == "printer-core" and core_journal(state).exists()
+                         or state.get("phase") not in {"queued", "validating", "downloading"}):
+            return None
+        target = state["targetId"]
+        if target == "printer-core":
+            api = os.environ.get("TREED_CORE_RELEASE_API_URL", "https://api.github.com/repos/TreeD-Hub/printer-core/releases")
+            asset_name, manifest_name = "treed-core-runtime.zip", "manifest.json"
+        else:
+            api = os.environ.get("TREED_SHELL_RELEASE_API_URL", "https://api.github.com/repos/TreeD-Hub/printer-ui/releases")
+            asset_name, manifest_name = "treed-shell-ui.zip", "treed-shell-ui-manifest.json"
+        if re.fullmatch(r"https://api\.github\.com/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/releases", api) is None:
+            raise ValueError("Updater принимает только доверенный GitHub release API")
+        transition("downloading", "Загружаем и проверяем updater выбранного выпуска.")
+        try:
+            request = urllib.request.Request(api + "/tags/" + state["targetTag"],
+                                             headers={"Accept": "application/vnd.github+json", "User-Agent": "treed-update-service"})
+            with urllib.request.urlopen(request, timeout=15) as response:
+                release = json.loads(response.read(1024 * 1024 + 1))
+            if (not isinstance(release, dict) or release.get("tag_name") != state["targetTag"]
+                    or release.get("draft") or release.get("prerelease")):
+                raise ValueError("Updater требует опубликованный стабильный выпуск с точным тегом")
+            asset = next((item for item in release.get("assets", [])
+                          if isinstance(item, dict) and item.get("name") == asset_name), {})
+            digest, url = asset.get("digest"), asset.get("browser_download_url")
+            repository = api.removeprefix("https://api.github.com/repos/").removesuffix("/releases")
+            prefix = f"https://github.com/{repository}/releases/download/{state['targetTag']}/"
+            if (not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+                    or not isinstance(url, str) or not url.startswith(prefix)):
+                raise ValueError("У release updater отсутствуют доверенный asset и SHA-256")
+            data = bytearray()
+            with urllib.request.urlopen(url, timeout=30) as response:
+                while block := response.read(65536):
+                    data.extend(block)
+                    if len(data) > 128 * 1024 * 1024:
+                        raise ValueError("Пакет updater превышает предел загрузки")
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429:
+                raise ValueError("Release updater недоступен") from error
+            raise PackageDownloadError(str(error)) from error
+        package_hash = hashlib.sha256(data).hexdigest()
+        if package_hash != digest.removeprefix("sha256:"):
+            raise ValueError("SHA-256 пакета updater не совпадает с GitHub")
+        import io
+        with zipfile.ZipFile(io.BytesIO(data)) as bundle:
+            names = bundle.namelist()
+            if len(names) != len(set(names)) or len(names) > 10000:
+                raise ValueError("Некорректный список файлов пакета updater")
+            manifest_info = bundle.getinfo(manifest_name)
+            if manifest_info.file_size > 1024 * 1024:
+                raise ValueError("Manifest updater превышает предел размера")
+            manifest = json.loads(bundle.read(manifest_info))
+            if not isinstance(manifest, dict):
+                raise ValueError("Некорректный manifest updater")
+            if "updater" not in manifest:
+                return None
+            meta = manifest["updater"]
+            if not isinstance(meta, dict) or type(meta.get("protocol")) is not int or meta["protocol"] != 1:
+                raise ValueError("Неизвестный протокол updater пакета")
+            entry, expected = meta.get("entrypoint"), meta.get("sha256")
+            if (not isinstance(entry, str) or not entry or "\\" in entry
+                    or PurePosixPath(entry).is_absolute() or ".." in PurePosixPath(entry).parts
+                    or not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None):
+                raise ValueError("Некорректный entrypoint updater")
+            info = bundle.getinfo(entry)
+            if info.is_dir() or stat.S_ISLNK(info.external_attr >> 16) or info.file_size > 8 * 1024 * 1024:
+                raise ValueError("Некорректный файл updater")
+            code = bundle.read(info)
+            if hashlib.sha256(code).hexdigest() != expected:
+                raise ValueError("SHA-256 updater не совпадает с manifest")
+        pin = dict(identity, protocol=1, packageSha256=package_hash, updaterSha256=expected)
+        write_executor_file(archive, bytes(data))
+        write_executor_file(runner, code)
+        write_executor_file(pin_path, (json.dumps(pin, sort_keys=True) + "\n").encode())
+    current = read_state()
+    if (any(current.get(key) != value for key, value in identity.items())
+            or current.get("attemptGeneration", 0) != state.get("attemptGeneration", 0)):
+        raise ValueError("Операция изменилась до запуска updater")
+    if current.get("packageUpdater") != identity:
+        current["packageUpdater"] = identity
+        write_state(current)
+    command = [sys.executable, str(runner), "recover", state["operationId"]] if recovery else [
+        sys.executable, str(runner), "apply", state["targetTag"], state["operationId"]]
+    context = {"TREED_UPDATE_PACKAGE_FILE": str(archive), "TREED_UPDATE_PACKAGE_SHA256": pin["packageSha256"],
+               "TREED_UPDATE_PACKAGE_TAG": state["targetTag"]}
+    return command, context
+
+
+def execute_updater(state: Dict[str, Any], execution):
+    command, package_environment = execution
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a", encoding="utf-8") as log:
+        log.write(f"{now()} {state['targetId']} updater {state['operationId']}\n")
+        log.flush()
+        context = dict(os.environ, TREED_UPDATE_OPERATION_ID=str(state["operationId"]),
+                       TREED_UPDATE_ATTEMPT_GENERATION=str(state.get("attemptGeneration", 0)))
+        context.update(package_environment)
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=log, text=True,
+                                check=False, env=context)
+        log.write(result.stdout + "\n")
+    payload = json.loads(result.stdout)
+    if (not isinstance(payload, dict) or payload.get("status") not in {"applied", "rolled_back", "error"}
+            or payload["status"] == "applied" and result.returncode != 0):
+        raise ValueError("invalid updater response")
+    return payload
+
+
+def run_packaged_ui(state: Dict[str, Any], execution, recovery: bool = False) -> int:
+    try:
+        payload = execute_updater(state, execution)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        if not recovery and recover_ui(read_state()):
+            return 1
+        payload = {"status": "error", "resultCode": "update_failed",
+                   "message": "Не удалось подтвердить результат updater интерфейса."}
+    current = read_state()
+    if (current.get("operationId") != state.get("operationId")
+            or current.get("attemptGeneration", 0) != state.get("attemptGeneration", 0)):
+        return 1
+    finish(current, payload["status"], str(payload.get("resultCode", "update_failed")),
+           str(payload.get("message", "Обновление интерфейса завершено.")))
+    return 0 if payload["status"] in {"applied", "rolled_back"} else 1
 
 
 def run_worker() -> int:
@@ -721,6 +938,23 @@ def run_current() -> int:
         return 0
     if state.get("targetId") == "printer-core" and (state.get("status") != "queued" or state.get("resumeCore")):
         return run_core(state, recovery=True)
+    try:
+        execution = package_execution(state)
+    except PackageDownloadError:
+        finish(read_state(), "error", "core_download_failed" if state.get("targetId") == "printer-core"
+               else "update_failed", "Не удалось загрузить updater выпуска; выбранная версия сохранена.")
+        return 1
+    except (OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile):
+        finish(read_state(), "error", "core_validation_failed" if state.get("targetId") == "printer-core"
+               else "update_failed", "Не удалось подготовить проверенный updater выпуска.")
+        return 1
+    if execution is not None:
+        if printer_job_state() in {"printing", "paused"}:
+            finish(read_state(), "rejected", "printer_not_idle", "Принтер печатает или находится на паузе.")
+            return 1
+        state = read_state()
+        loading_screen("start")
+        return run_core(state) if state["targetId"] == "printer-core" else run_packaged_ui(state, execution)
     automatic_fresh_retry = (state.get("status") == "queued"
                              and automatic_fresh_retry_context(state))
     corrective_replacement = (state.get("status") == "queued"
@@ -946,6 +1180,14 @@ def wait_shell_ready(runtime: Path) -> bool:
 
 
 def recover_ui(state: Dict[str, Any]) -> bool:
+    try:
+        execution = package_execution(state, recovery=True)
+    except (OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile):
+        finish(state, "error", "rollback_failed", "Закреплённый updater UI недоступен для восстановления.")
+        return True
+    if execution is not None:
+        run_packaged_ui(state, execution, recovery=True)
+        return True
     operation_id = state.get("operationId")
     if not isinstance(operation_id, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", operation_id):
         return False

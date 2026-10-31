@@ -2,6 +2,7 @@
 
 import contextlib
 import configparser
+import hashlib
 import io
 import json
 import os
@@ -14,6 +15,8 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
+import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_PATH = ROOT / "runtime-scripts/treed-update/treed-update-service"
@@ -32,6 +35,50 @@ class FakeLock:
 
 
 class UpdateServiceTests(unittest.TestCase):
+    def test_v034_ui_installer_accepts_new_package_updater_envelope(self):
+        if os.name == "nt" or not shutil.which("bash"):
+            self.skipTest("Исторический UI installer требует Linux Bash")
+        revision = "de76ff54c3a66db8a860394b8e6b44e250338e32"
+        source = subprocess.check_output([
+            "git", "-C", str(ROOT), "show", f"{revision}:runtime-scripts/treed-update/treed-update-apply"
+        ], text=True, timeout=10)
+        start = source.index("apply_shell_update() {")
+        end = source.index("\n}\n", start) + len("\n}")
+        installer = source[start:end].replace("/usr/local/sbin/treed-update-service", "phase_stub")
+        runtime = self.root / "legacy-ui"
+        current = runtime / "ui"
+        current.mkdir(parents=True)
+        (current / "index.html").write_bytes(b"prior UI")
+        package = self.root / "ui-package.zip"
+        code = b"# package-owned updater\n"
+        manifest = dict(name="treed-shell-ui", mode="live", sha="a" * 40, runNumber=123, runAttempt=1,
+                        updater=dict(protocol=1, entrypoint=".treed-update/updater.py",
+                                     sha256=hashlib.sha256(code).hexdigest()))
+        with zipfile.ZipFile(package, "w") as bundle:
+            bundle.writestr("index.html", b"new UI")
+            bundle.writestr("treed-shell-ui-manifest.json", json.dumps(manifest))
+            bundle.writestr(".treed-update/updater.py", code)
+        environment = dict(os.environ, SHELL_RUNTIME_DIR=str(runtime), SHELL_WEB_DIR=str(current),
+                           SHELL_ARCHIVE_PATH=str(runtime / "treed-shell-ui.zip"), TARGET_TAG="ui-main-123-1",
+                           PI_USER="fixture", PI_GROUP="fixture", SHELL_SERVICE="fixture.service",
+                           PACKAGE=str(package), TREED_UPDATE_OPERATION_ID=str(uuid.uuid4()),
+                           DIGEST="sha256:" + hashlib.sha256(package.read_bytes()).hexdigest())
+        # Только внешние границы: release/download, systemd, account и phase CLI.
+        boundaries = '''
+phase_stub() { :; }
+resolve_shell_asset_url() { printf 'https://fixture.invalid/package.zip\t%s\n' "$DIGEST"; }
+curl() { while [ "$1" != '-o' ]; do shift; done; cp "$PACKAGE" "$2"; }
+systemctl() { :; }
+chown() { :; }
+wait_shell_ready() { return 0; }
+'''
+        result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + boundaries + installer + "\napply_shell_update\n"],
+                                env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((current / "index.html").read_bytes(), b"new UI")
+        self.assertEqual((runtime / "ui.previous/index.html").read_bytes(), b"prior UI")
+        self.assertEqual((runtime / "treed-shell-ui.zip").read_bytes(), package.read_bytes())
+
     def test_standalone_environment_keeps_custom_lock_for_retry_worker(self):
         bash = shutil.which("bash")
         if not bash:
@@ -302,6 +349,9 @@ class UpdateServiceTests(unittest.TestCase):
         self.loading_screen = patch.object(service, "loading_screen")
         self.loading_screen.start()
         self.addCleanup(self.loading_screen.stop)
+        self.package_execution = patch.object(service, "package_execution", return_value=None)
+        self.package_execution.start()
+        self.addCleanup(self.package_execution.stop)
 
     def test_loader_completion_closes_failure_and_preserves_pending_ui(self):
         for pending_ui in (None, "ui-main-124-1"):
@@ -497,6 +547,42 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertEqual((journal_dir / "journal.json").read_bytes(), journal_bytes)
         self.assertEqual((journal_dir / "manifest.new.json").read_bytes(), manifest_bytes)
         self.assertEqual((journal_dir / "treed-core-runtime.zip").read_bytes(), source_bytes)
+
+    def test_packaged_error_accepts_newer_executor_without_parsing_old_journal(self):
+        old_id = "11111111-1111-4111-8111-111111111111"
+        state = dict(operationId=old_id, targetId="printer-core", targetTag="v0.2.0",
+                     status="error", busy=False, resultCode="core_validation_failed",
+                     lastFailurePhase="downloading", resetConfigs=[], history=[])
+        state["packageUpdater"] = {key: state[key] for key in ("operationId", "targetId", "targetTag")}
+        service.write_state(state)
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service.subprocess, "run"), contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(service.core_supersede_eligible(state, "v0.3.0"))
+            service.submit(str(uuid.uuid4()), "printer-core", "v0.3.0")
+            replacement = service.read_state()
+            self.assertEqual(replacement["supersedesOperationId"], old_id)
+            self.assertTrue(replacement["supersedesPackagedUpdater"])
+            replacement["packageUpdater"] = {key: replacement[key]
+                                            for key in ("operationId", "targetId", "targetTag")}
+            service.finish(replacement, "error", "core_validation_failed", "broken target updater")
+            service.submit(str(uuid.uuid4()), "printer-core", "v0.4.0")
+        self.assertEqual(service.read_state()["supersedesOperationId"], old_id)
+        self.assertEqual(service.read_state()["supersedesTargetTag"], "v0.2.0")
+
+    def test_retry_preserves_package_pin_identity_even_without_core_journal(self):
+        state = dict(operationId=str(uuid.uuid4()), targetId="printer-core", targetTag="v0.2.0",
+                     status="error", busy=False, resultCode="core_validation_failed", history=[])
+        state["packageUpdater"] = {key: state[key] for key in ("operationId", "targetId", "targetTag")}
+        service.write_state(state)
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service.subprocess, "run"), contextlib.redirect_stdout(io.StringIO()):
+            service.submit(str(uuid.uuid4()), "printer-core", "v0.2.0")
+        resumed = service.read_state()
+        self.assertEqual(resumed["operationId"], state["operationId"])
+        self.assertEqual(resumed["packageUpdater"], state["packageUpdater"])
+        self.assertTrue(resumed["resumeCore"])
 
     def test_prejournal_corrective_download_failure_keeps_physical_anchor_for_next_newer_goal(self):
         old_id = "11111111-1111-4111-8111-111111111111"
@@ -1708,6 +1794,141 @@ class UpdateServiceTests(unittest.TestCase):
         self.assertLess(events.index("splash:start"), events.index("apply"))
         self.assertLess(events.index("apply"), events.index("splash:stop"))
         self.assertLess(events.index("splash:stop"), events.index("unlock"))
+
+
+class PackageExecutionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        previous = service.STATE, service.LOG
+        self.addCleanup(lambda: (setattr(service, 'STATE', previous[0]), setattr(service, 'LOG', previous[1])))
+        service.STATE, service.LOG = self.root / 'state.json', self.root / 'worker.log'
+        self.state = {'operationId': str(uuid.uuid4()), 'targetId': 'printer-core', 'targetTag': 'v0.2.0',
+                      'status': 'queued', 'phase': 'queued', 'busy': True, 'history': [], 'attemptGeneration': 0}
+        service.write_state(self.state)
+        self.code = (b'import json, os, sys\nfrom pathlib import Path\n'
+                     b'Path(os.environ["TEST_UPDATER_RECEIPT"]).write_text(json.dumps(sys.argv[1:]))\n'
+                     b'print(json.dumps({"status":"applied","resultCode":"fixture_updated"}))\n')
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.dict(os.environ, {
+            'TREED_CORE_RELEASE_API_URL': 'https://api.github.com/repos/test/printer-core/releases',
+            'TREED_SHELL_RELEASE_API_URL': 'https://api.github.com/repos/test/printer-ui/releases',
+            'TEST_UPDATER_RECEIPT': str(self.root / 'receipt.json')}))
+        self.network = self.stack.enter_context(patch.object(service.urllib.request, 'urlopen', side_effect=self.open_url))
+        self.make_package()
+
+    def make_package(self, metadata=None, declared=True):
+        target = self.state['targetId']
+        self.asset = 'treed-core-runtime.zip' if target == 'printer-core' else 'treed-shell-ui.zip'
+        name = 'manifest.json' if target == 'printer-core' else 'treed-shell-ui-manifest.json'
+        # Bootstrap не интерпретирует будущий формат данных самого installer.
+        manifest = {'schema': 999, 'futureComponent': {'enabled': True}}
+        if declared:
+            manifest['updater'] = metadata or {'protocol': 1, 'entrypoint': 'private/engine.py',
+                                               'sha256': hashlib.sha256(self.code).hexdigest()}
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as bundle:
+            bundle.writestr(name, json.dumps(manifest))
+            bundle.writestr('private/engine.py', self.code)
+        self.archive = buffer.getvalue()
+        self.url = f"https://github.com/test/{target}/releases/download/{self.state['targetTag']}/{self.asset}"
+        self.release = {'tag_name': self.state['targetTag'], 'draft': False, 'prerelease': False,
+                        'assets': [{'name': self.asset, 'digest': 'sha256:' + hashlib.sha256(self.archive).hexdigest(),
+                                    'browser_download_url': self.url}]}
+
+    def open_url(self, request, **kwargs):
+        url = getattr(request, 'full_url', request)
+        return io.BytesIO(json.dumps(self.release).encode() if url.startswith('https://api.github.com/') else self.archive)
+
+    def test_core_and_ui_execute_only_their_verified_package_runner(self):
+        for target, tag in (('printer-core', 'v0.2.0'), ('printer-ui', 'ui-main-2-1')):
+            self.state.update(targetId=target, targetTag=tag)
+            service.write_state(self.state)
+            self.make_package()
+            execution = service.package_execution(self.state)
+            self.assertNotEqual(execution[0][0], service.CORE_APPLY)
+            self.assertEqual(service.execute_updater(self.state, execution)['status'], 'applied')
+            self.assertEqual(json.loads((self.root / 'receipt.json').read_text()), ['apply', tag, self.state['operationId']])
+
+    def test_recovery_reuses_pinned_bytes_without_network_or_installed_runner(self):
+        execution = service.package_execution(self.state)
+        self.network.side_effect = AssertionError('Recovery must not download another runner')
+        self.state = service.read_state()
+        self.state.update(status='installing', phase='installing')
+        service.write_state(self.state)
+        recovered = service.package_execution(self.state, recovery=True)
+        self.assertEqual(execution[0][1], recovered[0][1])
+        service.execute_updater(self.state, recovered)
+        self.assertEqual(json.loads((self.root / 'receipt.json').read_text()), ['recover', self.state['operationId']])
+
+    def test_power_loss_before_pin_never_executes_incomplete_cache(self):
+        write = service.write_executor_file
+
+        def power_loss(path, data):
+            if path.name == 'executor.json':
+                raise KeyboardInterrupt('power loss before pin')
+            write(path, data)
+
+        with patch.object(service, 'write_executor_file', side_effect=power_loss), self.assertRaises(KeyboardInterrupt):
+            service.package_execution(self.state)
+        self.assertFalse((self.root / 'receipt.json').exists())
+        execution = service.package_execution(service.read_state())
+        self.assertEqual(service.execute_updater(self.state, execution)['status'], 'applied')
+
+    def test_corrupt_cache_and_lost_pin_never_fall_back_to_installed_code(self):
+        execution = service.package_execution(self.state)
+        runner = Path(execution[0][1])
+        original = runner.read_bytes()
+        runner.write_bytes(b'raise SystemExit("corrupt")')
+        with self.assertRaises(ValueError):
+            service.package_execution(service.read_state(), recovery=True)
+        runner.write_bytes(original)
+        runner.with_name('package.zip').write_bytes(b'corrupt archive')
+        with self.assertRaises(ValueError):
+            service.package_execution(service.read_state(), recovery=True)
+        runner.with_name('executor.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'утрачен'):
+            service.package_execution(service.read_state(), recovery=True)
+        self.assertFalse((self.root / 'receipt.json').exists())
+
+    def test_invalid_protocol_hash_path_source_and_tag_do_not_execute(self):
+        for metadata in ({'protocol': 2}, {'protocol': True},
+                         {'protocol': 1, 'entrypoint': '../engine.py', 'sha256': 'a' * 64},
+                         {'protocol': 1, 'entrypoint': 'private/engine.py', 'sha256': 'a' * 64}):
+            self.make_package(metadata)
+            with self.subTest(metadata=metadata), self.assertRaises(ValueError):
+                service.package_execution(self.state)
+        self.make_package()
+        self.release['assets'][0]['digest'] = 'sha256:' + '0' * 64
+        with self.assertRaises(ValueError):
+            service.package_execution(self.state)
+        self.make_package()
+        self.release['assets'][0]['browser_download_url'] = 'https://github.com/other/repo/releases/download/v0.2.0/a.zip'
+        with self.assertRaises(ValueError):
+            service.package_execution(self.state)
+        self.make_package()
+        self.release['tag_name'] = 'v0.3.0'
+        with self.assertRaises(ValueError):
+            service.package_execution(self.state)
+        self.assertFalse((self.root / 'receipt.json').exists())
+
+    def test_old_package_uses_legacy_path_but_malformed_new_metadata_does_not(self):
+        self.make_package(declared=False)
+        self.assertIsNone(service.package_execution(self.state))
+        self.make_package({'protocol': 1})
+        with self.assertRaises(ValueError):
+            service.package_execution(self.state)
+
+    def test_pin_identity_and_active_operation_cannot_be_replaced(self):
+        execution = service.package_execution(self.state)
+        pin_path = Path(execution[0][1]).with_name('executor.json')
+        pin = json.loads(pin_path.read_text())
+        pin['targetTag'] = 'v0.3.0'
+        pin_path.write_text(json.dumps(pin))
+        with self.assertRaises(ValueError):
+            service.package_execution(service.read_state(), recovery=True)
 
 
 if __name__ == "__main__":
