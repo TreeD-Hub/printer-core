@@ -138,7 +138,7 @@ class TreedZRecovery:
             raise gcmd.error('Eddy: недостоверная Z-позиция начала бумажной пробы')
         self.height_z_min = self.kin.rails[2].position_min
         # При поиске нуля Eddy рабочий минимум -5 мм временно не применяется.
-        self.kin.rails[2].position_min = -20.
+        self.kin.rails[2].position_min = -1000.
         self.kin.axes_min = self.toolhead.Coord(
             [self.kin.axes_min.x, self.kin.axes_min.y, self.kin.rails[2].position_min])
         self._set_z_limit(self.kin.rails[2].position_max)

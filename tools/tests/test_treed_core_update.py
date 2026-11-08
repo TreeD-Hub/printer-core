@@ -1277,6 +1277,66 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual(events, ["BEGIN", "END"])
         self.services.assert_called_once_with("start")
 
+    def test_aborted_inspection_uses_only_confirmed_baseline_and_allows_next_update(self):
+        self.manifest.update(sha="a" * 40, requires={"klipper": "b" * 40, "moonraker": "c" * 40})
+        self.phase.side_effect = lambda name, _message: (_ for _ in ()).throw(RuntimeError("phase failed")) \
+            if name == "installing" else None
+        self.assertEqual(self.apply()["resultCode"], "core_not_installed")
+        journal = core.journal_path(self.env, OPERATION)
+        transaction = core.read_json(journal)
+        self.assertEqual(transaction["stage"], "aborted")
+        state_path = self.root / "state/update-state.json"
+        self.env["TREED_UPDATE_STATE_FILE"] = str(state_path)
+        state = {"targetId": "printer-core", "targetTag": "v0.2.0",
+                 "operationId": OPERATION, "status": "error", "busy": False}
+        core.write_json(state_path, state)
+        key = "klipper/treed_driver_mode.py"
+        path = core.destination(key, self.locations)
+        path.write_bytes(self.payload[key])
+        self.assertIn({"path": key, "sha256": core.sha(self.payload[key])}, core.config_conflicts(self.env))
+        self.assertEqual(path.read_bytes(), self.payload[key])
+        for field, value in (("operationId", str(uuid.uuid4())), ("targetTag", "v0.3.0"),
+                             ("schema", 2), ("forwardOnly", True), ("provisioningStarted", True)):
+            with self.subTest(field=field):
+                core.write_json(journal, dict(transaction, **{field: value}))
+                with self.assertRaises(ValueError):
+                    core.config_conflicts(self.env)
+        core.write_json(journal, transaction)
+        with self.assertRaises(ValueError):
+            core._inspection_anchor(self.env, OPERATION, "v0.2.0")
+        package = self.root / "pinned.zip"
+        package.write_bytes(b"verified pinned bytes")
+        self.env.update(TREED_UPDATE_PACKAGE_FILE=str(package), TREED_UPDATE_PACKAGE_TAG="v0.2.0",
+                        TREED_UPDATE_PACKAGE_SHA256=core.sha(package.read_bytes()))
+        state.update(status="queued", busy=True)
+        core.write_json(state_path, state)
+        saved = {p.relative_to(journal.parent): p.read_bytes() for p in journal.parent.rglob("*") if p.is_file()}
+        with patch.object(core, "idle", return_value=False), self.assertRaises(core.PrinterNotReady):
+            core.recover(self.env, OPERATION)
+        bad_state = dict(state, targetTag="v0.3.0")
+        core.write_json(state_path, bad_state)
+        with self.assertRaises(ValueError):
+            core.recover(self.env, OPERATION)
+        self.assertTrue(journal.is_file())
+        self.assertEqual(path.read_bytes(), self.payload[key])
+        core.write_json(state_path, state)
+        self.phase.side_effect = None
+        with patch.object(core, "apply", side_effect=RuntimeError("interrupted after archive")):
+            with self.assertRaisesRegex(RuntimeError, "interrupted after archive"):
+                core.recover(self.env, OPERATION)
+        self.assertFalse(journal.exists())
+        archives = list(journal.parent.parent.glob(".aborted-*/" + OPERATION))
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(saved, {p.relative_to(archives[0]): p.read_bytes()
+                                 for p in archives[0].rglob("*") if p.is_file()})
+        self.assertEqual(path.read_bytes(), self.payload[key])
+        result = core.recover(self.env, OPERATION)
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(core.read_json(journal)["operationId"], OPERATION)
+        self.manifest.update(version="0.3.0", tag="v0.3.0")
+        self.env.pop("TREED_UPDATE_PACKAGE_FILE")
+        self.assertEqual(core.apply("v0.3.0", str(uuid.uuid4()), self.env)["status"], "applied")
+
     def test_validated_recovery_does_not_report_completion_when_gate_release_fails(self):
         self.phase.side_effect = lambda name, _message: (_ for _ in ()).throw(RuntimeError("phase failed")) \
             if name == "installing" else None

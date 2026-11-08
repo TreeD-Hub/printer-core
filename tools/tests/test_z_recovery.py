@@ -844,8 +844,8 @@ class HeightCalibrationTests(unittest.TestCase):
             with self.subTest(exit_kind=exit_kind):
                 rig = self.height_rig()
                 rig.extra.cmd_height_calibrate(rig.command)
-                self.assertEqual(rig.rail.get_range(), (-20., 198.))
-                self.assertEqual(rig.kin.limits[2], (-20., 198.))
+                self.assertEqual(rig.rail.get_range(), (-1000., 198.))
+                self.assertEqual(rig.kin.limits[2], (-1000., 198.))
                 rig.move([17., 29., -6., 4.], 5.)
                 if exit_kind == 'accept':
                     rig.callback.side_effect = lambda result: rig.move([17., 29., result.bed_z + .05, 4.], 5.)
@@ -871,14 +871,16 @@ class HeightCalibrationTests(unittest.TestCase):
                 rig.extra.height_probe.finalize(False)
                 self.assert_closed(rig)
 
-    def test_height_minimum_is_minus_20_independent_of_bottom_sensor(self):
+    def test_height_minimum_is_minus_1000_independent_of_bottom_sensor(self):
         for start_z in (20., 50.):
             rig = self.height_rig()
             rig.set_position([17., 29., start_z, 4.], homing_axes='xyz')
             rig.extra.bottom, rig.extra.max_seek = 180., 210.
             rig.extra.cmd_height_calibrate(rig.command)
-            self.assertEqual(rig.rail.position_min, -20.)
-            rig.move([17., 29., -6., 4.], 5.)
+            self.assertEqual(rig.rail.position_min, -1000.)
+            rig.move([17., 29., -1000., 4.], 5.)
+            with self.assertRaisesRegex(ValueError, 'out of range'):
+                rig.move([17., 29., -1000.01, 4.], 5.)
             rig.extra.height_probe.finalize(False)
             self.assert_closed(rig)
 
@@ -939,9 +941,9 @@ class HeightCalibrationTests(unittest.TestCase):
                 handlers['TESTZ'](testz)
                 self.assertAlmostEqual(rig.pos[2], -6.)
                 if end == 'range_error':
-                    testz.get_float = lambda name: -14.
+                    testz.get_float = lambda name: -994.
                     handlers['TESTZ'](testz)
-                    self.assertAlmostEqual(rig.pos[2], -20.)
+                    self.assertAlmostEqual(rig.pos[2], -1000.)
                     testz.get_float = lambda name: -.01
                     with self.assertRaisesRegex(ValueError, 'out of range'):
                         handlers['TESTZ'](testz)
