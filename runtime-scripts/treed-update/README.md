@@ -80,9 +80,11 @@ The Moonraker sudoers rule allows only the validated `submit` subcommand. No rea
 ## Release and verification
 
 Build the runtime artifact with `python3 runtime-scripts/treed-update/treed-core-update build . OUTPUT/treed-core-runtime.zip`.
-The release workflow also packages the matching source archive from the same tag. It builds these artifacts on pushes to `treed-v2` or manual runs,
-using version `0.<run_number>.<run_attempt>` and tag `v0.<run_number>.<run_attempt>`,
-as in the UI workflow. It stamps the job checkout and source asset `VERSION`
+The release workflow also packages the matching source archive from the same tag. After a PR is merged into `treed-v2`,
+its title prefix selects the version bump: `фикс` increments patch, `патч` increments minor, and `релиз` increments major.
+Case is ignored and a colon after the prefix is optional. Direct pushes without a merged PR do not publish a release.
+A draft pins the version and commit before the build; retries reuse that release. Manual runs on `treed-v2` retry its current merged PR.
+See [release rules](../../.github/workflows/README.md). The workflow stamps the job checkout and source asset `VERSION`
 without committing to the branch; runtime and release manifests share that version.
 Manual `vX.Y.Z` tags must still match the committed `VERSION`.
 PRs do not need a version bump. Runtime stack pins may stay unchanged

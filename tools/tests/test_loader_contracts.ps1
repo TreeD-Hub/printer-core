@@ -68,6 +68,7 @@ Assert-Contains ".github/workflows/release.yml" '"name": "printer-core"' "releas
 Assert-Contains ".github/workflows/release.yml" 'tags:\s*\r?\n\s+- "v\*\.\*\.\*"' "release workflow runs from semver tags"
 Assert-Contains ".github/workflows/release.yml" 'MAIN_SHELL_VERSION="\$\(tr -d' "release workflow reads VERSION as the release source"
 Assert-Contains ".github/workflows/release.yml" 'EXPECTED_TAG="v\$\{MAIN_SHELL_VERSION\}"' "release workflow maps VERSION to v-prefixed release tag"
+Assert-Contains ".github/workflows/release.yml" 'python3 -B tools/release_version\.py' "automatic release resolves the version from a merged PR"
 Assert-Contains ".github/workflows/release.yml" 'Shell syntax' "release workflow runs shell syntax checks"
 Assert-Contains ".github/workflows/release.yml" 'bash -n "\$file"' "release workflow validates shell scripts before packaging"
 Assert-Contains ".github/workflows/release.yml" 'Python syntax' "release workflow runs Python syntax checks"

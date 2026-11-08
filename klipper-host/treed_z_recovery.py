@@ -9,7 +9,7 @@ import math
 import copy
 from datetime import datetime, timezone
 
-from . import homing
+from . import homing, manual_probe
 
 
 class TreedZRecovery:
@@ -30,6 +30,8 @@ class TreedZRecovery:
         self.mesh_fault = False
         self.mesh_dispatch = None
         self.last_mesh = {}
+        self.height_probe = None
+        self.height_z_min = None
         self.motor_epoch = 0
         if config.get('sgt', None) is not None or config.get('current', None) is not None:
             raise config.error('Z recovery: перенесите sgt/current из [treed_z_recovery] '
@@ -43,7 +45,7 @@ class TreedZRecovery:
         high = zconfig.getfloat('position_max')
         self.config_z_max = high
         self.bottom = config.getfloat('bottom_position', high)
-        self.max_seek = config.getfloat('max_seek', high - low, above=0., maxval=210.)
+        self.max_seek = config.getfloat('max_seek', high - low, above=0., maxval=250.)
         values = (low, high, self.bottom, self.max_seek, self.speed,
                   self.accel, self.clearance, self.pause)
         if (not all(math.isfinite(v) for v in values)
@@ -68,11 +70,13 @@ class TreedZRecovery:
         gcode.register_command('TREED_Z_PARK_BOTTOM', self.cmd_park_bottom)
         gcode.register_command('_TREED_Z_TRAVEL_BEGIN', self.cmd_travel_begin)
         gcode.register_command('_TREED_Z_TRAVEL_APPLY', self.cmd_travel_apply)
+        gcode.register_command('_TREED_EDDY_HEIGHT_CALIBRATE', self.cmd_height_calibrate)
         gcode.register_command('TREED_Z_RECOVERY_TEST', self.cmd_test)
         gcode.register_command('TREED_EDDY_ACCEPTANCE_HOME', self.cmd_eddy_test)
         gcode.register_command('TREED_EDDY_ACCEPTANCE_MESH', self.cmd_mesh_test)
         gcode.register_command('_TREED_ACCEPTANCE_MESH_RUN', self.cmd_mesh_run)
         gcode.register_command('_TREED_ACCEPTANCE_STAGE', self.cmd_stage)
+        self.printer.register_event_handler('klippy:shutdown', self._abort_height_calibration)
 
     def _connect(self):
         self.toolhead = self.printer.lookup_object('toolhead')
@@ -88,6 +92,7 @@ class TreedZRecovery:
 
     def _motor_state(self, print_time, enabled):
         if not enabled:
+            self._abort_height_calibration()
             self.motor_epoch += 1
             self._invalidate_travel()
 
@@ -108,8 +113,68 @@ class TreedZRecovery:
         self._set_z_limit(self.config_z_max)
 
     def _command_error(self):
+        self._abort_height_calibration()
         if self.eddy_homing:
             self._invalidate_travel()
+
+    # Блок 1а: Бумажная проба ищет ноль независимо от координаты нижней опоры.
+    def cmd_height_calibrate(self, gcmd):
+        self._require_idle(gcmd)
+        self.toolhead.wait_moves()
+        self._require_idle(gcmd)
+        if ('xyz' != self.kin.get_status(self.printer.get_reactor().monotonic())['homed_axes']
+                or gcmd.get('MANUAL_METHOD', 'manual') != 'manual'):
+            raise gcmd.error('Eddy: нужны привязанные XYZ и ручная бумажная проба')
+        gcode = self.printer.lookup_object('gcode')
+        chip = gcmd.get('CHIP')
+        handlers = gcode.mux_commands['PROBE_EDDY_CURRENT_CALIBRATE'][1]
+        if chip not in handlers:
+            raise gcmd.error('Eddy: неизвестный CHIP')
+        calibration = handlers[chip].__self__
+        calibration.probe_speed = gcmd.get_float('PROBE_SPEED', 5., above=0.)
+        start_z = self.toolhead.get_position()[2]
+        if (not math.isfinite(start_z)
+                or not self.kin.rails[2].position_min <= start_z <= self.kin.rails[2].position_max):
+            raise gcmd.error('Eddy: недостоверная Z-позиция начала бумажной пробы')
+        self.height_z_min = self.kin.rails[2].position_min
+        # При поиске нуля Eddy рабочий минимум -5 мм временно не применяется.
+        self.kin.rails[2].position_min = -20.
+        self.kin.axes_min = self.toolhead.Coord(
+            [self.kin.axes_min.x, self.kin.axes_min.y, self.kin.rails[2].position_min])
+        self._set_z_limit(self.kin.rails[2].position_max)
+
+        def finish(result):
+            self.running = True
+            try:
+                calibration.post_manual_probe(result)
+            finally:
+                self.running = False
+                self._restore_height_limits()
+
+        try:
+            # Повторяет старт EddyCalibrationTool в закреплённом Klipper с cleanup callback.
+            self.height_probe = manual_probe.ManualProbeHelper(self.printer, gcmd, finish)
+        except Exception:
+            self._abort_height_calibration()
+            raise
+
+    def _restore_height_limits(self):
+        if self.height_z_min is None:
+            return
+        self.kin.rails[2].position_min = self.height_z_min
+        self.kin.axes_min = self.toolhead.Coord(
+            [self.kin.axes_min.x, self.kin.axes_min.y, self.height_z_min])
+        self.height_z_min = None
+        self.height_probe = None
+        # До нового homing координата основана на прежней, ещё неизвестной высоте сопла.
+        self._invalidate_travel()
+
+    def _abort_height_calibration(self):
+        try:
+            if self.height_probe is not None:
+                self.height_probe.finalize(False)
+        finally:
+            self._restore_height_limits()
 
     def get_status(self, eventtime):
         return copy.deepcopy(dict(last_run=self.last_run, last_eddy=self.last_eddy,

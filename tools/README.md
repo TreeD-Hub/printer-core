@@ -5,6 +5,7 @@
 ## Состав
 
 - `tools/tests/` — локальные контрактные проверки loader/steps.
+- `tools/release_version.py` — версия выпуска по названию слитого PR; запускается release workflow, закрепляет номер в draft. Правила: [workflow](../.github/workflows/README.md).
 - `tools/skills/` — локальные skills для Codex, используемые в этом репозитории.
 - `tools/collect_eddy_diagnostic.sh` — passive по умолчанию пакет CAN/MCU; `eddy-scan` требует отдельного разрешения движения.
 - `tools/treed_sgt_calibration.py` — изолированный алгоритм подбора SGT по повторяемости; не выполняет движения. Контракт: [sgt-calibration.md](../docs/sgt-calibration.md).
