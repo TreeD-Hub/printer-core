@@ -5,6 +5,8 @@
 
 ## Состав
 
+- `test_release_version.py` — префиксы `фикс`/`патч`/`релиз`, повышение версии, закрепление draft, повтор и отказ для старого checkout. Запуск `python -B tools/tests/test_release_version.py`; настоящий Git во временных каталогах, GitHub заменён, публикации и сети нет.
+
 - `test_treed_shell_install.py` — реальный Python-блок выбора UI release asset: повторы HTTP 503 и таймаутов, отказ после трёх попыток, отсутствие повторов постоянных ошибок и сохранение фильтра релизов. Запуск `python -B tools/tests/test_treed_shell_install.py`; сеть и ожидания заменены, provisioning не выполняется.
 
 - `test_light_control.py` — валидация API подсветки, отказ вне ready и единая очередь макросов/API. Для проверки настоящих классов закреплённого Klipper задать `TREED_LIGHT_KLIPPER_SOURCE` на каталог с его `output_pin.py`, `webhooks.py`, `gcode.py` и выполнить `python -B tools/tests/test_light_control.py`. MCU и реактор моделируются; это не аппаратная проверка M109/M190 или печати.

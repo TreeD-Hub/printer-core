@@ -20,6 +20,7 @@ package.__path__ = [str(ROOT / 'klipper-host')]
 sys.modules[package.__name__] = package
 homing = ModuleType(package.__name__ + '.homing')
 sys.modules[homing.__name__] = homing
+sys.modules[package.__name__ + '.manual_probe'] = ModuleType(package.__name__ + '.manual_probe')
 spec = importlib.util.spec_from_file_location(
     package.__name__ + '.treed_z_recovery', ROOT / 'klipper-host/treed_z_recovery.py')
 module = importlib.util.module_from_spec(spec)
@@ -50,7 +51,7 @@ class Config:
 
     def getsection(self, name):
         return Config(self.rig, **{
-            'stepper_z': dict(position_min=-5., position_max=203.,
+            'stepper_z': dict(position_min=-5., position_max=self.rig.config_z_max,
                               endstop_pin='probe:z_virtual_endstop'),
             'printer': dict(kinematics='corexy'),
         }[name])
@@ -75,6 +76,7 @@ class Fields:
 
 class Rig:
     def __init__(self, **config):
+        self.config_z_max = config.pop('position_max', 203.)
         self.pos = [17., 29., 0., 4.]
         self.physical_z = 0.
         self.mcu_offset_steps = 1234567
@@ -105,11 +107,12 @@ class Rig:
                          mcu_tmc=NS(set_register=self.write))
         self.stepper = NS(get_name=lambda: 'stepper_z', get_step_dist=lambda: .001,
                           get_mcu_position=lambda: round(self.physical_z / .001) + self.mcu_offset_steps)
-        self.rail = NS(position_min=-5., position_max=203., get_steppers=lambda: [self.stepper])
+        self.rail = NS(position_min=-5., position_max=self.config_z_max, get_steppers=lambda: [self.stepper])
         self.rail.get_range = lambda: (self.rail.position_min, self.rail.position_max)
         self.kin = NS(rails=[None, None, self.rail],
                       limits=[(0., 245.), (0., 245.), (1., -1.)],
-                      axes_max=NS(x=245., y=245., z=203.),
+                      axes_min=NS(x=0., y=0., z=-5.),
+                      axes_max=NS(x=245., y=245., z=self.config_z_max),
                       max_z_velocity=25., get_status=lambda _: dict(homed_axes=self.homed),
                       clear_homing_state=self.clear, get_position=lambda: list(self.kin_pos))
         self.toolhead = NS(max_velocity=300., max_accel=3000., square_corner_velocity=5.,
@@ -616,7 +619,7 @@ class RecoveryTests(unittest.TestCase):
 
     def test_config_validation(self):
         for params in (dict(speed=float('nan')), dict(current=float('inf')),
-                        dict(max_seek=211), dict(bottom_position=204),
+                        dict(max_seek=251), dict(bottom_position=204),
                         dict(bottom_clearance_mm=208), dict(bottom_clearance_mm=210),
                        dict(sgt=64), dict(stallguard_pause=1), dict(current=4)):
             with self.subTest(params=params), self.assertRaises(ValueError):
@@ -636,7 +639,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn('if target_z > current_z', hop)
         steppers = (profile / 'steppers.cfg').read_text(encoding='utf-8')
         self.assertIn('endstop_pin: probe:z_virtual_endstop', steppers)
-        self.assertIn('position_max: 203', steppers)
+        self.assertIn('position_max: 250', steppers)
         z_axis = steppers.split('[stepper_z]')[1].split('[tmc5160 stepper_z]')[0]
         z_driver = steppers.split('[tmc5160 stepper_z]')[1]
         self.assertIn('homing_speed: 20', z_axis)
@@ -650,15 +653,17 @@ class RecoveryTests(unittest.TestCase):
         self.assertIn('speed: 60', recovery)
         self.assertIn('accel: 1000', recovery)
         self.assertIn('bottom_position: 203', recovery)
-        self.assertIn('max_seek: 210', recovery)
+        self.assertIn('max_seek: 250', recovery)
         self.assertNotIn('verify_backoff_mm', recovery)
         self.assertNotIn('tolerance:', recovery)
         printer = (profile / 'printer_base.cfg').read_text(encoding='utf-8')
         max_z_velocity = float(printer.split('max_z_velocity:')[1].split()[0])
         self.assertEqual(max_z_velocity, 60.)
         self.assertEqual(float(printer.split('max_z_accel:')[1].split()[0]), 1000.)
-        self.assertIn('variable_axis_z_max: 203.0', (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8'))
+        self.assertIn('variable_axis_z_max: 250.0', (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8'))
         eddy = (profile / 'probe_eddy_duo.cfg').read_text(encoding='utf-8')
+        primary = eddy.split('[gcode_macro PROBE_EDDY_CURRENT_CALIBRATE_AUTO]')[1].split('[gcode_macro')[0]
+        self.assertIn('_TREED_EDDY_HEIGHT_CALIBRATE {rawparams}', primary)
         home = eddy.split('[gcode_macro _TREED_EDDY_HOME_Z]')[1].split('[gcode_macro')[0]
         correction = eddy.split('[gcode_macro SET_Z_FROM_PROBE]')[1].split('[gcode_macro')[0]
         self.assertLess(home.index('_TREED_Z_TRAVEL_BEGIN'), home.index('G28.1 Z'))
@@ -764,6 +769,190 @@ class RecoveryTests(unittest.TestCase):
                     self.assertAlmostEqual(rig.pos[2], 202.525)
             self.assertEqual([call.args[0] for call in rig.printer.send_event.call_args_list],
                              ['homing:homing_move_begin', 'homing:homing_move_end'])
+
+
+class HeightCalibrationTests(unittest.TestCase):
+    # Блок 4: Жизненный цикл временных границ; движения MCU остаются моделью.
+    def height_rig(self, native=None):
+        rig = Rig(position_max=250, bottom_position=203, max_seek=250)
+        rig.set_position([17., 29., 20., 4.], homing_axes='xyz')
+        rig.extra._set_z_limit(198.)
+        rig.objects['gcode_macro _TREED_OPERATION_STATE'].variables['phase'] = 'idle'
+        rig.extra.z_travel = dict(state='pending_eddy')
+        handlers = {}
+
+        def register(name, callback, **kwargs):
+            if callback is None:
+                return handlers.pop(name, None)
+            if name in handlers:
+                raise ValueError('command already registered')
+            handlers[name] = callback
+
+        manual = NS(status=dict(is_active=False))
+        manual.get_status = lambda _: manual.status
+        manual.reset_status = lambda: manual.status.update(is_active=False)
+        rig.objects['manual_probe'] = manual
+        rig.objects['gcode'] = NS(gcode_handlers=handlers, register_command=register,
+                                  respond_info=Mock(), error=ValueError)
+        rig.callback = Mock()
+
+        class Probe:
+            def __init__(self, printer, command, callback):
+                self.finalize_callback = callback
+                manual.status['is_active'] = True
+                register('TESTZ', self.testz)
+
+            def testz(self, command):
+                pass
+
+            def finalize(self, success):
+                manual.reset_status()
+                register('TESTZ', None)
+                self.finalize_callback(NS(bed_z=rig.pos[2]) if success else None)
+
+        module.manual_probe = NS(ManualProbeHelper=Probe) if native is None else native
+        calibration = NS(post_manual_probe=rig.callback)
+        rig.objects['gcode'].mux_commands = {'PROBE_EDDY_CURRENT_CALIBRATE': (
+            'CHIP', {'btt_eddy': NS(__self__=calibration)})}
+        rig.stepper.get_commanded_position = lambda: rig.pos[2]
+        rig.kin.get_steppers = lambda: [rig.stepper]
+        rig.kin.calc_position = lambda positions: rig.pos[:2] + [positions['stepper_z']]
+        rig.toolhead.flush_step_generation = lambda: None
+        rig.toolhead.manual_move = lambda pos, speed: rig.move(
+            [rig.pos[i] if value is None else value for i, value in enumerate(pos)] + [rig.pos[3]], speed)
+        rig.command.get = lambda name, default=None: 'btt_eddy' if name == 'CHIP' else default
+        rig.command.get_float = lambda name, default=None, **kwargs: default
+        return rig
+
+    def assert_closed(self, rig):
+        self.assertEqual(rig.rail.position_min, -5.)
+        self.assertEqual(rig.kin.axes_min.z, -5.)
+        self.assertEqual(rig.homed, 'xy')
+        self.assertEqual(rig.extra.z_travel, {})
+        self.assertIsNone(rig.extra.height_probe)
+        self.assertFalse(rig.objects['manual_probe'].get_status(0)['is_active'])
+
+    def test_search_accepts_250_mm_without_extending_working_maximum(self):
+        rig = Rig(position_max=250, bottom_position=203, max_seek=250)
+        rig.hits = [(249.96, .025)]
+        rig.run()
+        self.assertEqual(rig.seeks, [(-47., 203., 5.)])
+        self.assertEqual(rig.rail.position_max, 198.)
+
+    def test_height_limits_restore_on_every_exit_and_allow_retry(self):
+        for exit_kind in ('accept', 'abort', 'error', 'motor_off', 'shutdown', 'scan_error'):
+            with self.subTest(exit_kind=exit_kind):
+                rig = self.height_rig()
+                rig.extra.cmd_height_calibrate(rig.command)
+                self.assertEqual(rig.rail.get_range(), (-20., 198.))
+                self.assertEqual(rig.kin.limits[2], (-20., 198.))
+                rig.move([17., 29., -6., 4.], 5.)
+                if exit_kind == 'accept':
+                    rig.callback.side_effect = lambda result: rig.move([17., 29., result.bed_z + .05, 4.], 5.)
+                    rig.extra.height_probe.finalize(True)
+                elif exit_kind == 'scan_error':
+                    rig.callback.side_effect = ValueError('scan failed')
+                    with self.assertRaisesRegex(ValueError, 'scan failed'):
+                        rig.extra.height_probe.finalize(True)
+                elif exit_kind == 'abort':
+                    rig.extra.height_probe.finalize(False)
+                elif exit_kind == 'error':
+                    rig.extra._command_error()
+                elif exit_kind == 'motor_off':
+                    rig.extra._motor_state(0., False)
+                else:
+                    rig.extra._abort_height_calibration()
+                self.assert_closed(rig)
+                with self.assertRaisesRegex(ValueError, 'out of range'):
+                    rig.move([17., 29., -6., 4.], 5.)
+                rig.callback.side_effect = None
+                rig.set_position([17., 29., 20., 4.], homing_axes='xyz')
+                rig.extra.cmd_height_calibrate(rig.command)
+                rig.extra.height_probe.finalize(False)
+                self.assert_closed(rig)
+
+    def test_height_minimum_is_minus_20_independent_of_bottom_sensor(self):
+        for start_z in (20., 50.):
+            rig = self.height_rig()
+            rig.set_position([17., 29., start_z, 4.], homing_axes='xyz')
+            rig.extra.bottom, rig.extra.max_seek = 180., 210.
+            rig.extra.cmd_height_calibrate(rig.command)
+            self.assertEqual(rig.rail.position_min, -20.)
+            rig.move([17., 29., -6., 4.], 5.)
+            rig.extra.height_probe.finalize(False)
+            self.assert_closed(rig)
+
+    def test_measured_zmax_can_exceed_old_203_mm_but_keeps_bottom_clearance(self):
+        for contact, expected in ((230., 225.), (249., 244.)):
+            rig = Rig(position_max=250, bottom_position=203, max_seek=250)
+            rig.hits = [(contact, .025)]
+            rig.run()
+            rig.finish_eddy()
+            self.assertAlmostEqual(rig.extra.z_travel['contact_z'], contact)
+            self.assertAlmostEqual(rig.rail.position_max, expected)
+            rig.move([17., 29., expected, 4.], 5.)
+            with self.assertRaisesRegex(ValueError, 'out of range'):
+                rig.move([17., 29., expected + .01, 4.], 5.)
+
+    def test_height_rejects_busy_or_unknown_z_before_changing_limits(self):
+        for state in ('printing', 'paused', 'unknown_z', 'manual', 'auto_method', 'unknown_chip', 'invalid_position'):
+            with self.subTest(state=state):
+                rig = self.height_rig()
+                if state == 'printing':
+                    rig.stats = 'printing'
+                elif state == 'paused':
+                    rig.paused = True
+                elif state == 'unknown_z':
+                    rig.clear('z')
+                elif state == 'manual':
+                    rig.objects['manual_probe'].status['is_active'] = True
+                elif state == 'unknown_chip':
+                    rig.command.get = lambda name, default=None: 'missing' if name == 'CHIP' else default
+                elif state == 'invalid_position':
+                    rig.pos[2] = float('nan')
+                else:
+                    rig.command.get = lambda name, default=None: 'tap'
+                with self.assertRaises(ValueError):
+                    rig.extra.cmd_height_calibrate(rig.command)
+                self.assertEqual(rig.rail.position_min, -5.)
+                rig.callback.assert_not_called()
+
+    def test_height_start_failure_restores_limits(self):
+        rig = self.height_rig()
+        with patch.object(module.manual_probe, 'ManualProbeHelper', side_effect=ValueError('probe start failed')):
+            with self.assertRaisesRegex(ValueError, 'probe start failed'):
+                rig.extra.cmd_height_calibrate(rig.command)
+        self.assert_closed(rig)
+
+    @unittest.skipUnless(os.environ.get('Z_RECOVERY_KLIPPER_SOURCE'), 'upstream source not supplied')
+    def test_upstream_testz_below_working_minimum_and_cleanup(self):
+        source = Path(os.environ['Z_RECOVERY_KLIPPER_SOURCE']) / 'extras_manual_probe.py'
+        native_spec = importlib.util.spec_from_file_location('_z_real_manual_probe', source)
+        native = importlib.util.module_from_spec(native_spec)
+        native_spec.loader.exec_module(native)
+        for end in ('ACCEPT', 'ABORT', 'range_error', 'command_error'):
+            with self.subTest(end=end):
+                rig = self.height_rig(native)
+                rig.extra.cmd_height_calibrate(rig.command)
+                testz = NS(get=lambda name: '-26', get_float=lambda name: -26.)
+                handlers = rig.objects['gcode'].gcode_handlers
+                handlers['TESTZ'](testz)
+                self.assertAlmostEqual(rig.pos[2], -6.)
+                if end == 'range_error':
+                    testz.get_float = lambda name: -14.
+                    handlers['TESTZ'](testz)
+                    self.assertAlmostEqual(rig.pos[2], -20.)
+                    testz.get_float = lambda name: -.01
+                    with self.assertRaisesRegex(ValueError, 'out of range'):
+                        handlers['TESTZ'](testz)
+                elif end == 'command_error':
+                    rig.extra._command_error()
+                else:
+                    handlers[end](rig.command)
+                self.assert_closed(rig)
+                self.assertNotIn('TESTZ', handlers)
+                if end == 'ACCEPT':
+                    self.assertEqual(rig.callback.call_args.args[0].bed_z, -6.)
 
 
 if __name__ == '__main__':

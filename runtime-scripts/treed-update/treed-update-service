@@ -461,7 +461,10 @@ def submit(request_id: str, target_id: str, target_tag: str, ui_target_tag: str 
             replacement = replacement_anchor is not None
             journal = core_journal(state)
             fresh_after_download_error = (
-                state.get("resultCode") == "core_download_failed" and not existing_corrective
+                (state.get("resultCode") == "core_download_failed"
+                 or state.get("resultCode") == "core_validation_failed"
+                 and state.get("lastFailurePhase") in {"queued", "validating", "downloading"})
+                and not existing_corrective
                 and not journal.exists()
                 and not journal.is_symlink() and not journal.parent.is_symlink()
                 and TARGET_RE["printer-core"].fullmatch(str(state.get("targetTag", "")))

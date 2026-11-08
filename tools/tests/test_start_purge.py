@@ -835,7 +835,8 @@ class PurgeTests(unittest.TestCase):
 
     def test_invalid_settings_fail_before_motion_or_pa_changes(self):
         for key, value in [("heat_wait_height", 0), ("heat_wait_height", 0.5),
-                           ("purge_height", -1), ("park_height", 0.4), ("park_height", 204),
+                           ("purge_height", -1), ("park_height", 0.4),
+                           ("park_height", CFG.getfloat("stepper_z", "position_max") + 1),
                            ("prime_amount", 0), ("prime_amount", math.nan), ("prime_amount", 300),
                            ("purge_speed", 0), ("purge_speed", math.nan), ("purge_speed", math.inf),
                            ("x_inset", -1), ("x_inset", 0), ("x_inset", 125),

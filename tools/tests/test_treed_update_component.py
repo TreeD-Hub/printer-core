@@ -38,6 +38,16 @@ class Request:
 
 
 class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_root_rejection_preserves_its_message_instead_of_a_generic_503(self):
+        process = NS(returncode=1, communicate=AsyncMock(return_value=(json.dumps({
+            "accepted": False, "status": "error", "phase": "error",
+            "message": "Сначала восстановите сохранённый выпуск core"}).encode(), b"")))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)):
+            result = await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.49.1"))
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["message"], "Сначала восстановите сохранённый выпуск core")
+
     async def test_unknown_state_is_delegated_only_for_update_submission(self):
         self.component.klippy_apis.query_objects = AsyncMock(return_value={})
         await self.component._ensure_apply_allowed(allow_unknown=True)
@@ -429,6 +439,16 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
             "currentVersion": "ui-main-122-1", "latestTag": "ui-main-123-1"}]
         result = await self.component._handle_status(object())
         self.assertEqual(result["releaseResults"][0]["currentVersion"], "ui-main-123-1")
+        self.assertEqual(result["releaseResults"][0]["status"], "latest")
+        self.assertFalse(result["releaseResults"][0]["canApply"])
+
+    async def test_cached_core_release_is_not_offered_after_a_newer_version_is_installed(self):
+        self.component.core_manifest_path.write_text(json.dumps({
+            "kind": "treed-core-runtime", "schema": 1, "version": "0.45.1"}), encoding="utf-8")
+        self.component.last_release_results = [{"id": "printer-core", "status": "available",
+            "currentVersion": "0.42.1", "latestTag": "v0.44.1"}]
+        result = await self.component._handle_status(object())
+        self.assertEqual(result["releaseResults"][0]["currentVersion"], "0.45.1")
         self.assertEqual(result["releaseResults"][0]["status"], "latest")
         self.assertFalse(result["releaseResults"][0]["canApply"])
 

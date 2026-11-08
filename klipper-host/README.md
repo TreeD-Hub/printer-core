@@ -120,6 +120,16 @@ homing X/Y и штатный `G28.1 Z` к Eddy на 20 мм/с. Точный `PR
 Для рабочего Z-лимита используются `rail.position_max`, `CoreXY.limits` и
 `CoreXY.axes_max`; `MCU_stepper.get_mcu_position` должен переживать смену координат.
 
+Первичная калибровка из `PROBE_EDDY_CURRENT_CALIBRATE_AUTO` вызывает
+`_TREED_EDDY_HEIGHT_CALIBRATE`. На время бумажной пробы и измерения кривой extra
+заменяет нижний предел на `-20` мм независимо от координаты нижнего упора и
+Zmax. Верхний предел Z равен `250` мм; после Eddy рабочий максимум ограничен
+измеренным расстоянием до DIAG с запасом `bottom_clearance_mm`.
+Завершение, отмена, ошибка, отключение Z и shutdown возвращают прежний минимум
+и сбрасывают Z-привязку без движения. При обновлении Klipper сверять
+`ManualProbeHelper`, `EddyCalibrationTool.post_manual_probe` и хранение
+обработчиков по `CHIP` в `GCodeDispatch.mux_commands` с закреплённой версией.
+
 Этот же extra предоставляет диагностические команды и telemetry Z/Eddy.
 Диагностический mesh временно подавляет `bed_mesh.save_profile`, восстанавливает
 callback и проверяет неизменность pending autosave. Сверять также BedMesh,

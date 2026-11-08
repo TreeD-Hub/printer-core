@@ -1337,14 +1337,7 @@ def prepare(manifest, payload, env, journal, reset_configs=None, replacement=Non
     for index, key in enumerate(sorted(keys)):
         path = destination(key, locations)
         old, info = read_file(path)
-        if key in selected and (old is None or sha(old) != selected[key]):
-            raise ValueError(f"Файл изменился после выбора сброса: {key}; повторите проверку")
-        known = [files[key]["runtimeSha256"] for files in (confirmed_files, old_files) if key in files]
-        if old is not None and key not in selected and not any(
-                matches_managed_file(key, old, expected) for expected in known):
-            if key not in old_files and key not in confirmed_files:
-                raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
-            raise ValueError(f"Локально изменён управляемый файл: {key}; выберите сброс при обновлении")
+        # Выпуск заменяет известные управляемые файлы; текущие байты сохраняются в journal.
         if old is not None and key not in old_files and key not in confirmed_files:
             raise ValueError(f"Новое назначение занято неизвестным файлом: {key}")
         backup = str(index)
@@ -1531,7 +1524,8 @@ def validate_forward_only(journal, transaction, env, check_current=True):
                 hashes = [files[key]["runtimeSha256"] for files in
                           (confirmed_files, base_files, target_files) if key in files]
                 if (not any(matches_managed_file(key, actual, digest) for digest in hashes)
-                        and sha(actual) != selected.get(key)):
+                        and sha(actual) != selected.get(key)
+                        and not (row["existed"] and actual == (journal.parent / row["backup"]).read_bytes())):
                     raise ValueError(f"Forward-only текущий файл изменён после подготовки: {key}")
     return expected, confirmed, base, entry_map
 
@@ -1746,6 +1740,17 @@ def owner(env):
             grp.getgrnam(env["TREED_UPDATE_PI_GROUP"]).gr_gid)
 
 
+def current_managed_files(env, *manifests):
+    # Разрешение замены относится только к уже принадлежащим TreeD путям, не к upstream-коду.
+    locations = roots(env)
+    files = []
+    for key in sorted({row["path"] for manifest in manifests for row in manifest["files"]}):
+        data, _info = read_file(destination(key, locations))
+        if data is not None:
+            files.append({"path": key, "runtimeSha256": content_hash(key, data)})
+    return {"files": files}
+
+
 def apply(tag, operation, env, reset_configs=None, replacement=None):
     if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None:
         raise ValueError("Недопустимый тег core")
@@ -1768,15 +1773,17 @@ def apply(tag, operation, env, reset_configs=None, replacement=None):
             download(tag, archive, env)
         manifest, payload = load_package(archive, tag)
         previous = read_json(manifest_path(env))
+        managed = current_managed_files(env, previous, *(
+            [replacement["installationBase"]] if replacement is not None else []))
         provision = "provisioning" in manifest or replacement is not None
         if provision:
             if replacement is not None:
                 if replacement["confirmedBase"] != previous:
                     raise ValueError("Replacement confirmed baseline изменился перед apply")
             if replacement is None:
-                check_upstream_clean(roots(env), previous)
+                check_upstream_clean(roots(env), managed)
             else:
-                check_upstream_clean(roots(env), previous, reset_configs,
+                check_upstream_clean(roots(env), managed, reset_configs,
                                      replacement["installationBase"])
             provision = replacement is not None or needs_provisioning(manifest, previous, env)
             if provision:
@@ -1786,9 +1793,9 @@ def apply(tag, operation, env, reset_configs=None, replacement=None):
                 download(tag, source_archive, env, SOURCE_ASSET)
                 extract_source(source_archive, journal.parent / "source", manifest, payload)
             else:
-                check_compatibility(manifest, env, previous)
+                check_compatibility(manifest, env, managed)
         else:
-            check_compatibility(manifest, env, previous)
+            check_compatibility(manifest, env, managed)
         uid, gid = owner(env)
         if not provision and not vision_units_installed():
             raise ValueError("Локальный vision runtime ещё не установлен; сначала запустите loader")
