@@ -450,7 +450,7 @@ class PurgeTests(unittest.TestCase):
         self.assertEqual([start.index(phase) for phase in phases], sorted(start.index(phase) for phase in phases))
 
     def test_start_normalizes_hotend_target_before_temperature_wait(self):
-        for requested, expected in [(250, 250), (280, 280), (390, 280)]:
+        for requested, expected in [(250, 250), (300, 300), (390, 300)]:
             with self.subTest(requested=requested):
                 h = Harness()
                 h.run("_TREED_START_PREP_STATE", params={

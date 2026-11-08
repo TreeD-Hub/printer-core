@@ -24,7 +24,7 @@ spec.loader.exec_module(module)
 
 class Heater:
     min_temp = 0.
-    max_temp = 300.
+    max_temp = 310.
     target_temp = 0.
 
     def set_temp(self, target):
@@ -52,18 +52,18 @@ class HotendLimitTests(unittest.TestCase):
             lookup_object=lambda name: self.objects[name],
             load_object=Mock(), register_event_handler=Mock(), command_error=ValueError)
         self.config = SimpleNamespace(get_printer=lambda: self.printer,
-                                      getfloat=lambda *args, **kwargs: 280., error=ValueError)
+                                      getfloat=lambda *args, **kwargs: 300., error=ValueError)
         self.limit = module.load_config(self.config)
         self.limit._connect()
 
     # Блок 2: Нормализация, выключение и сохранение штатной валидации.
     def test_targets_and_internal_updates_are_bounded(self):
         for setter in (self.heater.set_temp, self.heater.alter_target):
-            for requested, expected in ((250, 250), (280, 280), (280.1, 280), (390, 280), (0, 0)):
+            for requested, expected in ((250, 250), (300, 300), (300.1, 300), (390, 300), (0, 0)):
                 with self.subTest(setter=setter.__name__, requested=requested):
                     setter(requested)
                     self.assertEqual(self.heater.target_temp, expected)
-        self.assertEqual(self.heater.max_temp, 300)
+        self.assertEqual(self.heater.max_temp, 310)
         self.gcode.respond_info.assert_called()
 
     def test_invalid_target_leaves_existing_target_unchanged(self):
@@ -74,7 +74,7 @@ class HotendLimitTests(unittest.TestCase):
             self.assertEqual(self.heater.target_temp, 250)
 
     def test_pid_target_is_normalized_before_stock_handler(self):
-        for heater, expected in (('extruder', '280.0'), ('heater_bed', '390')):
+        for heater, expected in (('extruder', '300.0'), ('heater_bed', '390')):
             params = {'HEATER': heater, 'TARGET': '390', 'WRITE_FILE': '1'}
             command = SimpleNamespace(get=lambda name: params[name],
                                       get_float=lambda name: float(params[name]),
@@ -124,7 +124,7 @@ class HotendLimitTests(unittest.TestCase):
         self.pid.assert_not_called()
 
     def test_invalid_configuration_fails_before_hooks(self):
-        for target in (301., float('nan'), float('inf')):
+        for target in (311., float('nan'), float('inf')):
             self.limit.max_target = target
             self.gcode.register_command.reset_mock()
             with self.assertRaises(ValueError):
@@ -136,10 +136,10 @@ class HotendLimitTests(unittest.TestCase):
         profile = ROOT / 'klipper/profiles/treed_v2_corexy_v1'
         ebb = (profile / 'ebb42_can.cfg').read_text(encoding='utf-8')
         contract = (profile / 'macros_ui_contract.cfg').read_text(encoding='utf-8')
-        self.assertRegex(ebb, r'(?m)^sensor_type: Generic 3950$')
-        self.assertRegex(ebb, r'(?m)^max_temp: 300$')
-        self.assertRegex(ebb, r'(?m)^\[treed_hotend_limit\]\nmax_target: 280$')
-        self.assertRegex(contract, r'(?m)^variable_nozzle_max_c: 280\.0$')
+        self.assertRegex(ebb, r'(?m)^sensor_type: ATC Semitec 104NT-4-R025H42G$')
+        self.assertRegex(ebb, r'(?m)^max_temp: 310$')
+        self.assertRegex(ebb, r'(?m)^\[treed_hotend_limit\]\nmax_target: 300$')
+        self.assertRegex(contract, r'(?m)^variable_nozzle_max_c: 300\.0$')
         loader = (ROOT / 'loader/steps/runtime-bootstrap.sh').read_text(encoding='utf-8')
         self.assertEqual(loader.count("'/klippy/extras/treed_hotend_limit.py'"), 2)
         self.assertEqual(loader.count("'/klippy/extras/__pycache__/treed_hotend_limit.*.pyc'"), 2)
@@ -167,7 +167,7 @@ class StockKlipperTests(HotendLimitTests):
         stock = self.stock_class('heaters.py', 'Heater')
         self.heater = stock.__new__(stock)
         self.heater.printer = self.printer
-        self.heater.min_temp, self.heater.max_temp = 0., 300.
+        self.heater.min_temp, self.heater.max_temp = 0., 310.
         self.heater.lock = threading.Lock()
         self.heater.target_temp = 0.
         heaters_class = self.stock_class('heaters.py', 'PrinterHeaters')
@@ -190,7 +190,7 @@ class StockKlipperTests(HotendLimitTests):
                         self.heater.cmd_SET_HEATER_TEMPERATURE):
             with self.subTest(handler=handler.__name__):
                 handler(command)
-                self.assertEqual(self.heater.target_temp, 280)
+                self.assertEqual(self.heater.target_temp, 300)
         self.heaters._wait_for_temperature.assert_called_once_with(self.heater)
         self.heaters.turn_off_all_heaters()
         self.assertEqual(self.heater.target_temp, 0)
@@ -212,7 +212,7 @@ class StockKlipperTests(HotendLimitTests):
             register_event_handler=lambda event, callback: events.setdefault(event, []).append(callback),
             send_event=Mock(), invoke_shutdown=Mock())
         config = SimpleNamespace(get_printer=lambda: printer,
-                                 getfloat=lambda *args, **kwargs: 280., error=ValueError)
+                                 getfloat=lambda *args, **kwargs: 300., error=ValueError)
         gcode = objects['gcode'] = dispatch_class(printer)
         heaters = objects['heaters'] = self.heaters
         heaters.printer = printer
@@ -221,7 +221,7 @@ class StockKlipperTests(HotendLimitTests):
         for name in heaters.available_heaters:
             heater = type(self.heater).__new__(type(self.heater))
             heater.printer, heater.name = printer, name
-            heater.min_temp, heater.max_temp = 0., 300.
+            heater.min_temp, heater.max_temp = 0., 310.
             heater.lock, heater.control = threading.Lock(), object()
             heater.target_temp = 0.
             heaters.heaters[name] = heater
@@ -240,7 +240,7 @@ class StockKlipperTests(HotendLimitTests):
         for callback in events['klippy:connect']:
             callback()
         gcode._handle_ready()
-        for name, target, expected in (('extruder', 390, 280), ('extruder', 250, 250),
+        for name, target, expected in (('extruder', 390, 300), ('extruder', 250, 250),
                                         ('heater_bed', 95, 95)):
             tune.reset_mock()
             heaters._wait_for_temperature.reset_mock()
