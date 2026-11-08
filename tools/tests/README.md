@@ -5,6 +5,8 @@
 
 ## Состав
 
+- `test_treed_shell_install.py` — реальный Python-блок выбора UI release asset: повторы HTTP 503 и таймаутов, отказ после трёх попыток, отсутствие повторов постоянных ошибок и сохранение фильтра релизов. Запуск `python -B tools/tests/test_treed_shell_install.py`; сеть и ожидания заменены, provisioning не выполняется.
+
 - `test_light_control.py` — валидация API подсветки, отказ вне ready и единая очередь макросов/API. Для проверки настоящих классов закреплённого Klipper задать `TREED_LIGHT_KLIPPER_SOURCE` на каталог с его `output_pin.py`, `webhooks.py`, `gcode.py` и выполнить `python -B tools/tests/test_light_control.py`. MCU и реактор моделируются; это не аппаратная проверка M109/M190 или печати.
 
 - `test_treed_autoprinter_component.py` — жизненный цикл выключенного компонента, локальный endpoint управления, закрытый credential, wire-синхронизация, default-off проверки стола, безопасная диагностика sync/журнала и независимый executor poll во время sync backoff с ожиданием задач при shutdown. Запуск `python -B tools/tests/test_treed_autoprinter_component.py`; без сети, Moonraker runtime и устройства.

@@ -260,6 +260,7 @@ treed-ui status
 - `treed-shell-install.sh`
   - устанавливает X11-пакеты, нужные TreeD Shell, и настраивает два параметра Xwrapper для systemd-сервиса без консольной TTY;
   - release asset берется из `${TREED_SHELL_UI_ARCHIVE_URL}` или из GitHub Releases API `${TREED_SHELL_RELEASE_API_URL}`;
+  - запрос API повторяется при HTTP 503 и таймаутах: до трёх попыток с паузой 2 секунды; остальные ошибки и исчерпание попыток останавливают шаг;
   - распакованный UI находится в `${TREED_SHELL_WEB_DIR:-${TREED_SHELL_RUNTIME_DIR}/ui}`;
   - kiosk launcher находится в `${TREED_SHELL_RUNTIME_DIR:-${PI_HOME}/treed/treed-shell-runtime}/start-treed-shell-kiosk.sh`;
   - kiosk launcher best-effort задает blank cursor через `xsetroot`, запускает `unclutter`, если пакет доступен, и читает runtime override из `/etc/default/treed-shell`;
