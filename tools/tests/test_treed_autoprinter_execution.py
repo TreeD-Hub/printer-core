@@ -156,6 +156,31 @@ class AutoPrinterExecutionTest(unittest.IsolatedAsyncioTestCase):
         await executor.local_action({"type": "resume_queue"})
         return executor, device, checker
 
+    async def test_restart_without_pending_runs_clears_false_boot_recovery(self):
+        for paired in (False, True):
+            with self.subTest(paired=paired):
+                if paired:
+                    await asyncio.to_thread(self.store.update_binding, 1, 1, "paired", 1)
+                first = AutoPrinterExecutor(self.store, _Device(), BOOT_1, enabled=False)
+                await first.initialize()
+                await asyncio.to_thread(self.store.execution_set_meta, "boot_recovery_required", "1")
+                restarted = AutoPrinterExecutor(self.store, _Device(), BOOT_2, enabled=False)
+                await restarted.initialize()
+                self.assertFalse((await restarted.status())["recovery_required"])
+                self.assertTrue((await restarted.status())["local_pause"])
+
+    async def test_restart_requires_recovery_only_for_unfinished_queue(self):
+        await self.seed_queue()
+        first = AutoPrinterExecutor(self.store, _Device(), BOOT_1, enabled=False)
+        await first.initialize()
+        restarted = AutoPrinterExecutor(self.store, _Device(), BOOT_2, enabled=False)
+        await restarted.initialize()
+        self.assertTrue((await restarted.status())["recovery_required"])
+        self.store._conn.execute("UPDATE execution_runs SET state='completed'")
+        completed = AutoPrinterExecutor(self.store, _Device(), BOOT_1, enabled=False)
+        await completed.initialize()
+        self.assertFalse((await completed.status())["recovery_required"])
+
     async def test_restart_drains_immutable_prior_boot_events(self):
         await asyncio.to_thread(self.store.execution_set_boot, BOOT_1)
         event = await asyncio.to_thread(

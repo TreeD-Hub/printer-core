@@ -924,10 +924,18 @@ class AutoPrinterStore:
         with self._transaction():
             old = self._get("execution_boot_id") if self._conn.execute("SELECT 1 FROM meta WHERE key='execution_boot_id'").fetchone() else None
             if old and old != boot_id:
-                self._conn.execute("UPDATE execution_runs SET state='uncertain' WHERE start_intent=1 AND state NOT IN ('completed','failed','cancelled')")
+                interrupted = self._conn.execute("UPDATE execution_runs SET state='uncertain' WHERE start_intent=1 AND state NOT IN ('completed','failed','cancelled')").rowcount
+                pending = self._conn.execute(
+                    "SELECT 1 FROM runs r LEFT JOIN execution_runs e "
+                    "ON e.binding_epoch=r.binding_epoch AND e.run_id=r.run_id "
+                    "WHERE r.binding_epoch=? AND COALESCE(e.state,'queued') "
+                    "NOT IN ('completed','failed','cancelled') LIMIT 1",
+                    (int(self._get("binding_epoch")),),
+                ).fetchone()
                 self._set("local_pause", 1)
                 self._set("bed_epoch", int(self._get("bed_epoch")) + 1)
-                self._set("boot_recovery_required", "1")
+                # Пустая или завершённая очередь не требует восстановления после перезапуска.
+                self._set("boot_recovery_required", "1" if interrupted or pending else "0")
                 self._set("offline_recovery_boot", "")
             events = [self._event_json(r) for r in self._conn.execute("SELECT event_id,boot_id,event_seq,control_epoch,event_type,occurred_at,run_id,payload FROM execution_events WHERE acknowledged=0 AND boot_id=? ORDER BY event_seq", (old,)).fetchall()] if old else []
             receipts = self._conn.execute("SELECT COUNT(*) FROM execution_receipts WHERE boot_id=?", (old,)).fetchone()[0] if old else 0
