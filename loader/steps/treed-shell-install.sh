@@ -217,6 +217,8 @@ resolve_ui_archive_url() {
   python3 - "${SHELL_RELEASE_API_URL}" "${SHELL_RELEASE_TAG_PREFIX}" "${SHELL_UI_ASSET_NAME}" <<'PY'
 import json
 import sys
+import time
+import urllib.error
 import urllib.request
 
 api_url, tag_prefix, asset_name = sys.argv[1:4]
@@ -228,8 +230,20 @@ request = urllib.request.Request(
     },
 )
 
-with urllib.request.urlopen(request, timeout=30) as response:
-    releases = json.load(response)
+for attempt in range(1, 4):
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            releases = json.load(response)
+        break
+    except (urllib.error.URLError, TimeoutError) as error:
+        retryable = (isinstance(error, urllib.error.HTTPError) and error.code == 503
+                     or isinstance(error, TimeoutError)
+                     or isinstance(error.reason, TimeoutError))
+        if not retryable or attempt == 3:
+            raise
+        # stdout содержит только URL архива для вызывающего shell-кода.
+        print(f"[WARN] GitHub API: {error}; попытка {attempt}/3, повтор через 2 с", file=sys.stderr)
+        time.sleep(2)
 
 for release in releases:
     if release.get("draft") or release.get("prerelease"):
