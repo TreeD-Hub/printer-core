@@ -335,7 +335,10 @@ class TreeDUpdate:
             LOGGER.warning("treed_update: submit response timed out; operation remains queryable")
             raise self.server.error("Проверяем состояние операции обновления.", 504) from error
         response = _read_json_payload(stdout)
-        if process.returncode not in (0, 4) or response is None:
+        declared_rejection = (process.returncode == 1 and response is not None
+                              and response.get("accepted") is False and response.get("status") == "error"
+                              and isinstance(response.get("message"), str))
+        if (process.returncode not in (0, 4) and not declared_rejection) or response is None:
             LOGGER.error("treed_update: submit failed: %s", stderr.decode("utf-8", "replace")[-1000:])
             raise self.server.error("Не удалось передать обновление службе TreeD.", 503)
 

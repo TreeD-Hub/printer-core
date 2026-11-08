@@ -35,6 +35,53 @@ class FakeLock:
 
 
 class UpdateServiceTests(unittest.TestCase):
+    def test_validation_failure_before_journal_allows_newer_core_without_recovery(self):
+        state = {"operationId": str(uuid.uuid4()), "requestId": str(uuid.uuid4()),
+                 "targetId": "printer-core", "targetTag": "v0.44.1", "status": "error", "busy": False,
+                 "resultCode": "core_validation_failed", "lastFailurePhase": "downloading", "history": []}
+        with patch.dict(os.environ, {"TREED_CORE_STATE_DIR": str(self.root / "core")}), \
+             patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service.subprocess, "run"), contextlib.redirect_stdout(io.StringIO()):
+            for phase, journal_exists in (("installing", False), ("downloading", True)):
+                service.write_state(dict(state, lastFailurePhase=phase))
+                journal = service.core_journal(state)
+                if journal_exists:
+                    journal.parent.mkdir(parents=True)
+                    journal.write_text('{}', encoding='utf-8')
+                with self.assertRaisesRegex(ValueError, "Сначала восстановите"):
+                    service.submit(str(uuid.uuid4()), "printer-core", "v0.49.1")
+                if journal_exists:
+                    journal.unlink()
+            service.write_state(state)
+            self.assertEqual(service.submit(str(uuid.uuid4()), "printer-core", "v0.49.1"), 0)
+        queued = service.read_state()
+        self.assertEqual(queued["targetTag"], "v0.49.1")
+        self.assertNotIn("resumeCore", queued)
+        self.assertNotIn("supersedesOperationId", queued)
+
+    def test_v045_blocked_state_can_transition_through_normal_ui_submission(self):
+        source = subprocess.check_output(["git", "-C", str(ROOT), "show",
+            "49f6f44eca6f16a6f762b34f15955831ef0fc553:runtime-scripts/treed-update/treed-update-service"], timeout=10)
+        legacy = types.ModuleType("installed_v045_worker")
+        legacy.__file__ = str(SERVICE_PATH)
+        exec(compile(source, "installed_v045_worker", "exec"), legacy.__dict__)
+        legacy.STATE = service.STATE
+        state = {"operationId": str(uuid.uuid4()), "requestId": str(uuid.uuid4()),
+                 "targetId": "printer-core", "targetTag": "v0.44.1", "status": "error", "busy": False,
+                 "resultCode": "core_validation_failed", "lastFailurePhase": "downloading", "history": []}
+        legacy.write_state(state)
+        with patch.dict(os.environ, {"TREED_CORE_STATE_DIR": str(self.root / "core")}), \
+             patch.object(legacy.os, "geteuid", return_value=0, create=True), \
+             patch.object(legacy, "fcntl", types.SimpleNamespace(flock=lambda *_: None, LOCK_UN=8)), \
+             patch.object(legacy, "acquire", return_value=FakeLock()), \
+             patch.object(legacy.subprocess, "run"), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, "Сначала восстановите"):
+                legacy.submit(str(uuid.uuid4()), "printer-core", "v0.49.1")
+            self.assertEqual(legacy.submit(str(uuid.uuid4()), "printer-ui", "ui-main-76-1"), 0)
+            legacy.finish(legacy.read_state(), "applied", "ui_updated", "UI ready")
+            self.assertEqual(legacy.submit(str(uuid.uuid4()), "printer-core", "v0.49.1"), 0)
+
     def test_v034_ui_installer_accepts_new_package_updater_envelope(self):
         if os.name == "nt" or not shutil.which("bash"):
             self.skipTest("Исторический UI installer требует Linux Bash")

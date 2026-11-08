@@ -38,6 +38,16 @@ class Request:
 
 
 class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_root_rejection_preserves_its_message_instead_of_a_generic_503(self):
+        process = NS(returncode=1, communicate=AsyncMock(return_value=(json.dumps({
+            "accepted": False, "status": "error", "phase": "error",
+            "message": "Сначала восстановите сохранённый выпуск core"}).encode(), b"")))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)):
+            result = await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.49.1"))
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["message"], "Сначала восстановите сохранённый выпуск core")
+
     async def test_unknown_state_is_delegated_only_for_update_submission(self):
         self.component.klippy_apis.query_objects = AsyncMock(return_value={})
         await self.component._ensure_apply_allowed(allow_unknown=True)
