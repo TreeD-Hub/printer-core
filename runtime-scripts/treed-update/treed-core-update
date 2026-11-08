@@ -1083,20 +1083,30 @@ def _inspection_manifest(path, expected_tag=None, baseline=False):
     return manifest, {key: row["runtimeSha256"] for key, row in files.items()}
 
 
-def _inspection_anchor(env, operation, tag):
+def _inspection_anchor(env, operation, tag, allow_aborted=False):
     journal = journal_path(env, operation)
     if (journal.is_symlink() or journal.parent.is_symlink() or journal.parent.parent.is_symlink()
             or not journal.is_file()):
         raise ValueError("Core inspection anchor отсутствует или небезопасен")
     transaction = read_json(journal)
+    if (isinstance(transaction, dict) and transaction.get("stage") == "aborted"
+            and not (allow_aborted and isinstance(tag, str) and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)
+                     and transaction.get("operationId") == operation
+                     and transaction.get("targetTag") == tag
+                     and transaction.get("forwardOnly", False) is False
+                     and transaction.get("provisioningStarted", False) is False)):
+        raise ValueError("Core inspection anchor не связан с failed target")
     if (not isinstance(transaction, dict) or transaction.get("schema") != 1
             or transaction.get("targetTag") is not None and transaction["targetTag"] != tag
             or transaction.get("operationId", operation) != operation
             or transaction.get("stage") not in {
                 "validated", "installing", "provisioning", "provisioning_failed", "provisioned", "committed"}
+            and not (allow_aborted and transaction.get("stage") == "aborted")
             and transaction.get("provisioningStarted") is not True):
         raise ValueError("Core inspection anchor не связан с failed target")
     target, files = _inspection_manifest(journal.parent / "manifest.new.json", tag)
+    if transaction.get("stage") == "aborted":
+        return transaction, []
     manifests = [(target, files)]
     if transaction.get("forwardOnly") is True:
         base_tag = transaction.get("supersedesTargetTag")
@@ -1122,7 +1132,8 @@ def config_conflicts(env):
         if journal.is_symlink() or journal.parent.is_symlink() or journal.parent.parent.is_symlink():
             raise ValueError("Core inspection journal небезопасен")
         if journal.exists():
-            transaction, targets = _inspection_anchor(env, state["operationId"], state.get("targetTag"))
+            transaction, targets = _inspection_anchor(env, state["operationId"], state.get("targetTag"),
+                                                       allow_aborted=True)
             for _manifest, files in targets:
                 for key, digest in files.items():
                     known.setdefault(key, set()).add(digest)
@@ -1659,6 +1670,47 @@ def recover_forward_only(env, operation, journal, transaction):
 def recover(env, operation):
     journal = journal_path(env, operation)
     transaction = read_json(journal) if journal.parent.exists() else None
+    if isinstance(transaction, dict) and transaction.get("stage") == "aborted" and env.get("TREED_UPDATE_PACKAGE_FILE"):
+        state = read_json(Path(env.get("TREED_UPDATE_STATE_FILE", "/var/lib/treed-update/state.json")))
+        if (not isinstance(state, dict) or state.get("operationId") != operation
+                or state.get("targetId") != "printer-core" or state.get("busy") is not True
+                or state.get("targetTag") != env.get("TREED_UPDATE_PACKAGE_TAG")):
+            raise ValueError("Core recovery требует активную операцию закреплённого пакета")
+        _inspection_anchor(env, operation, state["targetTag"], allow_aborted=True)
+        if validate_config_resets(transaction.get("resetConfigs", [])) != validate_config_resets(state.get("resetConfigs", [])):
+            raise ValueError("Core recovery reset не совпадает с journal")
+        before, _ = _inspection_manifest(journal.parent / "manifest.before.json", baseline=True)
+        installed, _ = _inspection_manifest(manifest_path(env), baseline=True)
+        if before != installed or replacement_context(state, operation, state["targetTag"], env) is not None:
+            raise ValueError("Core recovery baseline не совпадает с journal")
+        package = Path(env["TREED_UPDATE_PACKAGE_FILE"])
+        digest = env.get("TREED_UPDATE_PACKAGE_SHA256", "")
+        if (re.fullmatch(r"[0-9a-f]{64}", digest) is None or package.is_symlink()
+                or not package.is_file() or sha(package.read_bytes()) != digest):
+            raise ValueError("Закреплённый пакет updater повреждён")
+        target, _ = load_package(package, state["targetTag"])
+        staged = read_json(journal.parent / "manifest.new.json")
+        if any(target.get(key) != staged.get(key) for key in ("kind", "schema", "version", "tag", "sha", "requires", "provisioning")):
+            raise ValueError("Core recovery target не совпадает с пакетом")
+        if not idle():
+            raise PrinterNotReady("Core update требует готового принтера без активной печати или паузы")
+        # Сохраняем before-images при повторе; отсутствующий journal продолжает тот же pin.
+        with parent_fd(journal.parent) as descriptor:
+            archive_name = ".aborted-" + str(uuid.uuid4())
+            archive = archive_name if descriptor is not None else journal.parent.parent / archive_name
+            os.mkdir(archive, 0o700, dir_fd=descriptor)
+            if descriptor is not None:
+                os.fsync(descriptor)
+                archive_fd = os.open(archive_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                try:
+                    os.rename(journal.parent.name, journal.parent.name, src_dir_fd=descriptor, dst_dir_fd=archive_fd)
+                    os.fsync(archive_fd)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(archive_fd)
+            else:
+                os.rename(journal.parent, archive / journal.parent.name)
+        transaction = None
     if not transaction:
         # Pin исполнителя сохраняется до первой записи journal: можно повторить тот же пакет.
         if env.get("TREED_UPDATE_PACKAGE_FILE"):
