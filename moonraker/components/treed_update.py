@@ -621,7 +621,9 @@ class TreeDUpdate:
             if not is_busy and release.get("status") == "available" and (
                 current == release.get("latestTag")
                 or (_normalize_semver(current) is not None
-                    and _normalize_semver(current) == _normalize_semver(str(release.get("latestTag"))))
+                    and _normalize_semver(str(release.get("latestTag"))) is not None
+                    and _compare_semver(_normalize_semver(current),
+                                        _normalize_semver(str(release.get("latestTag")))) >= 0)
             ):
                 release.update(status="latest", message="Установлена последняя версия.")
             release["canApply"] = release.get("status") == "available" and not is_busy and not retry_pending

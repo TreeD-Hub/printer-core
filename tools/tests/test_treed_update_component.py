@@ -432,6 +432,16 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["releaseResults"][0]["status"], "latest")
         self.assertFalse(result["releaseResults"][0]["canApply"])
 
+    async def test_cached_core_release_is_not_offered_after_a_newer_version_is_installed(self):
+        self.component.core_manifest_path.write_text(json.dumps({
+            "kind": "treed-core-runtime", "schema": 1, "version": "0.45.1"}), encoding="utf-8")
+        self.component.last_release_results = [{"id": "printer-core", "status": "available",
+            "currentVersion": "0.42.1", "latestTag": "v0.44.1"}]
+        result = await self.component._handle_status(object())
+        self.assertEqual(result["releaseResults"][0]["currentVersion"], "0.45.1")
+        self.assertEqual(result["releaseResults"][0]["status"], "latest")
+        self.assertFalse(result["releaseResults"][0]["canApply"])
+
 
 if __name__ == "__main__":
     unittest.main()

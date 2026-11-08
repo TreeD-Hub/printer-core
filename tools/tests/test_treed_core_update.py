@@ -205,7 +205,8 @@ class CoreUpdateTests(unittest.TestCase):
         journal = core.read_json(core.journal_path(self.env, OPERATION))
         self.assertEqual(journal["stage"], "committed")
         self.assertTrue(journal["provisioningStarted"])
-        upstream.assert_called_once_with(self.locations, self.previous)
+        upstream.assert_called_once()
+        self.assertEqual(upstream.call_args.args[1]["files"], self.previous["files"])
         self.assertEqual(self.compatibility.call_args.args[0], self.manifest)
         self.assertTrue(all("runtimeSha256" in row for row in self.compatibility.call_args.args[2]["files"]))
 
@@ -443,8 +444,7 @@ class CoreUpdateTests(unittest.TestCase):
         operation = str(uuid.uuid4())
         reset_path = core.destination("klipper/treed_driver_mode.py", self.locations)
         reset_path.write_bytes(b"version = 77\n")
-        new_resets = [{"path": "klipper/treed_driver_mode.py", "sha256": core.sha(
-            reset_path.read_bytes())}]
+        new_resets = []
         state = {"supersedesOperationId": old_operation, "supersedesTargetTag": "v0.1.0",
                  "supersededResetConfigs": old_resets}
         replacement = core.replacement_context(state, operation, target["tag"], self.env)
@@ -468,6 +468,10 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual(old_resets, transaction["supersededResetConfigs"])
         self.assertEqual(self.previous, core.read_json(core.manifest_path(self.env)))
         self.services.assert_not_called()
+        reset_path.write_bytes(b"version = 88\n")
+        with self.assertRaisesRegex(ValueError, "изменён после подготовки"):
+            core.validate_forward_only(journal, transaction, self.env)
+        reset_path.write_bytes(b"version = 77\n")
         self.admission.side_effect = None
         self.admission.reset_mock()
         self.services_inactive.return_value = True
@@ -814,29 +818,30 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual(self.apply()["status"], "applied")
         self.assertEqual(path.read_bytes().split(core.MARKER, 1)[1], calibrated.split(core.MARKER, 1)[1])
 
-    def test_manual_printer_edits_remain_rejected_after_pid_save_config(self):
+    def test_manual_printer_edits_are_replaced_and_saved_pid_is_preserved(self):
         self.seed_pid_calibration()
         path = self.locations["config"] / "printer.cfg"
         path.write_bytes(path.read_bytes().replace(b"macros.cfg", b"changed.cfg"))
-        with self.assertRaisesRegex(ValueError, "Локально изменён"):
-            self.apply()
-        self.services.assert_not_called()
+        saved = path.read_bytes().split(core.MARKER, 1)[1]
+        self.assertEqual(self.apply()["status"], "applied")
+        self.assertNotIn(b"changed.cfg", path.read_bytes())
+        self.assertEqual(path.read_bytes().split(core.MARKER, 1)[1], saved)
 
     def test_commented_pid_values_cannot_hide_manual_changes(self):
         self.seed_pid_calibration()
         path = self.locations["config"] / "printer.cfg"
         path.write_bytes(path.read_bytes().replace(b"#pid_Kp: 11.818", b"#pid_Kp: 99.0"))
-        with self.assertRaisesRegex(ValueError, "Локально изменён"):
-            self.apply()
-        self.services.assert_not_called()
+        self.assertNotEqual(core.content_hash("config/printer.cfg", path.read_bytes()),
+                            core.content_hash("config/printer.cfg", self.old["config/printer.cfg"]))
+        self.assertEqual(self.apply()["status"], "applied")
+        self.assertNotIn(b"99.0", path.read_bytes().split(core.MARKER, 1)[0])
 
-    def test_pid_comments_without_matching_autosave_fields_remain_rejected(self):
+    def test_pid_comments_are_replaced_without_losing_other_saved_calibration(self):
         _before, calibrated = self.seed_pid_calibration()
         path = self.locations["config"] / "printer.cfg"
         path.write_bytes(calibrated.split(core.MARKER, 1)[0] + core.MARKER + b"\n#*# [input_shaper]\n#*# shaper_freq_x = 71\n")
-        with self.assertRaisesRegex(ValueError, "Локально изменён"):
-            self.apply()
-        self.services.assert_not_called()
+        self.assertEqual(self.apply()["status"], "applied")
+        self.assertIn(b"shaper_freq_x = 71", path.read_bytes().split(core.MARKER, 1)[1])
 
     def test_baseline_accepts_stock_pid_comments_and_saved_calibration(self):
         before, _calibrated = self.seed_pid_calibration()
@@ -888,11 +893,14 @@ class CoreUpdateTests(unittest.TestCase):
         self.stop_heating.assert_not_called()
         self.assert_restored()
 
-    def prepare_package_execution(self, version="0.2.0", operation=OPERATION, context=None):
+    def prepare_package_execution(self, version="0.2.0", operation=OPERATION, context=None, revision=None):
         service_path = ROOT / "runtime-scripts/treed-update/treed-update-service"
         launcher = types.ModuleType("package_launcher")
         launcher.__file__ = str(service_path)
-        exec(compile(service_path.read_text(encoding="utf-8"), str(service_path), "exec"), launcher.__dict__)
+        source = (subprocess.check_output(["git", "-C", str(ROOT), "show",
+                  f"{revision}:runtime-scripts/treed-update/treed-update-service"], timeout=10)
+                  if revision else service_path.read_bytes())
+        exec(compile(source, str(service_path), "exec"), launcher.__dict__)
         launcher.STATE = self.root / "state/worker.json"
         launcher.LOG = self.root / "state/worker.log"
         launcher.CORE_APPLY = "/installed-updater-must-not-run"
@@ -985,9 +993,13 @@ class CoreUpdateTests(unittest.TestCase):
 
     def test_package_updater_installs_and_next_release_ignores_installed_executor(self):
         _before, calibrated = self.seed_pid_calibration()
-        launcher, execution = self.prepare_package_execution()
+        manual = b"# locally modified managed macro\n"
+        key = "config/profiles/treed_v2_corexy_v1/macros.cfg"
+        core.destination(key, self.locations).write_bytes(manual)
+        launcher, execution = self.prepare_package_execution(revision="49f6f44eca6f16a6f762b34f15955831ef0fc553")
         with patch.object(core, "apply", side_effect=AssertionError("installed updater must not execute")):
             self.assertEqual(self.execute_core_package(launcher, execution)["status"], "applied")
+            self.assertEqual(core.destination(key, self.locations).read_bytes(), self.payload[key])
             self.payload["klipper/treed_driver_mode.py"] = b"version = 3\n"
             launcher, execution = self.prepare_package_execution("0.3.0", "22222222-2222-4222-8222-222222222222")
             self.assertEqual(self.execute_core_package(launcher, execution)["status"], "applied")
@@ -996,7 +1008,7 @@ class CoreUpdateTests(unittest.TestCase):
                          calibrated.split(core.MARKER, 1)[1])
 
     def test_cached_package_updater_recovers_partial_write_after_installed_code_changes(self):
-        launcher, execution = self.prepare_package_execution()
+        launcher, execution = self.prepare_package_execution(revision="49f6f44eca6f16a6f762b34f15955831ef0fc553")
         with self.assertRaises(KeyboardInterrupt):
             self.execute_core_package(launcher, execution, crash=True)
         with patch.object(launcher.urllib.request, "urlopen", side_effect=AssertionError("no recovery download")):
@@ -1327,17 +1339,14 @@ class CoreUpdateTests(unittest.TestCase):
             self.assertFalse(core_services_inactive())
 
     # Блок 2: Успех и сохранность принадлежащего принтеру состояния.
-    def test_selected_config_reset_uses_package_and_retains_manual_backup(self):
+    def test_managed_config_is_replaced_without_reset_selection_and_retains_backup(self):
         key = "config/profiles/treed_v2_corexy_v1/macros.cfg"
         path = core.destination(key, self.locations)
         manual = b"# custom fan settings\n"
         path.write_bytes(manual)
         selection = [{"path": key, "sha256": core.sha(manual)}]
         self.assertEqual(core.config_conflicts(self.env), selection)
-        with self.assertRaisesRegex(ValueError, "Локально изменён"):
-            self.apply()
-        self.assertEqual(path.read_bytes(), manual)
-        result = core.apply("v0.2.0", OPERATION, self.env, selection)
+        result = self.apply()
         self.assertEqual(result["status"], "applied")
         self.assertEqual(path.read_bytes(), self.payload[key])
         journal = core.journal_path(self.env, OPERATION)
@@ -1361,14 +1370,8 @@ class CoreUpdateTests(unittest.TestCase):
             core.destination(key, self.locations).write_bytes(manual)
         selection = core.config_conflicts(self.env)
         self.assertEqual({row["path"] for row in selection}, set(keys))
-        with self.assertRaisesRegex(ValueError, "Локально изменён"):
-            self.apply()
         camera = core.destination("camera/stream_detect.py", self.locations)
         camera.write_bytes(manual + b"# newer edit\n")
-        with self.assertRaisesRegex(ValueError, "Файл изменился после выбора сброса"):
-            core.apply("v0.2.0", OPERATION, self.env, selection)
-        self.assertEqual(camera.read_bytes(), manual + b"# newer edit\n")
-        camera.write_bytes(manual)
         with patch.object(core.os, "fchown", create=True) as chown:
             result = core.apply("v0.2.0", OPERATION, self.env, selection)
         if os.name != "nt":
@@ -1378,7 +1381,8 @@ class CoreUpdateTests(unittest.TestCase):
         entries = {row["path"]: row for row in core.read_json(journal)["entries"]}
         for key in keys:
             self.assertEqual(core.destination(key, self.locations).read_bytes(), self.payload[key])
-            self.assertEqual((journal.parent / entries[key]["backup"]).read_bytes(), manual)
+            expected = manual + b"# newer edit\n" if key == "camera/stream_detect.py" else manual
+            self.assertEqual((journal.parent / entries[key]["backup"]).read_bytes(), expected)
 
     def test_selected_removed_managed_file_is_deleted_with_backup(self):
         key = "klipper/treed_driver_mode.py"
@@ -1392,27 +1396,29 @@ class CoreUpdateTests(unittest.TestCase):
         row = next(row for row in core.read_json(journal)["entries"] if row["path"] == key)
         self.assertEqual((journal.parent / row["backup"]).read_bytes(), manual)
 
-    def test_reset_consent_does_not_cover_subsequent_edit_or_unmanaged_files(self):
-        for key in ("config/printer.cfg", "klipper/treed_driver_mode.py", "config/local_overrides.cfg", "config/../printer.cfg"):
+    def test_legacy_reset_request_cannot_cover_unmanaged_files(self):
+        for key in ("config/local_overrides.cfg", "config/../printer.cfg"):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 core.prepare(self.manifest, self.payload, self.env, core.journal_path(self.env, OPERATION),
                              [{"path": key, "sha256": "0" * 64}])
         self.assert_restored()
         self.services.assert_not_called()
 
-    def test_edit_during_service_stop_is_not_overwritten_by_reset_or_rollback(self):
+    def test_edit_during_service_stop_is_backed_up_before_replacement(self):
         key = "config/printer.cfg"
         path = core.destination(key, self.locations)
         manual = b"# manual\n" + self.old[key]
         path.write_bytes(manual)
         selection = core.config_conflicts(self.env)
-        newer = manual + b"# newer edit\n"
+        newer = b"# newer edit\n" + manual
         self.services.side_effect = lambda action: path.write_bytes(newer) if action == "stop" else None
         result = core.apply("v0.2.0", OPERATION, self.env, selection)
-        self.assertEqual(result["status"], "error")
-        self.assertEqual(path.read_bytes(), newer)
-        self.assertEqual(core.recover(self.env, OPERATION)["status"], "error")
-        self.assertEqual(path.read_bytes(), newer)
+        self.assertEqual(result["status"], "applied")
+        self.assertNotIn(b"# newer edit", path.read_bytes())
+        journal = core.journal_path(self.env, OPERATION)
+        row = next(row for row in core.read_json(journal)["entries"] if row["path"] == key)
+        self.assertEqual((journal.parent / row["backup"]).read_bytes(), newer)
+        self.assertEqual(core.recover(self.env, OPERATION)["status"], "applied")
 
     def test_selected_printer_reset_preserves_calibration_and_rolls_back_manual_file(self):
         key = "config/printer.cfg"
@@ -1522,12 +1528,12 @@ class CoreUpdateTests(unittest.TestCase):
         self.assertEqual(unrelated.read_text(), "keep")
 
     # Блок 3: Отказ до мутаций, rollback и повторное recovery после обрыва.
-    def test_local_managed_edits_are_rejected_before_stopping_services(self):
+    def test_local_managed_edits_are_replaced_by_the_release(self):
         core.destination("klipper/treed_driver_mode.py", self.locations).write_bytes(b"local edits\n")
-        with self.assertRaisesRegex(ValueError, "Локально изменён"):
-            self.apply()
-        self.services.assert_not_called()
-        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.1.0")
+        self.assertEqual(self.apply()["status"], "applied")
+        self.assertEqual(core.destination("klipper/treed_driver_mode.py", self.locations).read_bytes(),
+                         self.payload["klipper/treed_driver_mode.py"])
+        self.assertEqual(core.read_json(core.manifest_path(self.env))["version"], "0.2.0")
 
     def test_incompatible_stack_is_rejected_before_backup_and_service_stop(self):
         self.compatibility.side_effect = ValueError("different Klipper SHA")
@@ -2109,6 +2115,13 @@ class CoreGitOwnershipTests(unittest.TestCase):
                 managed.write_text("# locally modified\n", encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "Изменены исходники установленного moonraker"):
                     core.check_compatibility(target, env, previous)
+                automatic = core.current_managed_files(env, previous)
+                core.check_upstream_clean(locations, automatic)
+                core.check_compatibility(target, env, automatic)
+                unknown.write_text("# not managed\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Изменены исходники установленного klipper"):
+                    core.check_upstream_clean(locations, automatic)
+                unknown.unlink()
                 klipper_module = locations["klipper"] / "treed_calibration.py"
                 failed_target = b"# failed target\n"
                 klipper_module.write_bytes(failed_target)
