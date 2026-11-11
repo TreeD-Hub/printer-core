@@ -244,7 +244,7 @@ def automatic_fresh_retry_pre_mutation(state: Dict[str, Any]) -> bool:
             and automatic_fresh_retry_context(state))
 
 
-def schedule_retry(state: Dict[str, Any]) -> bool:
+def schedule_retry(state: Dict[str, Any], retry_delay: int = 0) -> bool:
     if not retryable_core_error(state):
         return False
     retry = state.get("retry")
@@ -264,11 +264,13 @@ def schedule_retry(state: Dict[str, Any]) -> bool:
                           "exhausted": True, "lastResultCode": state.get("resultCode")}
         return True
     scheduled_at = datetime.now(timezone.utc)
-    due = scheduled_at.timestamp() + RETRY_DELAYS[attempts]
+    due = scheduled_at.timestamp() + max(RETRY_DELAYS[attempts], retry_delay)
     state["retry"] = {"attempts": attempts + 1,
                       "scheduledAt": scheduled_at.isoformat().replace("+00:00", "Z"),
                       "nextAttemptAt": datetime.fromtimestamp(due, timezone.utc).isoformat().replace("+00:00", "Z"),
                       "exhausted": False, "lastResultCode": state.get("resultCode")}
+    if retry_delay:
+        state["retry"]["rateLimited"] = True
     return True
 
 
@@ -288,8 +290,9 @@ def retry_is_due(retry: Any) -> bool:
         return False
     current = datetime.now(timezone.utc)
     # При большом откате часов ограничиваем ожидание максимальной штатной задержкой.
-    return (due <= current or (due - current).total_seconds() > max(RETRY_DELAYS)
-            or (scheduled - current).total_seconds() > max(RETRY_DELAYS))
+    return (due <= current or (retry.get("rateLimited") is not True and (
+        (due - current).total_seconds() > max(RETRY_DELAYS)
+        or (scheduled - current).total_seconds() > max(RETRY_DELAYS))))
 
 
 def context_matches(state: Dict[str, Any]) -> bool:
@@ -608,7 +611,7 @@ def printer_is_idle() -> bool:
     return state in {"standby", "complete", "cancelled", "error"}
 
 
-def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -> None:
+def finish(state: Dict[str, Any], status: str, result_code: str, message: str, retry_delay: int = 0) -> None:
     stamp = now()
     failure_phase = state.get("phase", state.get("status"))
     if status == "error" and state.get("targetId") == "printer-core":
@@ -620,7 +623,7 @@ def finish(state: Dict[str, Any], status: str, result_code: str, message: str) -
     if status == "error":
         retryable = retryable_core_error(state)
         if retryable:
-            schedule_retry(state)
+            schedule_retry(state, retry_delay)
         else:
             state.pop("retry", None)
     else:
@@ -696,9 +699,10 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
     try:
         execution = package_execution(state, recovery)
         payload = execute_updater(state, execution or (command, {}))
-    except PackageDownloadError:
+    except PackageDownloadError as error:
         payload = {"status": "error", "resultCode": "core_download_failed",
-                   "message": "Не удалось загрузить пакет updater; повтор сохранит выбранный выпуск."}
+                   "message": "Не удалось загрузить пакет updater; повтор сохранит выбранный выпуск.",
+                   "retryDelay": error.retry_delay}
     except (OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile, subprocess.SubprocessError):
         payload = {"status": "error", "resultCode": "core_update_failed",
                    "message": "Не удалось подтвердить результат core updater; проверьте журнал службы."}
@@ -715,14 +719,36 @@ def run_core(state: Dict[str, Any], recovery: bool = False) -> int:
             current["retry"]["lastResultCode"] = "core_not_ready"
             defer_fresh_retry(current)
             return 1
+    retry_delay = payload.get("retryDelay")
+    retry_delay = retry_delay if type(retry_delay) is int and 0 <= retry_delay <= 31536000 else 0
     finish(current, payload["status"], str(payload.get("resultCode", "core_update_failed")),
-           str(payload.get("message", "Обновление TreeD Core завершено.")))
+           str(payload.get("message", "Обновление TreeD Core завершено.")), retry_delay)
     return 0 if payload["status"] == "applied" or recovery and payload["status"] == "rolled_back" else 1
 
 
 # Блок 3.2: Стабильный запускатель; формат установки и journal принадлежат выпуску.
 class PackageDownloadError(OSError):
-    pass
+    def __init__(self, message, retry_delay=None):
+        super().__init__(message)
+        self.retry_delay = retry_delay
+
+
+def rate_limit_delay(error):
+    if not isinstance(error, urllib.error.HTTPError) or error.code not in {403, 429}:
+        return None
+    headers = {str(key).lower(): str(value) for key, value in (error.headers or {}).items()}
+    if error.code == 403 and headers.get("x-ratelimit-remaining") != "0" and not headers.get("retry-after", "").isdigit():
+        body = error.read(4096).lower() if error.fp is not None else b""
+        if b"secondary rate limit" not in body:
+            return None
+    delay = 60
+    if headers.get("retry-after", "").isdigit():
+        delay = max(delay, int(headers["retry-after"]))
+    if headers.get("x-ratelimit-remaining") == "0" and headers.get("x-ratelimit-reset", "").isdigit():
+        delay = max(delay, int(headers["x-ratelimit-reset"]) - int(time.time()) + 1)
+    if delay > 31536000:
+        raise ValueError("Недопустимая задержка ограничения GitHub")
+    return delay
 
 
 def executor_directory(state: Dict[str, Any]) -> Path:
@@ -830,9 +856,10 @@ def package_execution(state: Dict[str, Any], recovery: bool = False):
                     if len(data) > 128 * 1024 * 1024:
                         raise ValueError("Пакет updater превышает предел загрузки")
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
-            if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429:
+            delay = rate_limit_delay(error)
+            if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429 and delay is None:
                 raise ValueError("Release updater недоступен") from error
-            raise PackageDownloadError(str(error)) from error
+            raise PackageDownloadError(str(error), delay) from error
         package_hash = hashlib.sha256(data).hexdigest()
         if package_hash != digest.removeprefix("sha256:"):
             raise ValueError("SHA-256 пакета updater не совпадает с GitHub")
@@ -939,13 +966,22 @@ def run_current() -> int:
     state = read_state()
     if state.get("status") not in ACTIVE or state.get("busy") is not True:
         return 0
+    if state.get("status") != "queued" and automatic_fresh_retry_pre_mutation(state):
+        defer_fresh_retry(state)
+        return 0
+    if state.get("targetId") == "printer-ui" and state.get("status") != "queued":
+        if not recover_ui(state):
+            finish(state, "error", "operation_interrupted",
+                   "Обновление прервано до записи результата; проверьте текущую версию перед повтором.")
+        return 0
     if state.get("targetId") == "printer-core" and (state.get("status") != "queued" or state.get("resumeCore")):
         return run_core(state, recovery=True)
     try:
         execution = package_execution(state)
-    except PackageDownloadError:
+    except PackageDownloadError as error:
         finish(read_state(), "error", "core_download_failed" if state.get("targetId") == "printer-core"
-               else "update_failed", "Не удалось загрузить updater выпуска; выбранная версия сохранена.")
+               else "update_failed", "Не удалось загрузить updater выпуска; выбранная версия сохранена.",
+               error.retry_delay or 0)
         return 1
     except (OSError, ValueError, KeyError, RuntimeError, zipfile.BadZipFile):
         finish(read_state(), "error", "core_validation_failed" if state.get("targetId") == "printer-core"
@@ -1113,6 +1149,15 @@ def retry_due() -> int:
         return 0
     try:
         state = read_state()
+        if state.get("busy") is True and state.get("status") in ACTIVE:
+            try:
+                unit = subprocess.run(["systemctl", "show", "--property=ActiveState", "--value", UNIT],
+                                      capture_output=True, text=True, check=False, timeout=3)
+                if unit.returncode == 0 and unit.stdout.strip() in {"inactive", "failed"}:
+                    subprocess.run(["systemctl", "start", "--no-block", UNIT], check=True, timeout=3)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            return 0
         previous_marker = state.get("canSupersedeCore")
         add_supersede_status(state)
         if state.get("canSupersedeCore") != previous_marker:

@@ -216,7 +216,9 @@ def managed_runtime_plan(repo):
 
 
 class TransientDownloadError(Exception):
-    pass
+    def __init__(self, message, retry_delay=None):
+        super().__init__(message)
+        self.retry_delay = retry_delay
 
 
 class PrinterNotReady(ValueError):
@@ -236,12 +238,33 @@ def update_error_result(error):
         code = "core_validation_failed"
     else:
         code = "core_update_failed"
-    return {"status": "error", "resultCode": code, "message": str(error)}
+    result = {"status": "error", "resultCode": code, "message": str(error)}
+    if isinstance(error, TransientDownloadError) and error.retry_delay is not None:
+        result["retryDelay"] = error.retry_delay
+    return result
+
+
+def _rate_limit_delay(error):
+    if not isinstance(error, urllib.error.HTTPError) or error.code not in {403, 429}:
+        return None
+    headers = {str(key).lower(): str(value) for key, value in (error.headers or {}).items()}
+    if error.code == 403 and headers.get("x-ratelimit-remaining") != "0" and not headers.get("retry-after", "").isdigit():
+        body = error.read(4096).lower() if error.fp is not None else b""
+        if b"secondary rate limit" not in body:
+            return None
+    delay = 60
+    if headers.get("retry-after", "").isdigit():
+        delay = max(delay, int(headers["retry-after"]))
+    if headers.get("x-ratelimit-remaining") == "0" and headers.get("x-ratelimit-reset", "").isdigit():
+        delay = max(delay, int(headers["x-ratelimit-reset"]) - int(time.time()) + 1)
+    if delay > 31536000:
+        raise ValueError("Недопустимая задержка ограничения GitHub")
+    return delay
 
 
 def _transient_download_error(error):
     if isinstance(error, urllib.error.HTTPError):
-        return error.code in {408, 429} or 500 <= error.code <= 599
+        return error.code in {408, 429} or _rate_limit_delay(error) is not None or 500 <= error.code <= 599
     if isinstance(error, urllib.error.URLError):
         reason = error.reason
         return (isinstance(reason, (socket.timeout, TimeoutError, ConnectionError))
@@ -491,7 +514,7 @@ def render(key, data, old, env):
         if key == "config/moonraker/base/00-core.conf" and old:
             # Updater-пути Mainsail/Crowsnest определил loader для этой установки.
             for name in ("mainsail", "crowsnest"):
-                pattern = rf"(?m)^\[update_manager {name}\][^\[]*"
+                pattern = rf"(?ms)^[ \t]*\[update_manager {name}\].*?(?=^[ \t]*\[|\Z)"
                 previous = re.search(pattern, old.decode("utf-8"))
                 text = re.sub(pattern, lambda _m: previous[0] if previous else "", text)
             text = merge_local_section(text, old.decode("utf-8"), "treed_autoprinter")
@@ -552,8 +575,9 @@ def download(tag, archive, env, asset_name=ASSET):
         with urllib.request.urlopen(request, timeout=10) as response:
             release = json.load(response)
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
-        if _transient_download_error(error):
-            raise TransientDownloadError(str(error)) from error
+        delay = _rate_limit_delay(error)
+        if delay is not None or _transient_download_error(error):
+            raise TransientDownloadError(str(error), delay) from error
         raise
     if release.get("tag_name") != tag or release.get("draft") or release.get("prerelease"):
         raise ValueError("Выпуск core не является опубликованным стабильным релизом")
@@ -576,8 +600,9 @@ def download(tag, archive, env, asset_name=ASSET):
             output.flush()
             os.fsync(output.fileno())
     except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
-        if _transient_download_error(error):
-            raise TransientDownloadError(str(error)) from error
+        delay = _rate_limit_delay(error)
+        if delay is not None or _transient_download_error(error):
+            raise TransientDownloadError(str(error), delay) from error
         raise
     if checksum.hexdigest() != digest.removeprefix("sha256:"):
         raise ValueError(f"SHA-256 {asset_name} не совпадает с GitHub")

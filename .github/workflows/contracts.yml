@@ -12,6 +12,7 @@ on:
       - "moonraker/**"
       - "runtime-scripts/**"
       - "tools/tests/**"
+      - "tools/integration/**"
       - "tools/release_version.py"
       - "tools/treed_sgt_calibration.py"
       - "VERSION"
@@ -27,12 +28,16 @@ on:
       - "moonraker/**"
       - "runtime-scripts/**"
       - "tools/tests/**"
+      - "tools/integration/**"
       - "tools/release_version.py"
       - "tools/treed_sgt_calibration.py"
       - "VERSION"
       - "runtime-versions.env"
 
 jobs:
+  real-systemd-transition:
+    uses: ./.github/workflows/update-transition.yml
+
   static-contracts:
     name: Static contracts
     runs-on: ubuntu-latest
@@ -81,7 +86,13 @@ jobs:
           git init "${RUNNER_TEMP}/moonraker"
           git -C "${RUNNER_TEMP}/moonraker" fetch --depth=1 "${TREED_MOONRAKER_REPO}" "${TREED_MOONRAKER_REF}"
           git -C "${RUNNER_TEMP}/moonraker" checkout --detach FETCH_HEAD
-          python3 -m pip install -r "${RUNNER_TEMP}/moonraker/scripts/moonraker-requirements.txt"
+          source loader/lib/python-runtime-lock.sh
+          python_runtime_lock moonraker > "${RUNNER_TEMP}/moonraker-lock.txt"
+          grep -E '^(pip|setuptools|wheel)==' "${RUNNER_TEMP}/moonraker-lock.txt" > "${RUNNER_TEMP}/python-bootstrap.txt"
+          python3 -m pip install --upgrade -c "${RUNNER_TEMP}/moonraker-lock.txt" -r "${RUNNER_TEMP}/python-bootstrap.txt"
+          python3 -m pip install --no-build-isolation --upgrade -r "${RUNNER_TEMP}/moonraker-lock.txt"
+          python3 -m pip install --no-build-isolation -c "${RUNNER_TEMP}/moonraker-lock.txt" -r "${RUNNER_TEMP}/moonraker/scripts/moonraker-requirements.txt"
+          python3 -m pip check
 
       - name: Use release-style version for tests
         shell: bash

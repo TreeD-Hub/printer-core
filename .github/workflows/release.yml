@@ -16,6 +16,10 @@ permissions:
   contents: read
 
 jobs:
+  real-systemd-transition:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/update-transition.yml
+
   title:
     name: Название релизного PR
     if: github.event_name == 'pull_request'
@@ -32,6 +36,7 @@ jobs:
   release:
     name: Release printer-core
     if: github.event_name != 'pull_request'
+    needs: real-systemd-transition
     permissions:
       contents: write
       pull-requests: read
@@ -102,7 +107,13 @@ jobs:
           git init "${RUNNER_TEMP}/moonraker"
           git -C "${RUNNER_TEMP}/moonraker" fetch --depth=1 "${TREED_MOONRAKER_REPO}" "${TREED_MOONRAKER_REF}"
           git -C "${RUNNER_TEMP}/moonraker" checkout --detach FETCH_HEAD
-          python3 -m pip install -r "${RUNNER_TEMP}/moonraker/scripts/moonraker-requirements.txt"
+          source loader/lib/python-runtime-lock.sh
+          python_runtime_lock moonraker > "${RUNNER_TEMP}/moonraker-lock.txt"
+          grep -E '^(pip|setuptools|wheel)==' "${RUNNER_TEMP}/moonraker-lock.txt" > "${RUNNER_TEMP}/python-bootstrap.txt"
+          python3 -m pip install --upgrade -c "${RUNNER_TEMP}/moonraker-lock.txt" -r "${RUNNER_TEMP}/python-bootstrap.txt"
+          python3 -m pip install --no-build-isolation --upgrade -r "${RUNNER_TEMP}/moonraker-lock.txt"
+          python3 -m pip install --no-build-isolation -c "${RUNNER_TEMP}/moonraker-lock.txt" -r "${RUNNER_TEMP}/moonraker/scripts/moonraker-requirements.txt"
+          python3 -m pip check
 
       - name: Full offline regression
         run: |

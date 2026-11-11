@@ -60,6 +60,24 @@ class ManagedLoaderTests(unittest.TestCase):
         self.assertNotIn("klipper-core", steps)
         self.assertNotIn("klipper-sync", steps)
 
+    def test_interrupted_dpkg_is_processed_before_required_package_reinstallation(self) -> None:
+        source = (ROOT / "loader/steps/packages-core.sh").read_text(encoding="utf-8")
+        body = source.split("resume_interrupted_dpkg() {", 1)[1].split("\n}\n", 1)[0]
+        directory = self.temp_root / "dpkg-updates"
+        directory.mkdir(exist_ok=True)
+        body = body.replace("/var/lib/dpkg/updates", directory.as_posix())
+        if os.name == "nt":
+            body = body.replace(directory.as_posix(), "/" + directory.drive[0].lower() + directory.as_posix()[2:])
+        script = 'log_warn() { printf "WARN %s\\n" "$*"; }; dpkg() { printf "DPKG %s\\n" "$*"; return 1; }; ' + body
+        result = self.run_shell(script, {})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("DPKG", result.stdout)
+        (directory / "0000").write_text("pending dpkg journal\n", encoding="utf-8")
+        result = self.run_shell(script, {})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("DPKG --force-confdef --force-confold --configure -a", result.stdout)
+        self.assertIn("required package reinstallation", result.stdout)
+
     def test_managed_registry_rejects_malformed_and_missing_steps(self) -> None:
         source = (ROOT / "loader/loader.sh").read_text(encoding="utf-8")
         start = source.index("load_managed_steps() {")
@@ -581,6 +599,38 @@ curl(){
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, expected)
+
+    def test_preserved_screen_ui_failure_allows_managed_update_only(self) -> None:
+        source = (ROOT / "loader/steps/verify.sh").read_text(encoding="utf-8")
+        helper = source.split("preserved_ui_failf() {", 1)[1].split("\n}\n", 1)[0]
+        checks = source.split("# Блок 8:", 1)[1].split("\n# Блок 9:", 1)[0]
+        checks = checks[checks.index("\n") + 1:]
+        script = (
+            "fail=0; diagnostics=0; pass(){ :; }; "
+            "failf(){ fail=$((fail+1)); }; "
+            "diagnostic_failf(){ diagnostics=$((diagnostics+1)); }; "
+            "systemctl(){ return 1; }; "
+            "preserved_ui_failf(){\n" + helper + "\n}\n" + checks +
+            '\nprintf "%s %s" "$fail" "$diagnostics"; test "$fail" = 0'
+        )
+        for mode in ("ts", "ks"):
+            for managed in ("1", "0"):
+                with self.subTest(mode=mode, managed=managed):
+                    result = self.run_shell(script, {
+                        "TREED_UPDATE_MANAGED_LOADER": managed,
+                        "TREED_UI_MODE": mode,
+                        "KS_UNIT": "KlipperScreen.service",
+                        "TS_UNIT": "treed-shell.service",
+                        "KS_OVERRIDE_FILE": "/nonexistent-kiosk-override",
+                    })
+                    self.assertEqual(result.returncode, 0 if managed == "1" else 1, result.stderr)
+                    fail, diagnostics = map(int, result.stdout.split())
+                    self.assertGreater(diagnostics if managed == "1" else fail, 0)
+        result = self.run_shell(script, {
+            "TREED_UPDATE_MANAGED_LOADER": "1", "TREED_UI_MODE": "invalid",
+            "KS_UNIT": "KlipperScreen.service", "TS_UNIT": "treed-shell.service",
+        })
+        self.assertEqual(result.returncode, 1, result.stderr)
 
     def test_managed_verify_requires_vision_services(self) -> None:
         source = (ROOT / "loader/steps/verify.sh").read_text(encoding="utf-8")

@@ -182,7 +182,7 @@ Plymouth в режиме `updates`. Экран использует только
 
 В режиме `TREED_UPDATE_MANAGED_LOADER=1` updater уже установил runtime-файлы и модули: bootstrap не удаляет старые Klipper-модули, не копирует host-модули, не запускает установщик Crowsnest и не меняет владельца существующих файлов `printer_data` рекурсивно. Существующие venv не пересоздаются.
 
-`runtime-bootstrap` проверяет `numpy` и `matplotlib` в `${TREED_KLIPPY_ENV_DIR:-${PI_HOME}/klippy-env}`: если импорт уже работает, установка пропускается; если пакета нет, ставится текущий стабильный релиз через pip в существующий venv Klipper.
+`runtime-bootstrap` устанавливает в существующие окружения Klipper и Moonraker точные версии из `loader/lib/python-runtime-lock.sh`, включая транзитивные зависимости и инструменты сборки. Он проверяет согласованность зависимостей и установленные версии; работающий импорт другой версии не заменяет эту проверку. Посторонние пакеты не удаляются.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TreeD-Hub/printer-core/treed-v2/bootstrap-pi.sh | bash

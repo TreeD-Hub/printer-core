@@ -51,6 +51,15 @@ diagnostic_failf() {
   VERIFY_DIAGNOSTIC_FAILS=$((VERIFY_DIAGNOSTIC_FAILS+1))
 }
 
+preserved_ui_failf() {
+  # Managed Core сохраняет старый UI; его исправляющий пакет применяется после Core.
+  if [ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]; then
+    diagnostic_failf "$1"
+  else
+    failf "$1"
+  fi
+}
+
 camera_failf() {
   if is_true "${TREED_CAMERA_REQUIRED:-0}"; then
     failf "$1"
@@ -1280,21 +1289,21 @@ case "${TREED_UI_MODE}" in
       if systemctl is-active --quiet "${TS_UNIT}"; then
         pass "treed-shell.service active"
       else
-        failf "treed-shell.service active"
+        preserved_ui_failf "treed-shell.service active"
       fi
 
       ts_substate="$(systemctl show -p SubState --value "${TS_UNIT}" 2>/dev/null | tr -d '\r\n')"
       if [ "${ts_substate}" = "running" ]; then
         pass "treed-shell.service substate running"
       else
-        failf "treed-shell.service substate running (state=${ts_substate:-unknown})"
+        preserved_ui_failf "treed-shell.service substate running (state=${ts_substate:-unknown})"
       fi
     else
-      failf "treed-shell.service present"
+      preserved_ui_failf "treed-shell.service present"
     fi
 
     if [ "${KS_SERVICE_PRESENT}" = "1" ] && systemctl is-active --quiet "${KS_UNIT}"; then
-      failf "KlipperScreen.service inactive when TREED_UI_MODE=ts"
+      preserved_ui_failf "KlipperScreen.service inactive when TREED_UI_MODE=ts"
     else
       pass "KlipperScreen.service inactive when TREED_UI_MODE=ts"
     fi
@@ -1303,28 +1312,28 @@ case "${TREED_UI_MODE}" in
     if [ -f "${KS_OVERRIDE_FILE}" ] && grep -q "plymouth quit --retain-splash" "${KS_OVERRIDE_FILE}"; then
       pass "KlipperScreen retains splash"
     else
-      failf "KlipperScreen retains splash"
+      preserved_ui_failf "KlipperScreen retains splash"
     fi
 
     if [ "${KS_SERVICE_PRESENT}" = "1" ]; then
       if systemctl is-active --quiet "${KS_UNIT}"; then
         pass "KlipperScreen.service active"
       else
-        failf "KlipperScreen.service active"
+        preserved_ui_failf "KlipperScreen.service active"
       fi
 
       ks_substate="$(systemctl show -p SubState --value "${KS_UNIT}" 2>/dev/null | tr -d '\r\n')"
       if [ "${ks_substate}" = "running" ]; then
         pass "KlipperScreen.service substate running"
       else
-        failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
+        preserved_ui_failf "KlipperScreen.service substate running (state=${ks_substate:-unknown})"
       fi
     else
-      failf "KlipperScreen.service present"
+      preserved_ui_failf "KlipperScreen.service present"
     fi
 
     if [ "${TS_SERVICE_PRESENT}" = "1" ] && systemctl is-active --quiet "${TS_UNIT}"; then
-      failf "treed-shell.service inactive when TREED_UI_MODE=ks"
+      preserved_ui_failf "treed-shell.service inactive when TREED_UI_MODE=ks"
     else
       pass "treed-shell.service inactive when TREED_UI_MODE=ks"
     fi

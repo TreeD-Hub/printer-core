@@ -1119,6 +1119,65 @@ wait_shell_ready() { return 0; }
             self.assertEqual(service.read_state()["retry"], scheduled["retry"])
             start.assert_not_called()
 
+    def test_timer_restarts_orphan_only_after_confirmed_unit_stop(self):
+        state = {"operationId": "same-op", "targetId": "printer-core", "targetTag": "v0.5.1",
+                 "status": "queued", "busy": True, "resumeCore": True,
+                 "packageUpdater": {"sha256": "same-pin"}, "retry": {"attempts": 2}}
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=FakeLock()), \
+             patch.object(service.subprocess, "run") as command:
+            for phase in service.ACTIVE:
+                for unit_state in ("inactive", "failed", "active", "activating", "deactivating", "unknown"):
+                    with self.subTest(phase=phase, unit_state=unit_state):
+                        service.write_state(dict(state, status=phase))
+                        before = service.STATE.read_bytes()
+                        command.reset_mock()
+                        command.return_value = subprocess.CompletedProcess([], 0, stdout=unit_state + "\n")
+                        self.assertEqual(service.retry_due(), 0)
+                        self.assertEqual(service.STATE.read_bytes(), before)
+                        self.assertEqual(command.call_count, 2 if unit_state in {"inactive", "failed"} else 1)
+                        if command.call_count == 2:
+                            self.assertEqual(command.call_args.args[0], ["systemctl", "start", "--no-block", service.UNIT])
+            command.reset_mock()
+            command.return_value = subprocess.CompletedProcess([], 1, stdout="inactive\n")
+            service.retry_due()
+            self.assertEqual(command.call_count, 1)
+            command.reset_mock()
+            command.side_effect = OSError("systemctl unavailable")
+            self.assertEqual(service.retry_due(), 0)
+            self.assertEqual(command.call_count, 1)
+        with patch.object(service.os, "geteuid", return_value=0, create=True), \
+             patch.object(service, "acquire", return_value=None), \
+             patch.object(service.subprocess, "run") as command:
+            self.assertEqual(service.retry_due(), 0)
+            command.assert_not_called()
+
+    def test_restarted_worker_recovers_active_ui_instead_of_reapplying(self):
+        state = {"operationId": "same-ui", "targetId": "printer-ui", "targetTag": "ui-main-1-1",
+                 "status": "rolling_back", "busy": True}
+        service.write_state(state)
+        with patch.object(service, "recover_ui", return_value=True) as recover, \
+             patch.object(service, "run_packaged_ui") as apply:
+            self.assertEqual(service.run_current(), 0)
+            recover.assert_called_once_with(service.read_state())
+            apply.assert_not_called()
+
+    def test_restarted_worker_preserves_existing_core_recovery_routes(self):
+        state = {"operationId": "same-core", "targetId": "printer-core", "targetTag": "v0.5.1",
+                 "status": "installing", "busy": True, "resumeCore": True}
+        service.write_state(state)
+        with patch.object(service, "run_core", return_value=0) as recover:
+            self.assertEqual(service.run_current(), 0)
+            recover.assert_called_once_with(service.read_state(), recovery=True)
+        state.update(status="downloading", phase="downloading", resumeCore=False)
+        service.write_state(state)
+        with patch.object(service, "automatic_fresh_retry_pre_mutation", return_value=True), \
+             patch.object(service, "defer_fresh_retry") as defer, \
+             patch.object(service, "run_core") as recover:
+            self.assertEqual(service.run_current(), 0)
+            defer.assert_called_once_with(service.read_state())
+            recover.assert_not_called()
+
     def test_retry_lock_busy_is_noop_and_permanent_or_malformed_plans_fail_closed(self):
         for retry in ({"attempts": 1, "nextAttemptAt": "2000-01-01T00:00:00Z"},
                       {"attempts": "bad", "nextAttemptAt": "2000-01-01T00:00:00Z"},
@@ -1147,6 +1206,7 @@ wait_shell_ready() { return 0; }
                  "nextAttemptAt": "2099-01-01T00:00:30Z", "exhausted": False,
                  "lastResultCode": "provisioning_failed"}
         self.assertTrue(service.retry_is_due(retry))
+        self.assertFalse(service.retry_is_due(dict(retry, rateLimited=True)))
         malformed = {"targetId": "printer-core", "status": "error", "resultCode": "core_download_failed",
                      "retry": {"attempts": "invalid"}}
         self.assertFalse(service.schedule_retry(malformed))
@@ -1844,6 +1904,32 @@ wait_shell_ready() { return 0; }
 
 
 class PackageExecutionTests(unittest.TestCase):
+    def test_github_rate_limit_retries_after_reset_but_auth_failures_do_not(self):
+        reset = int(service.time.time()) + 900
+        for code, headers, expected in ((403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset)}, True),
+                                         (403, {"Retry-After": "900"}, True),
+                                         (403, {}, False), (401, {}, False)):
+            error = service.urllib.error.HTTPError("https://api.github.com", code, "denied", headers, None)
+            self.network.side_effect = error
+            with self.subTest(code=code, headers=headers):
+                with self.assertRaises(service.PackageDownloadError if expected else ValueError) as caught:
+                    service.package_execution(self.state)
+                if expected:
+                    state = dict(self.state, status="error", resultCode="core_download_failed")
+                    self.assertTrue(service.schedule_retry(state, caught.exception.retry_delay))
+                    self.assertFalse(service.retry_is_due(state["retry"]))
+                    self.assertGreaterEqual(caught.exception.retry_delay, 900)
+
+    def test_rate_limit_reaches_worker_retry_schedule(self):
+        self.network.side_effect = service.urllib.error.HTTPError(
+            "https://api.github.com", 403, "rate limit", {"Retry-After": "900"}, None)
+        with patch.object(service, "core_journal", return_value=self.root / "journal.json"):
+            self.assertEqual(service.run_current(), 1)
+            state = service.read_state()
+            self.assertEqual(state["resultCode"], "core_download_failed")
+            self.assertTrue(state["retry"]["rateLimited"])
+            self.assertFalse(service.retry_is_due(state["retry"]))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

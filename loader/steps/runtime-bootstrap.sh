@@ -14,6 +14,7 @@ set -euo pipefail
 . "${REPO_DIR}/loader/lib/common.sh"
 . "${REPO_DIR}/loader/lib/runtime-manifest.sh"
 . "${REPO_DIR}/loader/lib/runtime-repo.sh"
+. "${REPO_DIR}/loader/lib/python-runtime-lock.sh"
 ensure_root
 load_runtime_manifest
 
@@ -172,55 +173,44 @@ ensure_repo_present() {
   fi
 }
 
-ensure_python_venv() {
+ensure_python_venv() (
   local env_dir="$1"
   local req_file="$2"
+  local component="$3"
+  local lock_dir
+
+  lock_dir="$(mktemp -d)"
+  trap 'rm -rf -- "${lock_dir}"' EXIT
+  chmod 755 "${lock_dir}"
+  python_runtime_lock "${component}" > "${lock_dir}/requirements.txt"
+  chmod 644 "${lock_dir}/requirements.txt"
+  grep -E '^(pip|setuptools|wheel)==' "${lock_dir}/requirements.txt" > "${lock_dir}/bootstrap.txt"
+  chmod 644 "${lock_dir}/bootstrap.txt"
 
   if [ ! -d "${env_dir}" ]; then
     run_as_pi "set -euo pipefail; python3 -m venv '${env_dir}'"
   fi
 
-  run_as_pi "set -euo pipefail; '${env_dir}/bin/python' -m pip install --upgrade pip setuptools wheel"
-  if ! run_as_pi "set -euo pipefail; '${env_dir}/bin/python' -c 'import pkg_resources' >/dev/null 2>&1"; then
-    log_warn "runtime-bootstrap: pkg_resources is missing in ${env_dir}, pinning setuptools<81"
-    run_as_pi "set -euo pipefail; '${env_dir}/bin/python' -m pip install 'setuptools<81'"
-  fi
-  if ! run_as_pi "set -euo pipefail; '${env_dir}/bin/python' -c 'import pkg_resources' >/dev/null 2>&1"; then
-    log_error "runtime-bootstrap: pkg_resources is still missing in ${env_dir}"
-    exit 1
-  fi
-  run_as_pi "set -euo pipefail; '${env_dir}/bin/pip' install -r '${req_file}'"
-}
+  sudo -u "${PI_USER}" -H "${env_dir}/bin/python" -m pip install --upgrade -c "${lock_dir}/requirements.txt" -r "${lock_dir}/bootstrap.txt"
+  sudo -u "${PI_USER}" -H "${env_dir}/bin/python" -m pip install --no-build-isolation --upgrade -r "${lock_dir}/requirements.txt"
+  sudo -u "${PI_USER}" -H "${env_dir}/bin/python" -m pip install --no-build-isolation -c "${lock_dir}/requirements.txt" -r "${req_file}"
+  sudo -u "${PI_USER}" -H "${env_dir}/bin/python" -m pip check
+  sudo -u "${PI_USER}" -H "${env_dir}/bin/python" - "${lock_dir}/requirements.txt" <<'PY'
+from importlib import metadata
+from pathlib import Path
+import sys
 
-ensure_klippy_numpy() {
-  if [ ! -x "${KLIPPY_ENV_DIR}/bin/python" ]; then
-    log_error "runtime-bootstrap: klippy python is not executable: ${KLIPPY_ENV_DIR}/bin/python"
-    exit 1
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    name, expected = line.split("==", 1)
+    actual = metadata.version(name)
+    if actual != expected:
+        raise SystemExit(f"{name}: expected {expected}, installed {actual}")
+PY
+  sudo -u "${PI_USER}" -H "${env_dir}/bin/python" -c 'import pkg_resources'
+  if [ "${component}" = klipper ]; then
+    sudo -u "${PI_USER}" -H "${env_dir}/bin/python" -c 'import numpy, matplotlib'
   fi
-
-  if run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/python' -c 'import numpy' >/dev/null 2>&1"; then
-    log_info "runtime-bootstrap: klippy numpy already installed, skip"
-    return 0
-  fi
-
-  log_info "runtime-bootstrap: installing numpy into ${KLIPPY_ENV_DIR}"
-  run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/pip' install numpy"
-}
-
-ensure_klippy_matplotlib() {
-  if [ ! -x "${KLIPPY_ENV_DIR}/bin/python" ]; then
-    log_error "runtime-bootstrap: klippy python is not executable: ${KLIPPY_ENV_DIR}/bin/python"
-    exit 1
-  fi
-
-  if run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/python' -c 'import matplotlib' >/dev/null 2>&1"; then
-    log_info "runtime-bootstrap: klippy matplotlib already installed, skip"
-    return 0
-  fi
-
-  log_info "runtime-bootstrap: installing matplotlib into ${KLIPPY_ENV_DIR}"
-  run_as_pi "set -euo pipefail; '${KLIPPY_ENV_DIR}/bin/pip' install matplotlib"
-}
+)
 
 install_klipper_preflight() {
   ensure_dir "$(dirname "${KLIPPER_PREFLIGHT_SCRIPT}")"
@@ -641,9 +631,7 @@ if [ ! -f "${KLIPPER_REQ_FILE}" ]; then
   exit 1
 fi
 
-ensure_python_venv "${KLIPPY_ENV_DIR}" "${KLIPPER_REQ_FILE}"
-ensure_klippy_numpy
-ensure_klippy_matplotlib
+ensure_python_venv "${KLIPPY_ENV_DIR}" "${KLIPPER_REQ_FILE}" klipper
 install_klipper_preflight
 
 cat > /etc/systemd/system/klipper.service <<EOF
@@ -705,7 +693,7 @@ if [ -z "${MOONRAKER_ENTRYPOINT}" ]; then
   exit 1
 fi
 
-ensure_python_venv "${MOONRAKER_ENV_DIR}" "${MOONRAKER_REQ_FILE}"
+ensure_python_venv "${MOONRAKER_ENV_DIR}" "${MOONRAKER_REQ_FILE}" moonraker
 
 cat > /etc/systemd/system/moonraker.service <<EOF
 [Unit]
