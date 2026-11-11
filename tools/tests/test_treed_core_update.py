@@ -1066,6 +1066,10 @@ class CoreUpdateTests(unittest.TestCase):
     def test_v034_updater_installs_new_package_and_can_update_again(self):
         self.assert_upgrade_from("de76ff54c3a66db8a860394b8e6b44e250338e32", has_gate=True)
 
+    def test_installed_v049_updater_installs_new_package_and_can_update_again(self):
+        # Эти байты updater были установлены на устройстве перед исправлением aborted.
+        self.assert_upgrade_from("b25f7e396509e560d2275daffc40580b659070ef", has_gate=True)
+
     def assert_upgrade_from(self, revision, has_gate):
         # CI работает без root; проверяем запрос владельца, сохраняя реальные записи/fsync/rename.
         chown = self.stack.enter_context(patch.object(core.os, "fchown", create=True))
@@ -1075,7 +1079,7 @@ class CoreUpdateTests(unittest.TestCase):
                 f"{revision}:runtime-scripts/treed-update/treed-core-update"],
                 stderr=subprocess.PIPE, timeout=10)
         except subprocess.CalledProcessError:
-            self.skipTest("Для upgrade-проверки нужна история Git с " + revision)
+            self.fail("Обязательная upgrade-проверка требует полной истории Git с " + revision)
         legacy = types.ModuleType("pre_gate_updater")
         exec(compile(source, "pre_gate_updater", "exec"), legacy.__dict__)
         self.assertEqual(has_gate, hasattr(legacy, "update_admission"))
@@ -2065,6 +2069,11 @@ print("DELIVERED_IMPORT_OK")
             (core.urllib.error.URLError(ConnectionError("connection reset")), True),
             (core.urllib.error.HTTPError("https://api.github.com", 408, "timeout", {}, None), True),
             (core.urllib.error.HTTPError("https://api.github.com", 429, "rate limit", {}, None), True),
+            (core.urllib.error.HTTPError("https://api.github.com", 403, "rate limit", {"X-RateLimit-Remaining": "0"}, None), True),
+            (core.urllib.error.HTTPError("https://api.github.com", 403, "rate limit", {"Retry-After": "900"}, None), True),
+            (core.urllib.error.HTTPError("https://api.github.com", 403, "rate limit", {}, io.BytesIO(b'{"message":"secondary rate limit"}')), True),
+            (core.urllib.error.HTTPError("https://api.github.com", 403, "forbidden", {}, None), False),
+            (core.urllib.error.HTTPError("https://api.github.com", 401, "unauthorized", {}, None), False),
             (core.urllib.error.HTTPError("https://api.github.com", 503, "unavailable", {}, None), True),
             (core.urllib.error.HTTPError("https://api.github.com", 404, "missing", {}, None), False),
             (ValueError("invalid response"), False),
@@ -2092,6 +2101,23 @@ print("DELIVERED_IMPORT_OK")
         self.assertIn(b"path: /my/device/path", result)
         self.assertIn(b"repo_path: /home/radxa/treed/printer-core", result)
         self.assertNotIn(b"[update_manager crowsnest]", result)
+
+    def test_render_preserves_disabled_sections_and_brackets_in_device_wiring(self):
+        key = "config/moonraker/base/00-core.conf"
+        old = ("[update_manager mainsail]\ntype: web\npath: /my/device/path\n"
+               "# Description [reference] stays a comment.\n"
+               "# [update_manager crowsnest]\n# type: git_repo\n# path: /old/crowsnest\n"
+               "\n[treed_update]\n").encode()
+        new = (ROOT / "moonraker/base/00-core.conf").read_bytes()
+        result = core.render(key, new, old, {
+            "TREED_UPDATE_PI_HOME": "/home/radxa", "TREED_UPDATE_PI_USER": "radxa"})
+        parsed = configparser.RawConfigParser()
+        parsed.read_string(result.decode())
+        self.assertEqual(parsed["update_manager mainsail"]["type"], "web")
+        self.assertEqual(parsed["update_manager mainsail"]["path"], "/my/device/path")
+        self.assertFalse(parsed.has_section("update_manager crowsnest"))
+        self.assertIn(b"# type: git_repo", result)
+        self.assertIn(b"# Description [reference] stays a comment.", result)
 
     def test_render_preserves_local_autoprinter_identity_and_adds_new_defaults(self):
         key = "config/moonraker/base/00-core.conf"

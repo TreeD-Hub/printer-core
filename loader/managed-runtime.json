@@ -24,6 +24,7 @@
     "loader/lib/boot-env.sh",
     "loader/lib/runtime-manifest.sh",
     "loader/lib/runtime-repo.sh",
+    "loader/lib/python-runtime-lock.sh",
     "loader/lib/plymouth.sh",
     "loader/lib/progress.sh",
     "runtime-versions.env",

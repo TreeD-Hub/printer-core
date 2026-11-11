@@ -5,6 +5,7 @@
 ## Состав
 
 - `tools/tests/` — локальные контрактные проверки loader/steps.
+- `tools/integration/` — изолированные переходы обновления с реальным Linux/systemd и моделированием аппаратной границы; [условия запуска](integration/README.md).
 - `tools/release_version.py` — версия выпуска по названию слитого PR; запускается release workflow, закрепляет номер в draft. Правила: [workflow](../.github/workflows/README.md).
 - `tools/skills/` — локальные skills для Codex, используемые в этом репозитории.
 - `tools/collect_eddy_diagnostic.sh` — passive по умолчанию пакет CAN/MCU; `eddy-scan` требует отдельного разрешения движения.

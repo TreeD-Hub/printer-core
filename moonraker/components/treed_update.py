@@ -141,6 +141,7 @@ class TreeDUpdate:
         self.last_release_results: Optional[List[Dict[str, Any]]] = None
         self.config_conflicts: List[Dict[str, str]] = []
         self.supports_config_reset = False
+        self.config_inspection_error: Optional[str] = None
 
         self.server.register_endpoint(
             "/server/treed/update/status",
@@ -186,6 +187,7 @@ class TreeDUpdate:
         # Непривилегированное чтение тем же updater, который проверяет baseline.
         self.supports_config_reset = False
         self.config_conflicts = []
+        self.config_inspection_error = None
         if not self._core_capability().get("supported"):
             return
         process = None
@@ -204,11 +206,11 @@ class TreeDUpdate:
                 return  # Предыдущий updater ещё не поддерживает inspect.
             else:
                 raise ValueError("Не удалось прочитать управляемые конфиги")
-        except (OSError, ValueError, KeyError, asyncio.TimeoutError) as error:
+        except (OSError, ValueError, KeyError, asyncio.TimeoutError):
             if process is not None and process.returncode is None:
                 process.kill()
                 await process.communicate()
-            raise self.server.error("Не удалось проверить локальные конфиги. Повторите проверку.", 503) from error
+            self.config_inspection_error = "Не удалось проверить локальные конфиги. Сброс конфигов недоступен."
 
     async def _handle_firmware_status(self, _web_request: object) -> Dict[str, Any]:
         return await self._firmware_status()
@@ -658,10 +660,12 @@ class TreeDUpdate:
             "busy": is_busy,
             "supportsConfigReset": self.supports_config_reset,
             "configConflicts": self.config_conflicts,
+            "configInspectionError": self.config_inspection_error,
             "canApply": can_apply,
             "canResetOverrides": self.local_overrides_path is not None and not is_busy,
-            "message": retry_message if retry_pending else message or str(
-                state.get("message") or "Состояние обновлений готово."),
+            "message": ((retry_message if retry_pending else message or str(
+                state.get("message") or "Состояние обновлений готово."))
+                + (" " + self.config_inspection_error if self.config_inspection_error else "")),
             "targetId": _normalize_target_id(state.get("targetId")),
             "targetTag": state.get("targetTag"),
             "operationId": state.get("operationId"),

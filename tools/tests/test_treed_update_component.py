@@ -394,6 +394,26 @@ class UpdateComponentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.component.supports_config_reset)
         self.assertEqual(self.component.config_conflicts, [])
 
+    async def test_failed_inspection_does_not_block_release_check_or_submission(self):
+        process = NS(returncode=1, communicate=AsyncMock(return_value=(b'{}', b'failed')))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=process)), \
+             patch.object(self.component, "_check_releases", new=AsyncMock(
+                 side_effect=lambda: self.component._status_payload([
+                     {"id": "printer-core", "status": "available", "latestTag": "v0.2.0"}], None))):
+            status = await self.component._handle_check(object())
+            self.assertTrue(status["canApply"])
+            self.assertIn("Не удалось проверить", status["message"])
+            self.assertFalse(status["supportsConfigReset"])
+            with self.assertRaises(ApiError):
+                await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.2.0",
+                    resetConfigs=[{"path": "config/printer.cfg", "sha256": "a" * 64}]))
+        submit = NS(returncode=0, communicate=AsyncMock(return_value=(b'{"status":"queued"}', b'')))
+        with patch.object(self.component, "_core_capability", return_value={"supported": True}), \
+             patch.object(asyncio, "create_subprocess_exec", new=AsyncMock(return_value=submit)):
+            result = await self.component._handle_apply(Request(targetId="printer-core", targetTag="v0.2.0"))
+        self.assertTrue(result["busy"])
+
     async def test_state_directory_is_reported_as_unreadable_and_blocks_apply(self):
         self.component.state_file.mkdir()
 

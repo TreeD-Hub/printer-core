@@ -14,6 +14,7 @@ REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 LIB_DIR="${REPO_DIR}/loader/lib"
 # Блок 1: Библиотеки и базовая инициализация.
 source "${LIB_DIR}/common.sh"
+source "${LIB_DIR}/python-runtime-lock.sh"
 
 # Блок 2: Старт шага и чтение пользовательского контекста.
 log_info "Step treed-cam"
@@ -186,16 +187,41 @@ install_model "${TREED_VISION_BED_ARTIFACT:-}" "${VISION_ROOT}/models/fdm-detail
 vision_python_valid() {
   local candidate="$1"
   [[ "${candidate}" = /* && -x "${candidate}" && "${candidate}" != *[[:space:]]* ]] &&
-    "${candidate}" -c 'import importlib.metadata as m; assert m.version("torch").split("+")[0] == "2.11.0" and m.version("torchvision").split("+")[0] == "0.26.0" and m.version("rfdetr") == "1.11.0" and m.version("Pillow") == "12.3.0"' >/dev/null 2>&1
+    python_runtime_lock vision | "${candidate}" -c 'import importlib.metadata as m, sys
+for row in sys.stdin:
+ name, expected = row.strip().split("==", 1)
+ actual = m.version(name)
+ if name in ("torch", "torchvision"): actual = actual.split("+")[0]
+ if actual != expected: raise SystemExit(1)' >/dev/null 2>&1
 }
+
+install_vision_runtime() (
+  local lock_dir
+  python3 -m venv "${VISION_ENV}" || return
+  lock_dir="$(mktemp -d)" || return
+  trap 'rm -rf -- "${lock_dir}"' EXIT
+  python_runtime_lock vision > "${lock_dir}/requirements.txt" || return
+  grep -E '^(pip|setuptools|wheel)==' "${lock_dir}/requirements.txt" > "${lock_dir}/bootstrap.txt" || return
+  if [[ -n "${TREED_VISION_WHEELHOUSE:-}" && -d "${TREED_VISION_WHEELHOUSE}" ]]; then
+    "${VISION_ENV}/bin/python" -m pip install --no-index --find-links "${TREED_VISION_WHEELHOUSE}" \
+      -c "${lock_dir}/requirements.txt" -r "${lock_dir}/bootstrap.txt" || return
+    "${VISION_ENV}/bin/python" -m pip install --no-index --find-links "${TREED_VISION_WHEELHOUSE}" \
+      -r "${lock_dir}/requirements.txt" || return
+  else
+    # Штатный pip Debian 12 отвергает нормализованное имя wheel из CPU index.
+    "${VISION_ENV}/bin/python" -m pip install --upgrade -c "${lock_dir}/requirements.txt" -r "${lock_dir}/bootstrap.txt" || return
+    "${VISION_ENV}/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cpu \
+      -c "${lock_dir}/requirements.txt" 'torch==2.11.0' 'torchvision==0.26.0' || return
+    "${VISION_ENV}/bin/python" -m pip install --no-build-isolation -r "${lock_dir}/requirements.txt" || return
+  fi
+  "${VISION_ENV}/bin/python" -m pip check && vision_python_valid "${VISION_ENV}/bin/python"
+)
 
 # Блок 9: Используется проверенный локальный runtime или ставятся закрепленные CPU-зависимости.
 if [[ -n "${TREED_VISION_WHEELHOUSE:-}" && -d "${TREED_VISION_WHEELHOUSE}" ]] &&
   ! vision_python_valid "${VISION_ENV}/bin/python" &&
   { [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" != "1" ]] || ! vision_python_valid "${PI_HOME}/treed/autoprinter-bed-env/bin/python"; }; then
-  if { [[ -x "${VISION_ENV}/bin/python" ]] || python3 -m venv "${VISION_ENV}"; } && \
-    "${VISION_ENV}/bin/pip" install --no-index --find-links "${TREED_VISION_WHEELHOUSE}" \
-      'torch==2.11.0' 'torchvision==0.26.0' 'rfdetr==1.11.0' 'Pillow==12.3.0'; then
+  if install_vision_runtime; then
     log_info "Installed pinned vision runtime from local wheelhouse"
   else
     log_warn "Локальный wheelhouse неполон; AI-анализ останется недоступен"
@@ -218,15 +244,7 @@ if ! vision_python_valid "${VISION_PYTHON}"; then
   if vision_python_valid "${VISION_ENV}/bin/python"; then
     VISION_PYTHON="${VISION_ENV}/bin/python"
   elif [[ "${TREED_UPDATE_MANAGED_LOADER:-0}" = "1" ]]; then
-    python3 -m venv "${VISION_ENV}"
-    if [[ -n "${TREED_VISION_WHEELHOUSE:-}" && -d "${TREED_VISION_WHEELHOUSE}" ]]; then
-      "${VISION_ENV}/bin/pip" install --no-index --find-links "${TREED_VISION_WHEELHOUSE}" \
-        'torch==2.11.0' 'torchvision==0.26.0' 'rfdetr==1.11.0' 'Pillow==12.3.0'
-    else
-      "${VISION_ENV}/bin/pip" install --index-url https://download.pytorch.org/whl/cpu \
-        'torch==2.11.0' 'torchvision==0.26.0'
-      "${VISION_ENV}/bin/pip" install 'rfdetr==1.11.0' 'Pillow==12.3.0'
-    fi
+    install_vision_runtime
     VISION_PYTHON="${VISION_ENV}/bin/python"
     vision_python_valid "${VISION_PYTHON}" || { log_error "Pinned CPU vision runtime installation failed validation"; exit 1; }
   else

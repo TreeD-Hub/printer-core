@@ -10,6 +10,7 @@
 - `loader/lib/plymouth.sh`
 - `loader/lib/runtime-manifest.sh`
 - `loader/lib/runtime-repo.sh`
+- `loader/lib/python-runtime-lock.sh` — точные версии Python-пакетов Klipper, Moonraker и vision, включая транзитивные зависимости и инструменты сборки. Библиотека только выдаёт состав окружения; установку и проверку выполняют `runtime-bootstrap.sh` и `treed-cam.sh`.
 - `loader/lib/progress.sh`
 
 ## `common.sh`

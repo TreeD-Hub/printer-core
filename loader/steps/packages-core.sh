@@ -48,7 +48,19 @@ packages_core_current() {
   return 0
 }
 
-if packages_core_current; then
+# После SIGKILL dpkg требует обработать журнал до следующей команды apt.
+resume_interrupted_dpkg() {
+  dpkg_recovery_needed=0
+  if compgen -G '/var/lib/dpkg/updates/[0-9]*' >/dev/null; then
+    dpkg_recovery_needed=1
+    log_warn "packages-core: resuming interrupted dpkg configuration"
+    dpkg --force-confdef --force-confold --configure -a || \
+      log_warn "packages-core: dpkg needs required package reinstallation; continuing with apt"
+  fi
+}
+
+resume_interrupted_dpkg
+if [ "${dpkg_recovery_needed}" = "0" ] && packages_core_current; then
   log_info "packages-core: core package set already current, apt install skipped"
 else
   apt_update_noninteractive

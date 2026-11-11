@@ -1,0 +1,138 @@
+#!/bin/bash
+# Фиксированные Python-окружения Debian 12 / Python 3.11.
+# Контур: read-only выдача состава окружения; установка выполняется шагом bootstrap.
+# Блок 1: Состав окружений; версии транзитивных зависимостей заданы явно.
+python_runtime_lock() {
+  case "$1" in
+    klipper) cat <<'EOF'
+aenum==3.1.17
+cffi==1.14.6
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.62.1
+greenlet==2.0.2
+Jinja2==2.11.3
+kiwisolver==1.5.0
+MarkupSafe==1.1.1
+matplotlib==3.10.9
+msgspec==0.19.0
+numpy==1.25.2
+packaging==26.2
+pillow==12.2.0
+pip==26.3
+pycparser==3.0
+pyparsing==3.3.2
+pyserial==3.4
+python-can==3.3.4
+python-dateutil==2.9.0.post0
+setuptools==80.10.2
+six==1.17.0
+wheel==0.48.0
+wrapt==1.17.3
+EOF
+      ;;
+    moonraker) cat <<'EOF'
+apprise==1.9.8
+certifi==2026.4.22
+charset-normalizer==3.4.7
+click==8.3.3
+dbus-fast==3.1.2
+distro==1.9.0
+idna==3.13
+ifaddr==0.2.0
+importlib_metadata==8.7.1
+inotify-simple==2.0.1
+Jinja2==3.1.6
+ldap3==2.9.1
+libnacl==2.1.0
+Markdown==3.10.2
+MarkupSafe==3.0.3
+oauthlib==3.3.1
+packaging==26.2
+paho-mqtt==2.1.0
+pillow==12.2.0
+pip==26.3
+preprocess_cancellation==0.2.1
+pyasn1==0.6.3
+pyserial==3.4
+python-periphery==2.4.1
+PyYAML==6.0.3
+requests==2.33.1
+requests-oauthlib==2.0.0
+setuptools==80.10.2
+smart_open==7.6.0
+streaming-form-data==1.19.1
+tornado==6.5.6
+urllib3==2.6.3
+wheel==0.48.0
+wrapt==2.1.2
+zeroconf==0.148.0
+zipp==3.23.1
+EOF
+      ;;
+    vision) cat <<'EOF'
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.16.0
+av==18.1.0
+certifi==2026.10.23
+charset-normalizer==3.5.2
+click==8.5.1
+contourpy==1.3.3
+cycler==0.12.1
+defusedxml==0.7.1
+filelock==4.2.4
+fonttools==4.68.0
+fsspec==2026.9.0
+h11==0.16.0
+hf-xet==1.8.0
+httpcore2==2.16.0
+httpx2==2.16.0
+huggingface_hub==2.4.0
+idna==3.20
+Jinja2==3.1.6
+kiwisolver==1.5.1
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+matplotlib==3.11.2
+mdurl==0.1.2
+mpmath==1.3.0
+networkx==3.6.1
+numpy==2.4.6
+packaging==26.3
+pillow==12.3.0
+pip==26.3
+pydantic==2.14.3
+pydantic_core==2.50.4
+pyDeprecate==0.9.0
+Pygments==2.21.0
+pyparsing==3.3.3
+python-dateutil==4.0.0
+PyYAML==6.0.3
+regex==2026.11.7
+requests==2.34.2
+rfdetr==1.11.0
+rich==15.0.0
+safetensors==0.8.0
+scipy==1.17.1
+setuptools==80.10.2
+shellingham==1.5.4
+supervision==0.31.5
+sympy==1.14.0
+tokenizers==0.23.3
+torch==2.11.0
+torchvision==0.26.0
+tqdm==4.70.1
+transformers==5.22.2
+truststore==0.10.5
+typer==0.28.0
+typing_extensions==4.16.0
+typing-inspection==0.4.5
+tzdata==2026.6
+urllib3==2.8.0
+wheel==0.48.0
+EOF
+      ;;
+    *) return 1 ;;
+  esac
+}
