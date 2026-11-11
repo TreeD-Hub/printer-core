@@ -60,9 +60,13 @@ $EddyProfileIface = Get-CfgValue "klipper/profiles/treed_v2_corexy_v1/probe_eddy
 
 Assert-Contains ".github/workflows/contracts.yml" "tools/tests/\*\*" "GitHub Actions watches contract tests"
 foreach ($workflow in @("contracts.yml", "release.yml")) {
-  Assert-Contains ".github/workflows/$workflow" 'python3 -B tools/tests/run_offline\.py' "CI runs all offline Python, PowerShell and shell checks"
-  Assert-Contains ".github/workflows/$workflow" 'check_moonraker_startup\.py.*--archive dist/treed-core-runtime\.zip' "CI starts the delivered runtime before publication"
+  Assert-Contains ".github/workflows/$workflow" 'bash -n "\$file"' "CI validates shell syntax"
+  Assert-Contains ".github/workflows/$workflow" 'python3 -m py_compile moonraker/components/\*\.py' "CI validates Python syntax"
+  Assert-Contains ".github/workflows/$workflow" 'treed-core-update build \. dist/treed-core-runtime\.zip' "CI builds the runtime package"
+  Assert-NotContains ".github/workflows/$workflow" 'update-transition\.yml|run_offline\.py|check_moonraker_startup\.py|pip install' "Heavy update checks run locally, not in automatic CI"
 }
+Assert-Contains ".github/workflows/update-transition.yml" 'workflow_dispatch:' "VM transition remains available for explicit manual runs"
+Assert-NotContains ".github/workflows/update-transition.yml" '(?m)^  (workflow_call|push|pull_request|schedule):' "VM transition has no automatic trigger"
 Assert-Contains "VERSION" '^\d+\.\d+\.\d+\s*$' "printer-core has a semver VERSION file"
 Assert-Contains ".github/workflows/release.yml" '"name": "printer-core"' "release workflow writes the canonical printer-core manifest name"
 Assert-Contains ".github/workflows/release.yml" 'tags:\s*\r?\n\s+- "v\*\.\*\.\*"' "release workflow runs from semver tags"
